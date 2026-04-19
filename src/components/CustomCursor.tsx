@@ -51,11 +51,20 @@ export function CustomCursor() {
 
     const onOut = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t?.closest(".interactive, a, button, [role='button']")) {
-        document.body.classList.remove("hovering-interactive");
+      const r = e.relatedTarget as HTMLElement | null;
+      const interactiveSel = ".interactive, a, button, [role='button']";
+
+      if (t?.closest(interactiveSel)) {
+        const goingToInteractive = r?.closest?.(interactiveSel);
+        if (!goingToInteractive) {
+          document.body.classList.remove("hovering-interactive");
+        }
       }
       if (t?.closest("[data-cursor='invert']")) {
-        document.body.classList.remove("cursor-on-red");
+        const goingToInvert = r?.closest?.("[data-cursor='invert']");
+        if (!goingToInvert) {
+          document.body.classList.remove("cursor-on-red");
+        }
       }
     };
 

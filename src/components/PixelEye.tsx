@@ -10,10 +10,8 @@ type Props = {
 };
 
 const ACTIVITY_DURATION_MS = 1200;
-const BLINK_DURATION_MS = 200;
 
 export function PixelEye({ watching = false, size = 32, className = "" }: Props) {
-  const [blinking, setBlinking] = useState(false);
   const [activity, setActivity] = useState(false);
   const [reduced, setReduced] = useState(false);
   const { flashTick } = useActivity();
@@ -33,33 +31,6 @@ export function PixelEye({ watching = false, size = 32, className = "" }: Props)
     const t = setTimeout(() => setActivity(false), ACTIVITY_DURATION_MS);
     return () => clearTimeout(t);
   }, [flashTick]);
-
-  useEffect(() => {
-    if (reduced || watching) return;
-    let cancelled = false;
-    let lidTimer: ReturnType<typeof setTimeout> | undefined;
-    let nextTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const schedule = () => {
-      const delay = 4000 + Math.random() * 3000;
-      nextTimer = setTimeout(() => {
-        if (cancelled) return;
-        setBlinking(true);
-        lidTimer = setTimeout(() => {
-          if (cancelled) return;
-          setBlinking(false);
-          schedule();
-        }, BLINK_DURATION_MS);
-      }, delay);
-    };
-
-    schedule();
-    return () => {
-      cancelled = true;
-      if (nextTimer) clearTimeout(nextTimer);
-      if (lidTimer) clearTimeout(lidTimer);
-    };
-  }, [reduced, watching]);
 
   const irisClass = [
     "pixel-iris",
@@ -91,16 +62,6 @@ export function PixelEye({ watching = false, size = 32, className = "" }: Props)
         <rect x="7" y="7" width="2" height="2" fill="#000000" />
         <rect x="6" y="6" width="1" height="1" fill="#FFFFFF" />
       </g>
-
-      {/* Eyelid overlay during blink */}
-      <rect
-        className={`pixel-lid ${blinking ? "blink" : ""}`}
-        x="2"
-        y="4"
-        width="12"
-        height="8"
-        fill="#000000"
-      />
     </svg>
   );
 }

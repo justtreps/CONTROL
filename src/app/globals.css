@@ -195,20 +195,25 @@ body.cursor-on-red.hovering-interactive #cursor-brackets::after {
   shape-rendering: crispEdges;
 }
 
+/* 2D scan: 6 positions held ~1.2s each (total 7.2s), snap between them */
 @keyframes iris-scan {
-  0%,   33%  { transform: translateX(-2px); }
-  33.01%, 66% { transform: translateX(0); }
-  66.01%, 100% { transform: translateX(2px); }
+  0%     { transform: translate(0, 0); }       /* center */
+  16.66% { transform: translate(2px, 0); }     /* right */
+  33.33% { transform: translate(-2px, 0); }    /* left */
+  50%    { transform: translate(0, -2px); }    /* up */
+  66.66% { transform: translate(2px, -2px); }  /* up-right */
+  83.33% { transform: translate(-2px, -2px); } /* up-left */
+  100%   { transform: translate(0, 0); }       /* back to center */
 }
 
 .pixel-iris {
-  transform: translateX(0);
+  transform: translate(0, 0);
 }
 .pixel-iris.scanning {
-  animation: iris-scan 3.6s steps(1, jump-none) infinite;
+  animation: iris-scan 7.2s steps(1, jump-end) infinite;
 }
 .pixel-iris.scanning.activity {
-  animation-duration: 1.2s;
+  animation-duration: 2.4s;
   filter: brightness(1.3) drop-shadow(0 0 1px #FF3300);
 }
 .pixel-iris.watching {
@@ -217,21 +222,7 @@ body.cursor-on-red.hovering-interactive #cursor-brackets::after {
 }
 .pixel-iris.reduced {
   animation: none;
-  transform: translateX(0);
-}
-
-@keyframes lid-blink {
-  0%   { transform: scaleY(0); }
-  50%  { transform: scaleY(1); }
-  100% { transform: scaleY(0); }
-}
-.pixel-lid {
-  transform: scaleY(0);
-  transform-box: fill-box;
-  transform-origin: center top;
-}
-.pixel-lid.blink {
-  animation: lid-blink 200ms linear;
+  transform: translate(0, 0);
 }
 
 /* === Login arrival animations (boot sequence) === */
