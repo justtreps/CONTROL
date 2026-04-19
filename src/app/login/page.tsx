@@ -118,7 +118,10 @@ function LoginForm() {
         </div>
 
         {/* RIGHT — red panel */}
-        <div className="login-panel-right relative bg-[#FF3300] text-black flex flex-col justify-between items-center p-8 md:p-12 min-h-[50vh] md:min-h-screen gap-12">
+        <div
+          data-cursor="invert"
+          className="login-panel-right relative bg-[#FF3300] text-black flex flex-col justify-between items-center p-8 md:p-12 min-h-[50vh] md:min-h-screen gap-12"
+        >
           {/* Top */}
           <div className="w-full max-w-sm">
             <div
@@ -171,7 +174,7 @@ function LoginForm() {
                     autoFocus
                     autoComplete="current-password"
                     disabled={submitting}
-                    className="interactive w-full bg-transparent border border-black/50 focus:border-black px-4 py-3 font-mono text-sm tracking-widest placeholder:text-black/40 outline-none transition-colors disabled:opacity-60"
+                    className="interactive w-full bg-transparent border-2 border-black focus:border-black px-4 py-3 font-mono text-sm tracking-widest placeholder:text-black/50 caret-black outline-none transition-colors disabled:opacity-60"
                     placeholder="•••••••••"
                   />
                 </div>

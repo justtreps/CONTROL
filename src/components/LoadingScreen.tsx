@@ -10,6 +10,7 @@ export function LoadingScreen() {
     <div
       role="status"
       aria-live="polite"
+      data-cursor="invert"
       className="fixed inset-0 z-[10000] bg-[#FF3300] text-black flex flex-col items-center justify-center animate-loading-fade-in"
     >
       <div className="flex flex-col items-center justify-center w-full h-full gap-12 relative px-6">

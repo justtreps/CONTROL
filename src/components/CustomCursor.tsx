@@ -44,12 +44,18 @@ export function CustomCursor() {
       if (t?.closest(".interactive, a, button, [role='button']")) {
         document.body.classList.add("hovering-interactive");
       }
+      if (t?.closest("[data-cursor='invert']")) {
+        document.body.classList.add("cursor-on-red");
+      }
     };
 
     const onOut = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
       if (t?.closest(".interactive, a, button, [role='button']")) {
         document.body.classList.remove("hovering-interactive");
+      }
+      if (t?.closest("[data-cursor='invert']")) {
+        document.body.classList.remove("cursor-on-red");
       }
     };
 
@@ -64,6 +70,7 @@ export function CustomCursor() {
       document.removeEventListener("mouseout", onOut);
       document.body.classList.remove("has-custom-cursor");
       document.body.classList.remove("hovering-interactive");
+      document.body.classList.remove("cursor-on-red");
       cancelAnimationFrame(frame);
     };
   }, []);

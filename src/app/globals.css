@@ -88,7 +88,7 @@ html, body {
   content: "";
   position: absolute;
   inset: 0;
-  border: 1px solid var(--text-muted);
+  border: 1px solid var(--accent);
   transition: border-color 0.2s ease;
 }
 
@@ -119,6 +119,22 @@ body.hovering-interactive #cursor-brackets {
 body.hovering-interactive #cursor-brackets::before,
 body.hovering-interactive #cursor-brackets::after {
   border-color: var(--accent);
+}
+
+/* === Cursor on red zones (login right panel, LoadingScreen, danger zones) === */
+body.cursor-on-red #cursor-dot {
+  background-color: #000;
+}
+body.cursor-on-red #cursor-brackets::before,
+body.cursor-on-red #cursor-brackets::after {
+  border-color: #000;
+}
+body.cursor-on-red.hovering-interactive #cursor-dot {
+  background-color: transparent;
+}
+body.cursor-on-red.hovering-interactive #cursor-brackets::before,
+body.cursor-on-red.hovering-interactive #cursor-brackets::after {
+  border-color: #000;
 }
 
 /* === Canvas background grid === */
