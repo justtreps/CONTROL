@@ -1,13 +1,14 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ControlEye } from "@/components/control";
 import { useLoading } from "@/components/LoadingContext";
 
 const ARRIVAL_HOLD_MS = 880;
 
 function LoginForm() {
+  const router = useRouter();
   const params = useSearchParams();
   const from = params.get("from") ?? "/";
   const { show: showLoading, hide: hideLoading } = useLoading();
@@ -51,9 +52,10 @@ function LoginForm() {
       return;
     }
 
-    // Hard navigation: guarantees cookies are sent with the new page request
-    // and the curtain stays up until the next page paints.
-    window.location.href = from;
+    // Soft nav so the curtain stays mounted and PageTransition finishes
+    // the slam → stase → retract cycle on the destination page.
+    router.push(from);
+    router.refresh();
   }
 
   return (
