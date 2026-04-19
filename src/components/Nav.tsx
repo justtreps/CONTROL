@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/services", label: "SERVICES" },
   { href: "/logs", label: "JOURNAUX" },
   { href: "/config", label: "CONFIG" },
+  { href: "/library", label: "LIBRARY" },
 ];
 
 export function Nav() {

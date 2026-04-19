@@ -624,6 +624,108 @@ body.cursor-on-red.hovering-interactive #cursor-brackets::after {
   40% { opacity: 1; transform: translateY(-3px); }
 }
 
+/* =================================================================
+   == LIBRARY SHOWCASE (demo layout, scoped to /library only)
+   ================================================================= */
+.lib-page { padding: 32px 24px 64px; max-width: 1280px; margin: 0 auto; }
+.lib-page .page-header {
+  border-top: 1px solid var(--gray);
+  border-bottom: 1px solid var(--gray);
+  padding: 14px 0;
+  margin-bottom: 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.lib-page .page-title {
+  font-family: var(--font-display-stack);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+.lib-page .page-title .slash { color: var(--accent); }
+.lib-page .page-meta {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--gray);
+  text-transform: uppercase;
+  font-family: var(--font-mono-stack);
+}
+.lib-page .showcase {
+  background: var(--surface);
+  border-left: 2px solid var(--accent);
+  padding: 24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  align-items: center;
+}
+.lib-page .showcase + .showcase { margin-top: 1px; }
+.lib-page .showcase-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.lib-page .showcase-label {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--gray);
+  text-transform: uppercase;
+  font-family: var(--font-mono-stack);
+}
+.lib-page .dash {
+  border: 1px solid var(--gray);
+  background: var(--bg);
+  margin-bottom: 32px;
+}
+.lib-page .dash-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--gray);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--gray);
+  text-transform: uppercase;
+  font-family: var(--font-mono-stack);
+}
+.lib-page .dash-header .sep { color: var(--gray); opacity: 0.4; }
+.lib-page .dash-header .meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+.lib-page .dash-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--gray);
+  border-bottom: 1px solid var(--gray);
+}
+@media (max-width: 800px) {
+  .lib-page .dash-grid { grid-template-columns: 1fr; }
+}
+.lib-page .dash-card {
+  background: var(--bg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lib-page .dash-logs {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 /* === Reduced motion === */
 @media (prefers-reduced-motion: reduce) {
   #cursor-dot, #cursor-brackets {
