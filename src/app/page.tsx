@@ -3,7 +3,7 @@ import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { RunScoringButton, SyncServicesButton } from "./HomeActions";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 30;
 
 type Alert = {
   serviceId: number;
@@ -117,17 +117,17 @@ export default async function HomePage() {
           loop
           muted
           playsInline
-          preload="metadata"
+          preload="auto"
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-55 mix-blend-screen z-0"
-          src="/planet-earth.mov"
+          src="/planet-earth.mp4"
         />
         {/* Fade to bg at top + bottom for content readability */}
         <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-[#030303] via-transparent to-[#030303]" />
         <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-r from-[#030303]/60 via-transparent to-[#030303]/60" />
 
         <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-end relative z-10">
-          <div className="lg:col-span-8 flex flex-col z-20">
+          <div className="lg:col-span-8 min-w-0 flex flex-col z-20">
             <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD: 01 | SYS: CONTROL | OPTIQUE: ACTIVE ]
             </div>
@@ -136,7 +136,7 @@ export default async function HomePage() {
               <span className="text-[#FF3300]">Contrôlé.</span>
             </h1>
           </div>
-          <div className="lg:col-span-4 flex flex-col justify-end pb-4 z-20">
+          <div className="lg:col-span-4 min-w-0 flex flex-col justify-end pb-4 z-20">
             <p className="font-mono text-xs text-[#666666] tracking-widest leading-relaxed mb-8 uppercase max-w-sm">
               MOTEUR DE ROUTAGE QUALITÉ AUTONOME. TESTE, SCORE ET ROUTE CHAQUE
               COMMANDE VERS LE MEILLEUR SERVICE EN TEMPS RÉEL.
@@ -151,18 +151,18 @@ export default async function HomePage() {
       {/* === Pattern C — Metrics === */}
       <section className="py-24 px-4 md:px-8">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-12 border-b border-[#666666]/20 pb-24">
-          <div className="md:col-span-4 flex flex-col justify-between gap-8">
+          <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-8">
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ MÉTRIQUES: LIVE | FENÊTRE: 24H ]
             </div>
             <h2
-              className="brand font-display tracking-tight uppercase leading-none text-white"
-              style={{ fontSize: "clamp(2rem, 4vw, 3.5rem)" }}
+              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
+              style={{ fontSize: "clamp(1.75rem, 3vw, 2.75rem)" }}
             >
               Métriques<br />Opérationnelles.
             </h2>
           </div>
-          <div className="md:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-12 pt-12 md:pt-0">
+          <div className="md:col-span-8 min-w-0 grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-12 pt-12 md:pt-0">
             {metrics.map((m) => (
               <div key={m.num} className="flex flex-col gap-4">
                 <div className="h-px w-full bg-[#666666]/30" />

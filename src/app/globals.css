@@ -36,8 +36,10 @@ html, body {
   font-family: var(--font-mono-stack);
 }
 .text-fluid-title {
-  font-size: clamp(3rem, 12vw, 15rem);
+  font-size: clamp(3rem, 9vw, 9rem);
   line-height: 0.85;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 /* === Custom cursor === */

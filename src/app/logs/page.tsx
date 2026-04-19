@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { LogsFilters } from "./LogsFilters";
 import type { Prisma } from "@prisma/client";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 30;
 
 const PAGE_SIZE = 50;
 const RANGES: Record<string, number | null> = {

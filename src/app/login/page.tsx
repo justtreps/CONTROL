@@ -65,10 +65,10 @@ function LoginForm() {
             loop
             muted
             playsInline
-            preload="metadata"
+            preload="auto"
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-55 mix-blend-screen z-0"
-            src="/planet-earth.mov"
+            src="/planet-earth.mp4"
           />
           <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-[#030303]/60 via-transparent to-[#030303]" />
 

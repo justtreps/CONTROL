@@ -9,7 +9,7 @@ import {
 } from "./ServiceDetailCharts";
 import { ServiceDetailActions } from "./ServiceDetailActions";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 30;
 
 export default async function ServiceDetailPage({
   params,

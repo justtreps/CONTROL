@@ -4,7 +4,7 @@ import { ScoreBadge } from "@/components/ScoreBadge";
 import { prisma } from "@/lib/prisma";
 import { ServicesTable, type ServiceRow } from "./ServicesTable";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 30;
 
 export default async function ServicesPage() {
   const services = await prisma.service.findMany({
