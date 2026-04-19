@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useLoading } from "@/components/LoadingContext";
 import { useActivity } from "@/components/ActivityContext";
 
 type TestAccount = {
@@ -16,15 +17,36 @@ type Props = {
   initialBulkmedyaSet: boolean;
   initialRapidApiSet: boolean;
   testAccounts: TestAccount[];
-  serviceCount: number;
 };
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+const INPUT =
+  "interactive bg-transparent border border-[#666666]/30 focus:border-[#FF3300] px-3 py-2 font-mono text-xs tracking-widest uppercase text-white placeholder:text-[#666666]/60 outline-none transition-colors";
+
+const BTN_PATTERN_B =
+  "interactive group relative w-full border border-[#666666]/30 bg-[#0D0D0D] py-3 px-5 overflow-hidden flex justify-between items-center text-left disabled:opacity-60";
+
+const BTN_PATTERN_B_INNER =
+  "relative font-mono text-xs tracking-widest text-white z-10 group-hover:text-black transition-colors duration-300";
+
+const BTN_PATTERN_B_OVERLAY =
+  "absolute inset-0 bg-[#FF3300] transform translate-y-full group-hover:translate-y-0 transition-transform duration-500 ease-out z-0";
+
+function CardHeader({ icon, num }: { icon: string; num: string }) {
   return (
-    <section className="bg-white border border-neutral-200 rounded-lg p-6">
-      <h2 className="font-medium mb-4">{title}</h2>
+    <div className="absolute top-6 right-6 md:top-8 md:right-8 flex items-center gap-3">
+      <span className="font-mono text-xs text-[#666666] tracking-widest">
+        {num}
+      </span>
+      <iconify-icon icon={icon} width="22" height="22" className="text-[#666666]" />
+    </div>
+  );
+}
+
+function CardTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="brand font-display text-2xl uppercase tracking-tight text-white mt-12 mb-6">
       {children}
-    </section>
+    </h3>
   );
 }
 
@@ -32,10 +54,10 @@ export function ConfigForms({
   initialBulkmedyaSet,
   initialRapidApiSet,
   testAccounts,
-  serviceCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const { show: showLoading, hide: hideLoading } = useLoading();
   const { flash } = useActivity();
 
   const [bulkmedyaKey, setBulkmedyaKey] = useState("");
@@ -49,22 +71,21 @@ export function ConfigForms({
   const [userId, setUserId] = useState("");
   const [accountMsg, setAccountMsg] = useState<string | null>(null);
 
-  const [syncResult, setSyncResult] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-
-  const [testBotResult, setTestBotResult] = useState<string | null>(null);
-  const [testBotRunning, setTestBotRunning] = useState(false);
-  const [scraperResult, setScraperResult] = useState<string | null>(null);
-  const [scraperRunning, setScraperRunning] = useState(false);
-  const [scoringResult, setScoringResult] = useState<string | null>(null);
-  const [scoringRunning, setScoringRunning] = useState(false);
+  const [trigger, setTrigger] = useState<{
+    name: string;
+    msg: string;
+  } | null>(null);
 
   const [orderPlatform, setOrderPlatform] = useState("instagram");
   const [orderType, setOrderType] = useState("followers");
   const [orderQuantity, setOrderQuantity] = useState("100");
-  const [orderTargetUrl, setOrderTargetUrl] = useState("https://www.instagram.com/example/");
+  const [orderTargetUrl, setOrderTargetUrl] = useState(
+    "https://www.instagram.com/example/"
+  );
   const [orderRunning, setOrderRunning] = useState(false);
-  const [orderResult, setOrderResult] = useState<Record<string, unknown> | null>(null);
+  const [orderResult, setOrderResult] = useState<Record<string, unknown> | null>(
+    null
+  );
 
   async function saveKeys(e: React.FormEvent) {
     e.preventDefault();
@@ -82,9 +103,10 @@ export function ConfigForms({
       if (rapidApiKey) setRapidSet(true);
       setBulkmedyaKey("");
       setRapidApiKey("");
-      setKeysMsg("Clés sauvegardées.");
+      setKeysMsg("CLÉS SAUVEGARDÉES.");
+      flash();
     } else {
-      setKeysMsg("Erreur lors de la sauvegarde.");
+      setKeysMsg("ERREUR LORS DE LA SAUVEGARDE.");
     }
   }
 
@@ -99,11 +121,12 @@ export function ConfigForms({
     if (res.ok) {
       setUsername("");
       setUserId("");
-      setAccountMsg("Compte ajouté.");
+      setAccountMsg("COMPTE AJOUTÉ.");
+      flash();
       startTransition(() => router.refresh());
     } else {
       const data = await res.json().catch(() => ({}));
-      setAccountMsg(data.error ?? "Erreur.");
+      setAccountMsg((data.error ?? "ERREUR.").toUpperCase());
     }
   }
 
@@ -112,333 +135,376 @@ export function ConfigForms({
     startTransition(() => router.refresh());
   }
 
-  async function syncServices() {
-    setSyncing(true);
-    setSyncResult(null);
-    const res = await fetch("/api/config/sync-services", { method: "POST" });
-    const data = await res.json();
-    if (res.ok) {
-      setSyncResult(
-        `OK — ${data.total} services (${data.created} créés, ${data.updated} mis à jour, ${data.deactivated} désactivés).`
-      );
-      flash();
-      startTransition(() => router.refresh());
-    } else {
-      setSyncResult(`Erreur : ${data.error ?? "inconnue"}`);
+  async function runTrigger(
+    name: string,
+    endpoint: string,
+    render: (data: Record<string, unknown>) => string
+  ) {
+    setTrigger({ name, msg: "EXÉCUTION..." });
+    showLoading();
+    try {
+      const res = await fetch(endpoint, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setTrigger({ name, msg: render(data) });
+        flash();
+        startTransition(() => router.refresh());
+      } else {
+        setTrigger({ name, msg: `ERREUR : ${data.error ?? "INCONNUE"}` });
+      }
+    } catch {
+      setTrigger({ name, msg: "ERREUR RÉSEAU" });
+    } finally {
+      setTimeout(() => hideLoading(), 600);
     }
-    setSyncing(false);
-  }
-
-  async function runTestBot() {
-    setTestBotRunning(true);
-    setTestBotResult(null);
-    const res = await fetch("/api/config/run-test-bot", { method: "POST" });
-    const data = await res.json();
-    if (res.ok) {
-      const errs = data.errors?.length ? ` — ${data.errors.length} erreurs` : "";
-      setTestBotResult(
-        `${data.placed}/${data.attempted} commandes placées (${data.skipped} skip)${errs}`
-      );
-      flash();
-      startTransition(() => router.refresh());
-    } else {
-      setTestBotResult(`Erreur : ${data.error ?? "inconnue"}`);
-    }
-    setTestBotRunning(false);
-  }
-
-  async function runScraper() {
-    setScraperRunning(true);
-    setScraperResult(null);
-    const res = await fetch("/api/config/run-scraper", { method: "POST" });
-    const data = await res.json();
-    if (res.ok) {
-      const errs = data.errors?.length ? ` — ${data.errors.length} erreurs` : "";
-      setScraperResult(
-        `${data.measurements} measurements sur ${data.ordersScanned}/${data.ordersSeen} orders${errs}`
-      );
-      flash();
-      startTransition(() => router.refresh());
-    } else {
-      setScraperResult(`Erreur : ${data.error ?? "inconnue"}`);
-    }
-    setScraperRunning(false);
-  }
-
-  async function runScoring() {
-    setScoringRunning(true);
-    setScoringResult(null);
-    const res = await fetch("/api/config/run-scoring", { method: "POST" });
-    const data = await res.json();
-    if (res.ok) {
-      setScoringResult(
-        `${data.servicesScored} services scorés (${data.servicesSkipped} skip, aucune data)`
-      );
-      flash();
-      startTransition(() => router.refresh());
-    } else {
-      setScoringResult(`Erreur : ${data.error ?? "inconnue"}`);
-    }
-    setScoringRunning(false);
   }
 
   async function submitTestOrder(e: React.FormEvent) {
     e.preventDefault();
     setOrderRunning(true);
     setOrderResult(null);
-    const res = await fetch("/api/config/test-order", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        platform: orderPlatform,
-        service_type: orderType,
-        quantity: Number(orderQuantity),
-        target_url: orderTargetUrl,
-      }),
-    });
-    const data = await res.json();
-    setOrderResult(data);
-    if (data?.success) flash();
-    setOrderRunning(false);
+    showLoading();
+    try {
+      const res = await fetch("/api/config/test-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: orderPlatform,
+          service_type: orderType,
+          quantity: Number(orderQuantity),
+          target_url: orderTargetUrl,
+        }),
+      });
+      const data = await res.json();
+      setOrderResult(data);
+      if (data?.success) flash();
+    } finally {
+      setTimeout(() => hideLoading(), 600);
+      setOrderRunning(false);
+    }
   }
 
   return (
     <>
-      <Section title="Clés API">
-        <form onSubmit={saveKeys} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              BulkMedya API key{" "}
-              <span className="text-neutral-400 font-normal">
-                ({bulkmedyaSet ? "configurée" : "non configurée"})
-              </span>
-            </label>
-            <input
-              type="password"
-              value={bulkmedyaKey}
-              onChange={(e) => setBulkmedyaKey(e.target.value)}
-              placeholder={bulkmedyaSet ? "Laisser vide pour ne pas changer" : "Coller la clé"}
-              className="mt-1 block w-full rounded-md border-neutral-300 border px-3 py-2 text-sm"
-            />
+      {/* === Pattern D — 3 cards === */}
+      <section className="w-full">
+        <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D]">
+          [ MODULES DE CONFIGURATION ]
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 w-full border-b border-[#666666]/20">
+          {/* Card 1 — API Keys */}
+          <div className="relative p-8 md:p-12 bg-[#030303] md:border-r border-[#666666]/20">
+            <CardHeader icon="solar:key-linear" num="01" />
+            <CardTitle>Clés API</CardTitle>
+            <form onSubmit={saveKeys} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="font-mono text-xs text-[#666666] tracking-widest uppercase">
+                  BULKMEDYA{" "}
+                  <span className="text-[#666666]/70">
+                    [ {bulkmedyaSet ? "✓" : "✗"} ]
+                  </span>
+                </label>
+                <input
+                  type="password"
+                  value={bulkmedyaKey}
+                  onChange={(e) => setBulkmedyaKey(e.target.value)}
+                  placeholder={
+                    bulkmedyaSet ? "VIDE = NE CHANGE PAS" : "COLLER LA CLÉ"
+                  }
+                  className={INPUT}
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="font-mono text-xs text-[#666666] tracking-widest uppercase">
+                  RAPIDAPI{" "}
+                  <span className="text-[#666666]/70">
+                    [ {rapidSet ? "✓" : "✗"} ]
+                  </span>
+                </label>
+                <input
+                  type="password"
+                  value={rapidApiKey}
+                  onChange={(e) => setRapidApiKey(e.target.value)}
+                  placeholder={
+                    rapidSet ? "VIDE = NE CHANGE PAS" : "COLLER LA CLÉ"
+                  }
+                  className={INPUT}
+                />
+              </div>
+              <button type="submit" className={BTN_PATTERN_B}>
+                <div className={BTN_PATTERN_B_OVERLAY} />
+                <span className={BTN_PATTERN_B_INNER}>ENREGISTRER</span>
+                <iconify-icon
+                  icon="solar:diskette-linear"
+                  width="18"
+                  height="18"
+                  className="relative z-10 group-hover:text-black transition-colors duration-300"
+                />
+              </button>
+              {keysMsg && (
+                <p className="font-mono text-xs text-[#666666] tracking-widest uppercase">
+                  {keysMsg}
+                </p>
+              )}
+            </form>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              RapidAPI key{" "}
-              <span className="text-neutral-400 font-normal">
-                ({rapidSet ? "configurée" : "non configurée"})
-              </span>
-            </label>
-            <input
-              type="password"
-              value={rapidApiKey}
-              onChange={(e) => setRapidApiKey(e.target.value)}
-              placeholder={rapidSet ? "Laisser vide pour ne pas changer" : "Coller la clé"}
-              className="mt-1 block w-full rounded-md border-neutral-300 border px-3 py-2 text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800"
-          >
-            Enregistrer
-          </button>
-          {keysMsg && <p className="text-sm text-neutral-600">{keysMsg}</p>}
-        </form>
-      </Section>
 
-      <Section title={`Sync services BulkMedya (${serviceCount} en DB)`}>
-        <p className="text-sm text-neutral-600 mb-4">
-          Récupère la liste complète des services BulkMedya et classe chaque
-          service (platform + type) à partir de son nom. À relancer si BulkMedya
-          ajoute/retire des services.
-        </p>
-        <button
-          type="button"
-          onClick={syncServices}
-          disabled={syncing || !bulkmedyaSet}
-          className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-        >
-          {syncing ? "Synchronisation..." : "Synchroniser les services"}
-        </button>
-        {!bulkmedyaSet && (
-          <p className="text-sm text-neutral-500 mt-2">
-            Configure d&apos;abord la clé BulkMedya.
-          </p>
-        )}
-        {syncResult && <p className="text-sm mt-3">{syncResult}</p>}
-      </Section>
-
-      <Section title="Lancer manuellement (debug / test end-to-end)">
-        <p className="text-sm text-neutral-600 mb-4">
-          En prod, un cron Vercel déclenche ces jobs automatiquement (hourly
-          pour le test bot, every 5 min pour le scraper). Utilise ces boutons
-          pour un test immédiat.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <div>
-            <button
-              type="button"
-              onClick={runTestBot}
-              disabled={testBotRunning || !bulkmedyaSet || !rapidSet}
-              className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-            >
-              {testBotRunning ? "Bot..." : "Lancer le bot de test"}
-            </button>
-            {testBotResult && (
-              <p className="text-sm mt-2 text-neutral-700">{testBotResult}</p>
+          {/* Card 2 — Test Accounts */}
+          <div className="relative p-8 md:p-12 bg-[#0D0D0D] md:border-r border-[#666666]/20">
+            <CardHeader icon="solar:users-group-rounded-linear" num="02" />
+            <CardTitle>Comptes test</CardTitle>
+            <form onSubmit={addAccount} className="flex flex-col gap-3 mb-6">
+              <select
+                value={platform}
+                onChange={(e) =>
+                  setPlatform(e.target.value as "instagram" | "tiktok")
+                }
+                className={INPUT}
+              >
+                <option value="instagram">INSTAGRAM</option>
+                <option value="tiktok">TIKTOK</option>
+              </select>
+              <input
+                required
+                placeholder="USERNAME"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className={INPUT}
+              />
+              <input
+                required
+                placeholder="USER_ID NUMÉRIQUE"
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
+                className={INPUT}
+              />
+              <button type="submit" disabled={pending} className={BTN_PATTERN_B}>
+                <div className={BTN_PATTERN_B_OVERLAY} />
+                <span className={BTN_PATTERN_B_INNER}>AJOUTER</span>
+                <iconify-icon
+                  icon="solar:add-circle-linear"
+                  width="18"
+                  height="18"
+                  className="relative z-10 group-hover:text-black transition-colors duration-300"
+                />
+              </button>
+              {accountMsg && (
+                <p className="font-mono text-xs text-[#666666] tracking-widest uppercase">
+                  {accountMsg}
+                </p>
+              )}
+            </form>
+            {testAccounts.length === 0 ? (
+              <p className="font-mono text-xs text-[#666666] tracking-widest uppercase">
+                AUCUN COMPTE TEST.
+              </p>
+            ) : (
+              <ul className="divide-y divide-[#666666]/20 border-t border-[#666666]/20">
+                {testAccounts.map((a) => (
+                  <li
+                    key={a.id}
+                    className="flex items-center justify-between py-3 font-mono text-xs tracking-widest uppercase"
+                  >
+                    <div>
+                      <span className="text-white">{a.platform}</span>
+                      <span className="ml-2 text-[#666666]">@{a.username}</span>
+                      <span className="ml-2 text-[#666666]/60">
+                        ID:{a.userId}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeAccount(a.id)}
+                      className="interactive text-[#FF3300] hover:text-white transition-colors"
+                    >
+                      [ SUPPRIMER ]
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
-          <div>
-            <button
-              type="button"
-              onClick={runScraper}
-              disabled={scraperRunning || !rapidSet}
-              className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-            >
-              {scraperRunning ? "Scraper..." : "Lancer le scraper"}
-            </button>
-            {scraperResult && (
-              <p className="text-sm mt-2 text-neutral-700">{scraperResult}</p>
+
+          {/* Card 3 — Manual Triggers */}
+          <div className="relative p-8 md:p-12 bg-[#030303]">
+            <CardHeader icon="solar:play-linear" num="03" />
+            <CardTitle>Déclenchement manuel</CardTitle>
+            <p className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-6 leading-relaxed">
+              EN PROD, UN CRON VERCEL DÉCLENCHE CES JOBS. UTILISEZ POUR UN
+              TEST IMMÉDIAT.
+            </p>
+            <div className="flex flex-col gap-3">
+              <TriggerButton
+                onClick={() =>
+                  runTrigger(
+                    "test-bot",
+                    "/api/config/run-test-bot",
+                    (d) =>
+                      `${d.placed}/${d.attempted} COMMANDES PLACÉES (${d.skipped} SKIP)`
+                  )
+                }
+                running={trigger?.name === "test-bot"}
+                label="LANCER LE BOT DE TEST"
+                disabled={!bulkmedyaSet || !rapidSet}
+              />
+              <TriggerButton
+                onClick={() =>
+                  runTrigger(
+                    "scraper",
+                    "/api/config/run-scraper",
+                    (d) =>
+                      `${d.measurements} MEASUREMENTS / ${d.ordersScanned} ORDERS`
+                  )
+                }
+                running={trigger?.name === "scraper"}
+                label="LANCER LE SCRAPER"
+                disabled={!rapidSet}
+              />
+              <TriggerButton
+                onClick={() =>
+                  runTrigger(
+                    "scoring",
+                    "/api/config/run-scoring",
+                    (d) =>
+                      `${d.servicesScored} SERVICES SCORÉS (${d.servicesSkipped} SKIP)`
+                  )
+                }
+                running={trigger?.name === "scoring"}
+                label="LANCER LE SCORING"
+              />
+            </div>
+            {trigger && (
+              <p className="font-mono text-xs text-[#666666] tracking-widest uppercase mt-4">
+                {trigger.msg}
+              </p>
             )}
-          </div>
-          <div>
-            <button
-              type="button"
-              onClick={runScoring}
-              disabled={scoringRunning}
-              className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-            >
-              {scoringRunning ? "Scoring..." : "Lancer le scoring"}
-            </button>
-            {scoringResult && (
-              <p className="text-sm mt-2 text-neutral-700">{scoringResult}</p>
+            {(!bulkmedyaSet || !rapidSet) && (
+              <p className="font-mono text-xs text-[#666666] tracking-widest uppercase mt-4">
+                CONFIGUREZ LES CLÉS BULKMEDYA + RAPIDAPI D&apos;ABORD.
+              </p>
             )}
           </div>
         </div>
-        {(!bulkmedyaSet || !rapidSet) && (
-          <p className="text-sm text-neutral-500 mt-3">
-            Configure les clés BulkMedya + RapidAPI avant de lancer les jobs.
-          </p>
-        )}
-      </Section>
+      </section>
 
-      <Section title="Tester le router /api/order">
-        <p className="text-sm text-neutral-600 mb-4">
-          Simule un appel de MyBoost. Respecte la var <code>DRY_RUN</code> (default{" "}
-          <code>true</code>) — aucune commande BulkMedya n&apos;est réellement
-          placée tant que DRY_RUN est actif. Le routing et le logging dans
-          RoutingDecision sont effectués normalement.
-        </p>
-        <form onSubmit={submitTestOrder} className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
-          <select
-            value={orderPlatform}
-            onChange={(e) => setOrderPlatform(e.target.value)}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-          >
-            <option value="instagram">Instagram</option>
-            <option value="tiktok">TikTok</option>
-            <option value="youtube">YouTube</option>
-            <option value="twitter">Twitter</option>
-            <option value="facebook">Facebook</option>
-          </select>
-          <select
-            value={orderType}
-            onChange={(e) => setOrderType(e.target.value)}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-          >
-            <option value="followers">followers</option>
-            <option value="likes">likes</option>
-            <option value="views">views</option>
-            <option value="comments">comments</option>
-            <option value="shares">shares</option>
-            <option value="saves">saves</option>
-          </select>
-          <input
-            type="number"
-            value={orderQuantity}
-            onChange={(e) => setOrderQuantity(e.target.value)}
-            min={1}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-            placeholder="quantité"
-          />
-          <input
-            type="url"
-            value={orderTargetUrl}
-            onChange={(e) => setOrderTargetUrl(e.target.value)}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm sm:col-span-4"
-            placeholder="URL cible"
-          />
-          <button
-            type="submit"
-            disabled={orderRunning}
-            className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50 sm:col-span-1"
-          >
-            {orderRunning ? "Routage..." : "Router cette commande"}
-          </button>
-        </form>
-        {orderResult && (
-          <pre className="mt-3 text-xs bg-neutral-50 border border-neutral-200 rounded-md p-3 overflow-x-auto">
-{JSON.stringify(orderResult, null, 2)}
-          </pre>
-        )}
-      </Section>
+      {/* === Pattern E — Test Router (full-width form) === */}
+      <section className="px-4 md:px-8 py-24">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-6 md:p-8">
+          <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none">
+            <span className="font-mono text-xs text-[#FF3300] tracking-widest">
+              [ ASSET: TEST-ROUTEUR ]
+            </span>
+            <span className="font-mono text-xs text-white tracking-widest">
+              SIMULATION_NODE_03
+            </span>
+          </div>
 
-      <Section title={`Comptes test (${testAccounts.length})`}>
-        <form onSubmit={addAccount} className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-6">
-          <select
-            value={platform}
-            onChange={(e) => setPlatform(e.target.value as "instagram" | "tiktok")}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+            <h2 className="brand font-display text-3xl md:text-4xl uppercase tracking-tight text-white">
+              Tester le Routeur
+            </h2>
+            <p className="font-mono text-xs text-[#666666] tracking-widest uppercase max-w-md leading-relaxed">
+              SIMULE UN APPEL DE MYBOOST. RESPECTE DRY_RUN — AUCUNE COMMANDE
+              N&apos;EST RÉELLEMENT PLACÉE TANT QU&apos;ACTIF.
+            </p>
+          </div>
+
+          <form
+            onSubmit={submitTestOrder}
+            className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4"
           >
-            <option value="instagram">Instagram</option>
-            <option value="tiktok">TikTok</option>
-          </select>
-          <input
-            required
-            placeholder="nom d'utilisateur"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-          />
-          <input
-            required
-            placeholder="user_id (numérique)"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-          />
-          <button
-            type="submit"
-            disabled={pending}
-            className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
-          >
-            Ajouter
-          </button>
-        </form>
-        {accountMsg && <p className="text-sm text-neutral-600 mb-3">{accountMsg}</p>}
-        {testAccounts.length === 0 ? (
-          <p className="text-sm text-neutral-500">Aucun compte test.</p>
-        ) : (
-          <ul className="divide-y divide-neutral-200">
-            {testAccounts.map((a) => (
-              <li key={a.id} className="flex items-center justify-between py-3 text-sm">
-                <div>
-                  <span className="font-medium">{a.platform}</span>
-                  <span className="ml-3 text-neutral-700">@{a.username}</span>
-                  <span className="ml-3 text-neutral-400">id:{a.userId}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeAccount(a.id)}
-                  className="text-red-600 hover:text-red-700"
-                >
-                  Supprimer
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+            <select
+              value={orderPlatform}
+              onChange={(e) => setOrderPlatform(e.target.value)}
+              className={INPUT}
+            >
+              <option value="instagram">INSTAGRAM</option>
+              <option value="tiktok">TIKTOK</option>
+              <option value="youtube">YOUTUBE</option>
+              <option value="twitter">TWITTER</option>
+              <option value="facebook">FACEBOOK</option>
+            </select>
+            <select
+              value={orderType}
+              onChange={(e) => setOrderType(e.target.value)}
+              className={INPUT}
+            >
+              <option value="followers">FOLLOWERS</option>
+              <option value="likes">LIKES</option>
+              <option value="views">VIEWS</option>
+              <option value="comments">COMMENTS</option>
+              <option value="shares">SHARES</option>
+              <option value="saves">SAVES</option>
+            </select>
+            <input
+              type="number"
+              value={orderQuantity}
+              onChange={(e) => setOrderQuantity(e.target.value)}
+              min={1}
+              className={INPUT}
+              placeholder="QUANTITÉ"
+            />
+            <input
+              type="url"
+              value={orderTargetUrl}
+              onChange={(e) => setOrderTargetUrl(e.target.value)}
+              className={`${INPUT} sm:col-span-3`}
+              placeholder="URL CIBLE"
+            />
+            <button
+              type="submit"
+              disabled={orderRunning}
+              className={`${BTN_PATTERN_B} sm:col-span-1`}
+            >
+              <div className={BTN_PATTERN_B_OVERLAY} />
+              <span className={BTN_PATTERN_B_INNER}>
+                {orderRunning ? "ROUTAGE..." : "ROUTER"}
+              </span>
+              <iconify-icon
+                icon="solar:arrow-right-linear"
+                width="18"
+                height="18"
+                className="relative z-10 group-hover:text-black transition-colors duration-300"
+              />
+            </button>
+          </form>
+          {orderResult && (
+            <pre className="mt-4 font-mono text-xs bg-[#0D0D0D] border border-[#666666]/30 p-4 overflow-x-auto text-white">
+              {JSON.stringify(orderResult, null, 2)}
+            </pre>
+          )}
+        </div>
+      </section>
     </>
+  );
+}
+
+function TriggerButton({
+  onClick,
+  running,
+  label,
+  disabled,
+}: {
+  onClick: () => void;
+  running: boolean;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={running || disabled}
+      className={BTN_PATTERN_B}
+    >
+      <div className={BTN_PATTERN_B_OVERLAY} />
+      <span className={BTN_PATTERN_B_INNER}>{running ? "EXÉCUTION..." : label}</span>
+      <iconify-icon
+        icon="solar:play-linear"
+        width="18"
+        height="18"
+        className="relative z-10 group-hover:text-black transition-colors duration-300"
+      />
+    </button>
   );
 }

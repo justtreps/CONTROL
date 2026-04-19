@@ -1,37 +1,116 @@
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { getConfig } from "@/lib/config";
+import { isDryRun } from "@/lib/router";
 import { ConfigForms } from "./ConfigForms";
+import { ConfigDangerZone } from "./ConfigDangerZone";
 
 export const dynamic = "force-dynamic";
 
 export default async function ConfigPage() {
-  const [bulkmedyaKey, rapidApiKey, testAccounts, serviceCount] = await Promise.all([
-    getConfig<string>("bulkmedya_api_key"),
-    getConfig<string>("rapidapi_key"),
-    prisma.testAccount.findMany({ orderBy: [{ platform: "asc" }, { username: "asc" }] }),
-    prisma.service.count(),
-  ]);
+  const last24h = new Date(Date.now() - 24 * 3600 * 1000);
+
+  const [bulkmedyaKey, rapidApiKey, testAccounts, serviceCount, ordersLast24] =
+    await Promise.all([
+      getConfig<string>("bulkmedya_api_key"),
+      getConfig<string>("rapidapi_key"),
+      prisma.testAccount.findMany({
+        orderBy: [{ platform: "asc" }, { username: "asc" }],
+      }),
+      prisma.service.count(),
+      prisma.routingDecision.count({
+        where: { decidedAt: { gte: last24h } },
+      }),
+    ]);
+
+  const dryRun = isDryRun();
+
+  const statusLines: Array<{ label: string; value: string; ok: boolean | null }> = [
+    {
+      label: "BULKMEDYA",
+      value: bulkmedyaKey ? "[ ✓ CONFIGURÉE ]" : "[ ✗ MANQUANTE ]",
+      ok: Boolean(bulkmedyaKey),
+    },
+    {
+      label: "RAPIDAPI",
+      value: rapidApiKey ? "[ ✓ CONFIGURÉE ]" : "[ ✗ MANQUANTE ]",
+      ok: Boolean(rapidApiKey),
+    },
+    {
+      label: "SERVICES EN DB",
+      value: String(serviceCount),
+      ok: null,
+    },
+    {
+      label: "COMPTES TEST",
+      value: String(testAccounts.length),
+      ok: null,
+    },
+    {
+      label: "COMMANDES 24H",
+      value: String(ordersLast24),
+      ok: null,
+    },
+    {
+      label: "DRY_RUN",
+      value: dryRun ? "[ ACTIF ]" : "[ INACTIF — LIVE ]",
+      ok: dryRun,
+    },
+  ];
 
   return (
     <>
       <DashboardHeader />
-      <main className="max-w-4xl mx-auto px-6 py-10 space-y-10">
-        <h1 className="brand text-3xl">Config</h1>
 
-        <ConfigForms
-          initialBulkmedyaSet={Boolean(bulkmedyaKey)}
-          initialRapidApiSet={Boolean(rapidApiKey)}
-          testAccounts={testAccounts.map((a) => ({
-            id: a.id,
-            platform: a.platform,
-            username: a.username,
-            userId: a.userId,
-            active: a.active,
-          }))}
-          serviceCount={serviceCount}
-        />
-      </main>
+      {/* === Pattern B — Hero === */}
+      <section className="px-4 md:px-8 pt-32 pb-16">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-end">
+          <div className="lg:col-span-7 flex flex-col">
+            <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max">
+              [ NŒUD CONFIG | ACCÈS ADMIN ]
+            </div>
+            <h1 className="brand font-display text-fluid-title uppercase tracking-tight text-white m-0">
+              Paramètres<br />
+              <span className="text-[#FF3300]">Système.</span>
+            </h1>
+          </div>
+          <div className="lg:col-span-5 flex flex-col font-mono text-xs uppercase tracking-widest">
+            {statusLines.map((s) => (
+              <div
+                key={s.label}
+                className="flex items-center justify-between py-2 border-b border-[#666666]/20 last:border-b-0"
+              >
+                <span className="text-[#666666]">{s.label}</span>
+                <span
+                  className={
+                    s.ok === true
+                      ? "text-[#00FF88]"
+                      : s.ok === false
+                        ? "text-[#FF3300]"
+                        : "text-white"
+                  }
+                >
+                  {s.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <ConfigForms
+        initialBulkmedyaSet={Boolean(bulkmedyaKey)}
+        initialRapidApiSet={Boolean(rapidApiKey)}
+        testAccounts={testAccounts.map((a) => ({
+          id: a.id,
+          platform: a.platform,
+          username: a.username,
+          userId: a.userId,
+          active: a.active,
+        }))}
+      />
+
+      <ConfigDangerZone />
     </>
   );
 }
