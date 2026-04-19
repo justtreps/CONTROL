@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
-import { Inter, Unbounded } from "next/font/google";
+import { Inter, Oswald, Space_Mono } from "next/font/google";
 import "./globals.css";
+import { CustomCursor } from "@/components/CustomCursor";
+import { BackgroundGrid } from "@/components/BackgroundGrid";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -8,15 +10,22 @@ const inter = Inter({
   display: "swap",
 });
 
-const unbounded = Unbounded({
+const oswald = Oswald({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
-  variable: "--font-unbounded",
+  variable: "--font-oswald",
+  display: "swap",
+});
+
+const spaceMono = Space_Mono({
+  subsets: ["latin"],
+  weight: ["400", "700"],
+  variable: "--font-space-mono",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "myscore",
+  title: "CONTROL",
   description: "Live quality scoring router for SMM services",
 };
 
@@ -26,8 +35,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="fr" className={`${inter.variable} ${unbounded.variable}`}>
-      <body className="min-h-screen bg-neutral-50 text-neutral-900 antialiased">
+    <html
+      lang="fr"
+      className={`${inter.variable} ${oswald.variable} ${spaceMono.variable}`}
+    >
+      <body className="min-h-screen antialiased">
+        <BackgroundGrid />
+        <div className="noise-overlay" aria-hidden="true" />
+        <CustomCursor />
         {children}
       </body>
     </html>

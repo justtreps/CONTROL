@@ -15,8 +15,8 @@ export function Nav() {
   return (
     <header className="border-b border-neutral-200 bg-white">
       <div className="max-w-6xl mx-auto flex items-center justify-between px-6 py-4">
-        <Link href="/" className="brand text-2xl">
-          myscore
+        <Link href="/" className="brand text-2xl tracking-widest interactive">
+          CONTROL
         </Link>
         <nav className="flex items-center gap-6 text-sm">
           {LINKS.map((l) => {

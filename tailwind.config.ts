@@ -6,10 +6,21 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: ["var(--font-inter)", "system-ui", "sans-serif"],
-        brand: ["var(--font-unbounded)", "sans-serif"],
+        display: ["var(--font-oswald)", "sans-serif"],
+        mono: ["var(--font-space-mono)", "ui-monospace", "monospace"],
+      },
+      colors: {
+        "bg-main": "var(--bg-color)",
+        surface: "var(--surface)",
+        "surface-2": "var(--surface-2)",
+        accent: "var(--accent)",
+        "text-main": "var(--text-main)",
+        "text-muted": "var(--text-muted)",
+        "border-grid": "var(--border-grid)",
       },
     },
   },
   plugins: [],
 };
+
 export default config;

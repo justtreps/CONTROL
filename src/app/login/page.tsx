@@ -61,7 +61,7 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
-        <h1 className="brand text-4xl mb-8 text-center">myscore</h1>
+        <h1 className="brand text-5xl mb-8 text-center tracking-widest">CONTROL</h1>
         <Suspense fallback={null}>
           <LoginForm />
         </Suspense>
