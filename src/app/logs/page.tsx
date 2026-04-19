@@ -169,7 +169,7 @@ export default async function LogsPage({
 
       {/* === Pattern E — Table === */}
       <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto relative border border-[#666666]/30">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-24">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-[#0D0D0D] text-[#666666] font-mono text-xs uppercase tracking-widest">

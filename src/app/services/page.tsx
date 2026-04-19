@@ -132,7 +132,7 @@ export default async function ServicesPage() {
 
       {/* === Pattern E — Table === */}
       <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto relative border border-[#666666]/30">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-24">
           <ServicesTable rows={rows} />
           <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none">
             <span className="font-mono text-xs text-[#FF3300] tracking-widest">

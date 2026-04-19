@@ -4,10 +4,9 @@ import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useLoading } from "./LoadingContext";
 
-// Iron curtain takes 600ms to descend + needs >=200ms stase before
-// the open looks intentional. 900ms hold means the global show/hide
-// pair triggers: descend (0-600) + stase (600-900) + open (900-1500).
-const HOLD_MS = 900;
+// Slam keyframe is 380ms + needs ~250ms stase to read CONTROL flash
+// before opening kicks in.
+const HOLD_MS = 650;
 
 export function PageTransition() {
   const pathname = usePathname();
