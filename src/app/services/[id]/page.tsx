@@ -113,7 +113,7 @@ export default async function ServiceDetailPage({
       <DashboardHeader />
 
       {/* === Pattern B — Hero === */}
-      <section className="px-4 md:px-8 pt-32 pb-12">
+      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-10 md:pb-12">
         <div className="max-w-7xl mx-auto">
           <Link
             href="/services"
@@ -121,17 +121,18 @@ export default async function ServiceDetailPage({
           >
             ← TOUS LES SERVICES
           </Link>
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-end mt-8">
-            <div className="lg:col-span-8 flex flex-col">
-              <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-end mt-6 md:mt-8">
+            <div className="lg:col-span-8 min-w-0 flex flex-col">
+              <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max max-w-full truncate">
                 [ SERVICE ID: {service.bulkmedyaId} | PLATEFORME:{" "}
-                {service.platform.toUpperCase()} ]
+                {service.platform.toUpperCase()} | TYPE:{" "}
+                {service.serviceType.toUpperCase()} ]
               </div>
-              <h1 className="brand font-display text-5xl md:text-7xl uppercase tracking-tight leading-[0.9] text-white m-0">
+              <h1 className="brand font-display text-4xl sm:text-5xl md:text-7xl uppercase tracking-tight leading-[0.9] text-white m-0 break-words">
                 {service.name}
               </h1>
             </div>
-            <div className="lg:col-span-4 font-mono text-xs tracking-widest uppercase">
+            <div className="lg:col-span-4 min-w-0 font-mono text-xs tracking-widest uppercase">
               <BriefRow label="Tarif" value={`${service.ratePerK.toFixed(2)} €/K`} />
               <BriefRow label="Min" value={String(service.minQuantity)} />
               <BriefRow label="Max" value={String(service.maxQuantity)} />
@@ -153,7 +154,7 @@ export default async function ServiceDetailPage({
       <div className="w-full h-px bg-[#666666]/20" />
 
       {/* === Pattern E — Graph === */}
-      <section className="px-4 md:px-8 py-24">
+      <section className="px-4 md:px-8 py-16 md:py-24">
         <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-6 md:p-8 pb-24">
           <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none z-10">
             <span className="font-mono text-xs text-[#FF3300] tracking-widest">
@@ -177,20 +178,20 @@ export default async function ServiceDetailPage({
       </section>
 
       {/* === Pattern C — Sub-score breakdown === */}
-      <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-12 border-b border-[#666666]/20 pb-24">
-          <div className="md:col-span-4 flex flex-col justify-between gap-8">
+      <section className="px-4 md:px-8 py-16 md:py-24">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12 border-b border-[#666666]/20 pb-16 md:pb-24">
+          <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-6 md:gap-8">
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ DÉCOMPOSITION DU SCORE | MOYENNE 30J ]
             </div>
             <h2
-              className="brand font-display tracking-tight uppercase leading-none text-white"
-              style={{ fontSize: "clamp(2rem, 4vw, 3.5rem)" }}
+              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
+              style={{ fontSize: "clamp(1.75rem, 3.5vw, 3rem)" }}
             >
               Décomposition<br />du Score.
             </h2>
           </div>
-          <div className="md:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-8 lg:gap-10 pt-12 md:pt-0">
+          <div className="md:col-span-8 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8 lg:gap-10 pt-6 md:pt-0">
             {subScores.map((s) => {
               const delta =
                 s.value !== null && s.old !== null ? s.value - s.old : null;
@@ -230,7 +231,7 @@ export default async function ServiceDetailPage({
           [ COMMANDES TEST RÉCENTES | DERNIÈRES {orderCards.length} ]
         </div>
         {orderCards.length === 0 ? (
-          <div className="px-8 py-24 text-center font-mono text-xs text-[#666666] tracking-widest uppercase border-b border-[#666666]/20">
+          <div className="px-4 md:px-8 py-16 md:py-24 text-center font-mono text-xs text-[#666666] tracking-widest uppercase border-b border-[#666666]/20">
             AUCUNE COMMANDE TEST POUR CE SERVICE.
           </div>
         ) : (

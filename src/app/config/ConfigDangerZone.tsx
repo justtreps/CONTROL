@@ -30,7 +30,7 @@ export function ConfigDangerZone() {
   return (
     <section
       data-cursor="invert"
-      className="w-full bg-[#FF3300] py-24 px-4 md:px-8 text-black flex flex-col items-center justify-center text-center"
+      className="w-full bg-[#FF3300] py-16 md:py-24 px-4 md:px-8 text-black flex flex-col items-center justify-center text-center"
     >
       <div className="font-mono text-xs tracking-widest mb-8 border border-black/30 px-4 py-1">
         [ ZONE DANGER ]

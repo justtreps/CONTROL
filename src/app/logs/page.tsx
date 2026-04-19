@@ -106,14 +106,14 @@ export default async function LogsPage({
       <DashboardHeader />
 
       {/* === Pattern C — Header === */}
-      <section className="py-24 px-4 md:px-8">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-12 border-b border-[#666666]/20 pb-16">
-          <div className="md:col-span-4 flex flex-col justify-between gap-8">
+      <section className="py-16 md:py-24 px-4 md:px-8">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12 border-b border-[#666666]/20 pb-12 md:pb-16">
+          <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-6 md:gap-8">
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ JOURNAL DE ROUTAGE | FLUX EN DIRECT ]
             </div>
             <h1
-              className="brand font-display tracking-tight uppercase leading-none text-white"
+              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
               style={{ fontSize: "clamp(2rem, 4.5vw, 4rem)" }}
             >
               Historique<br />des Décisions.
@@ -122,7 +122,7 @@ export default async function LogsPage({
               {total} DÉCISIONS POUR CE FILTRE
             </div>
           </div>
-          <div className="md:col-span-8 flex flex-col justify-end pt-12 md:pt-0">
+          <div className="md:col-span-8 min-w-0 flex flex-col justify-end pt-6 md:pt-0">
             <LogsFilters
               platforms={platforms.map((p) => p.platform).sort()}
               current={{
@@ -149,14 +149,14 @@ export default async function LogsPage({
                 ? "md:border-r border-[#666666]/20"
                 : "";
             return (
-              <div key={c.num} className={`p-8 md:p-12 ${bg} ${borderRight}`}>
-                <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-6">
+              <div key={c.num} className={`p-6 md:p-12 ${bg} ${borderRight}`}>
+                <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4 md:mb-6">
                   {c.num}. {c.label}
                 </div>
-                <div className="brand font-display text-5xl md:text-6xl tabular-nums text-white">
+                <div className="brand font-display text-4xl md:text-6xl tabular-nums text-white break-words">
                   {c.value}
                   {c.suffix && (
-                    <span className="text-[#666666] text-2xl ml-2">
+                    <span className="text-[#666666] text-xl md:text-2xl ml-2">
                       {c.suffix}
                     </span>
                   )}
@@ -168,8 +168,8 @@ export default async function LogsPage({
       </section>
 
       {/* === Pattern E — Table === */}
-      <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-24">
+      <section className="px-4 md:px-8 py-16 md:py-24">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-20 md:pb-24">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-[#0D0D0D] text-[#666666] font-mono text-xs uppercase tracking-widest">

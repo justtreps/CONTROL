@@ -2,13 +2,44 @@ import Link from "next/link";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { prisma } from "@/lib/prisma";
+import {
+  DEFAULT_PLATFORM,
+  DEFAULT_TYPE,
+  SCOPE,
+  getPlatform,
+} from "@/lib/scope";
+import { ServicesNav } from "./ServicesNav";
 import { ServicesTable, type ServiceRow } from "./ServicesTable";
 
 export const dynamic = "force-dynamic";
 
-export default async function ServicesPage() {
+function resolveSelection(sp: { platform?: string; type?: string }) {
+  const platformId = sp.platform ?? DEFAULT_PLATFORM;
+  const platform = getPlatform(platformId);
+  if (!platform || !platform.enabled) {
+    return { platform: DEFAULT_PLATFORM, type: DEFAULT_TYPE };
+  }
+  const typeId = sp.type ?? DEFAULT_TYPE;
+  const type = platform.types.find((t) => t.id === typeId && t.mvp);
+  if (!type) {
+    const firstMvp = platform.types.find((t) => t.mvp);
+    return {
+      platform: platform.id,
+      type: (firstMvp?.id ?? DEFAULT_TYPE) as string,
+    };
+  }
+  return { platform: platform.id, type: type.id as string };
+}
+
+export default async function ServicesPage({
+  searchParams,
+}: {
+  searchParams: { platform?: string; type?: string };
+}) {
+  const { platform, type } = resolveSelection(searchParams);
+
   const services = await prisma.service.findMany({
-    where: { active: true },
+    where: { active: true, platform, serviceType: type },
     orderBy: { name: "asc" },
     include: {
       scores: {
@@ -45,94 +76,76 @@ export default async function ServicesPage() {
     };
   });
 
-  // Top 1 per platform for the Pattern D compact bar
-  const topByPlatform = new Map<string, ServiceRow>();
-  for (const r of rows) {
-    if (r.currentScore === null) continue;
-    const existing = topByPlatform.get(r.platform);
-    if (!existing || (existing.currentScore ?? 0) < r.currentScore) {
-      topByPlatform.set(r.platform, r);
-    }
-  }
-  const topRows = Array.from(topByPlatform.values())
-    .sort((a, b) => (b.currentScore ?? 0) - (a.currentScore ?? 0))
-    .slice(0, 3);
+  const totalInScope = await prisma.service.count({
+    where: {
+      active: true,
+      platform: { in: SCOPE.platforms.filter((p) => p.enabled).map((p) => p.id) },
+    },
+  });
+
+  const top =
+    rows.find((r) => r.currentScore !== null) ??
+    (rows.length ? rows[0] : null);
 
   return (
     <>
       <DashboardHeader />
 
       {/* === Pattern C — Header === */}
-      <section className="py-24 px-4 md:px-8">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-12 border-b border-[#666666]/20 pb-16">
-          <div className="md:col-span-4 flex flex-col justify-between gap-8">
+      <section className="py-16 md:py-24 px-4 md:px-8">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12 border-b border-[#666666]/20 pb-12 md:pb-16">
+          <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-8">
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
-              [ ANNUAIRE DES SERVICES | TOTAL: {services.length} ]
+              [ ANNUAIRE DES SERVICES | SCOPE: {totalInScope} ACTIFS ]
             </div>
             <h1
-              className="brand font-display tracking-tight uppercase leading-none text-white"
+              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
               style={{ fontSize: "clamp(2rem, 4.5vw, 4rem)" }}
             >
               Annuaire<br />des Services.
             </h1>
           </div>
-          <div className="md:col-span-8 flex flex-col justify-end gap-4 pt-12 md:pt-0">
+          <div className="md:col-span-8 min-w-0 flex flex-col justify-end gap-4 pt-8 md:pt-0">
             <p className="font-mono text-xs text-[#666666] tracking-widest uppercase leading-relaxed">
-              CATALOGUE COMPLET DES SERVICES BULKMEDYA SYNCHRONISÉS. CHAQUE
-              LIGNE EST CLIQUABLE POUR ACCÉDER AU DÉTAIL.
+              CATALOGUE DES SERVICES BULKMEDYA DANS LE SCOPE MVP.
+              SÉLECTIONNE UNE PLATEFORME ET UN TYPE POUR FILTRER.
             </p>
           </div>
         </div>
       </section>
 
-      {/* === Pattern D compact — Top 1 par plateforme === */}
-      {topRows.length > 0 && (
+      {/* Hierarchical nav: platform tabs > type chips */}
+      <ServicesNav activePlatform={platform} activeType={type} />
+
+      {/* Top service for current selection (Pattern D compact) */}
+      {top && top.currentScore !== null && (
         <section className="w-full">
-          <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D]">
-            [ MEILLEUR PAR PLATEFORME ]
+          <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-b border-[#666666]/20 bg-[#0D0D0D]">
+            [ MEILLEUR — {platform.toUpperCase()} / {type.toUpperCase()} ]
           </div>
-          <div
-            className={`grid grid-cols-1 md:grid-cols-${Math.min(
-              topRows.length,
-              3
-            )} w-full border-b border-[#666666]/20`}
+          <Link
+            href={`/services/${top.id}`}
+            className="group relative block p-6 md:p-12 bg-[#030303] hover:bg-[#0D0D0D] transition-colors duration-500 interactive border-b border-[#666666]/20"
           >
-            {topRows.map((r, i) => {
-              const bg = i % 2 === 0 ? "bg-[#030303]" : "bg-[#0D0D0D]";
-              const hoverBg =
-                i % 2 === 0 ? "hover:bg-[#0D0D0D]" : "hover:bg-[#030303]";
-              const borderRight =
-                i < topRows.length - 1
-                  ? "md:border-r border-[#666666]/20"
-                  : "";
-              return (
-                <Link
-                  key={r.id}
-                  href={`/services/${r.id}`}
-                  className={`group relative p-8 ${borderRight} ${bg} ${hoverBg} transition-colors duration-500 interactive`}
-                >
-                  <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4">
-                    [ {r.platform} / {r.serviceType} ]
-                  </div>
-                  <div className="brand font-display text-xl uppercase tracking-tight text-white truncate mb-4">
-                    {r.name}
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <ScoreBadge score={r.currentScore} />
-                    <span className="font-mono text-xs text-[#666666] tracking-widest">
-                      {r.testOrderCount} TESTS
-                    </span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
+            <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4">
+              [ {top.platform} / {top.serviceType} ]
+            </div>
+            <div className="brand font-display text-xl md:text-2xl uppercase tracking-tight text-white break-words mb-4">
+              {top.name}
+            </div>
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <ScoreBadge score={top.currentScore} />
+              <span className="font-mono text-xs text-[#666666] tracking-widest">
+                {top.testOrderCount} TESTS
+              </span>
+            </div>
+          </Link>
         </section>
       )}
 
       {/* === Pattern E — Table === */}
-      <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-24">
+      <section className="px-4 md:px-8 py-16 md:py-24">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-20 md:pb-24">
           <ServicesTable rows={rows} />
           <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none">
             <span className="font-mono text-xs text-[#FF3300] tracking-widest">

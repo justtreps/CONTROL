@@ -111,7 +111,7 @@ export default async function HomePage() {
       <DashboardHeader />
 
       {/* === Pattern B — Hero === */}
-      <section className="min-h-[80vh] w-full flex flex-col justify-end px-4 md:px-8 pb-12 pt-32 relative overflow-hidden">
+      <section className="min-h-[70vh] md:min-h-[80vh] w-full flex flex-col justify-end px-4 md:px-8 pb-10 md:pb-12 pt-24 md:pt-32 relative overflow-hidden">
         {/* Background video — globe in red wireframe */}
         <video
           autoPlay
@@ -150,8 +150,8 @@ export default async function HomePage() {
       <div className="w-full h-px bg-[#666666]/20" />
 
       {/* === Pattern C — Metrics === */}
-      <section className="py-24 px-4 md:px-8">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-12 border-b border-[#666666]/20 pb-24">
+      <section className="py-16 md:py-24 px-4 md:px-8">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12 border-b border-[#666666]/20 pb-16 md:pb-24">
           <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-8">
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ MÉTRIQUES: LIVE | FENÊTRE: 24H ]
@@ -185,7 +185,7 @@ export default async function HomePage() {
           [ TOP PERFORMERS | CLASSÉS PAR SCORE ]
         </div>
         {topServices.length === 0 ? (
-          <div className="px-8 py-24 text-center font-mono text-xs text-[#666666] tracking-widest uppercase border-b border-[#666666]/20">
+          <div className="px-4 md:px-8 py-16 md:py-24 text-center font-mono text-xs text-[#666666] tracking-widest uppercase border-b border-[#666666]/20">
             AUCUN SCORE CALCULÉ. LANCEZ LE PIPELINE DEPUIS{" "}
             <Link href="/config" className="text-[#FF3300] interactive">
               /CONFIG
@@ -206,7 +206,7 @@ export default async function HomePage() {
                 <Link
                   key={s.id}
                   href={`/services/${s.id}`}
-                  className={`group relative p-8 md:p-12 ${borderRight} ${bg} ${hoverBg} transition-colors duration-500 interactive`}
+                  className={`group relative p-6 md:p-12 ${borderRight} ${bg} ${hoverBg} transition-colors duration-500 interactive`}
                 >
                   <div className="absolute top-8 right-8 text-[#666666] group-hover:text-[#FF3300] transition-colors">
                     <iconify-icon
@@ -236,8 +236,8 @@ export default async function HomePage() {
       </section>
 
       {/* === Pattern E — Alerts === */}
-      <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-8 md:p-12 pb-24">
+      <section className="px-4 md:px-8 py-16 md:py-24">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-5 md:p-12 pb-20 md:pb-24">
           <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm">
             <span className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ FLUX: ALERTES ]
@@ -283,12 +283,12 @@ export default async function HomePage() {
       {/* === Pattern F — CTA === */}
       <section
         data-cursor="invert"
-        className="w-full bg-[#FF3300] py-24 px-4 md:px-8 text-black flex flex-col items-center justify-center text-center"
+        className="w-full bg-[#FF3300] py-16 md:py-24 px-4 md:px-8 text-black flex flex-col items-center justify-center text-center"
       >
         <div className="font-mono text-xs tracking-widest mb-8 border border-black/30 px-4 py-1">
           [ DÉCLENCHEMENT MANUEL ]
         </div>
-        <h2 className="brand font-display text-fluid-title uppercase tracking-tight leading-none mb-12 hover:tracking-normal transition-all duration-700 interactive">
+        <h2 className="brand font-display text-fluid-title uppercase tracking-tight leading-none mb-10 md:mb-12 hover:tracking-normal transition-all duration-700 interactive">
           Exécuter.
         </h2>
         <SyncServicesButton />

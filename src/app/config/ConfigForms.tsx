@@ -193,7 +193,7 @@ export function ConfigForms({
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 w-full border-b border-[#666666]/20">
           {/* Card 1 — API Keys */}
-          <div className="relative p-8 md:p-12 bg-[#030303] md:border-r border-[#666666]/20">
+          <div className="relative p-6 md:p-12 bg-[#030303] md:border-r border-[#666666]/20">
             <CardHeader icon="solar:key-linear" num="01" />
             <CardTitle>Clés API</CardTitle>
             <form onSubmit={saveKeys} className="flex flex-col gap-4">
@@ -250,7 +250,7 @@ export function ConfigForms({
           </div>
 
           {/* Card 2 — Test Accounts */}
-          <div className="relative p-8 md:p-12 bg-[#0D0D0D] md:border-r border-[#666666]/20">
+          <div className="relative p-6 md:p-12 bg-[#0D0D0D] md:border-r border-[#666666]/20">
             <CardHeader icon="solar:users-group-rounded-linear" num="02" />
             <CardTitle>Comptes test</CardTitle>
             <form onSubmit={addAccount} className="flex flex-col gap-3 mb-6">
@@ -326,7 +326,7 @@ export function ConfigForms({
           </div>
 
           {/* Card 3 — Manual Triggers */}
-          <div className="relative p-8 md:p-12 bg-[#030303]">
+          <div className="relative p-6 md:p-12 bg-[#030303]">
             <CardHeader icon="solar:play-linear" num="03" />
             <CardTitle>Déclenchement manuel</CardTitle>
             <p className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-6 leading-relaxed">
@@ -388,8 +388,8 @@ export function ConfigForms({
       </section>
 
       {/* === Pattern E — Test Router (full-width form) === */}
-      <section className="px-4 md:px-8 py-24">
-        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-6 md:p-8 pb-24">
+      <section className="px-4 md:px-8 py-16 md:py-24">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-5 md:p-8 pb-20 md:pb-24">
           <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none">
             <span className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ ASSET: TEST-ROUTEUR ]
