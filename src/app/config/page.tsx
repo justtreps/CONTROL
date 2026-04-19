@@ -1,4 +1,4 @@
-import { Nav } from "@/components/Nav";
+import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { getConfig } from "@/lib/config";
 import { ConfigForms } from "./ConfigForms";
@@ -15,7 +15,7 @@ export default async function ConfigPage() {
 
   return (
     <>
-      <Nav />
+      <DashboardHeader />
       <main className="max-w-4xl mx-auto px-6 py-10 space-y-10">
         <h1 className="brand text-3xl">Config</h1>
 

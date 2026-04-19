@@ -1,4 +1,4 @@
-import { Nav } from "@/components/Nav";
+import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { ServicesTable, type ServiceRow } from "./ServicesTable";
 
@@ -42,7 +42,7 @@ export default async function ServicesPage() {
 
   return (
     <>
-      <Nav />
+      <DashboardHeader />
       <main className="max-w-7xl mx-auto px-6 py-10">
         <div className="flex items-baseline justify-between mb-6">
           <h1 className="brand text-3xl">Services</h1>
