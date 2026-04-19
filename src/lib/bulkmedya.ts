@@ -1,5 +1,6 @@
 import { getBulkmedyaKey } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
+import { isMvpPair } from "@/lib/scope";
 
 const BULKMEDYA_URL = process.env.BULKMEDYA_API_URL ?? "https://bulkmedya.org/api/v2";
 
@@ -86,6 +87,7 @@ export type SyncResult = {
   created: number;
   updated: number;
   deactivated: number;
+  skippedOutOfScope: number;
 };
 
 export async function syncServices(): Promise<SyncResult> {
@@ -94,16 +96,27 @@ export async function syncServices(): Promise<SyncResult> {
     throw new Error(`Unexpected services response: ${JSON.stringify(raw).slice(0, 200)}`);
   }
 
-  const seenIds = new Set<number>();
+  // MVP: we only ingest services that are in the currently-active scope
+  // (see src/lib/scope.ts — Instagram + TikTok followers only). Anything
+  // else is tracked as "skipped" for debug but never written to DB, so
+  // scoring / routing / test-bot never see them.
+  const keptIds = new Set<number>();
   let created = 0;
   let updated = 0;
+  let skippedOutOfScope = 0;
 
   for (const r of raw) {
     const bulkmedyaId = Number(r.service);
     if (!Number.isFinite(bulkmedyaId)) continue;
-    seenIds.add(bulkmedyaId);
 
     const { platform, serviceType } = classify(r.name, r.category ?? "");
+
+    if (!isMvpPair(platform, serviceType)) {
+      skippedOutOfScope++;
+      continue;
+    }
+
+    keptIds.add(bulkmedyaId);
 
     const data = {
       bulkmedyaId,
@@ -129,20 +142,28 @@ export async function syncServices(): Promise<SyncResult> {
     }
   }
 
-  // Deactivate services no longer listed
+  // Any DB row that's currently active but didn't survive the scope
+  // filter this run gets deactivated (kept for history, hidden from
+  // scoring / router / UI).
   const deactivated = await prisma.service.updateMany({
     where: {
       active: true,
-      bulkmedyaId: { notIn: Array.from(seenIds) },
+      bulkmedyaId: { notIn: Array.from(keptIds) },
     },
     data: { active: false },
   });
+
+  const kept = created + updated;
+  console.log(
+    `[syncServices] fetched=${raw.length} kept=${kept} (created=${created}, updated=${updated}) skipped=${skippedOutOfScope} deactivated=${deactivated.count}`
+  );
 
   return {
     total: raw.length,
     created,
     updated,
     deactivated: deactivated.count,
+    skippedOutOfScope,
   };
 }
 

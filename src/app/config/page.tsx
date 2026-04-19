@@ -56,6 +56,11 @@ export default async function ConfigPage() {
       value: dryRun ? "[ ACTIF ]" : "[ INACTIF — LIVE ]",
       ok: dryRun,
     },
+    {
+      label: "SCOPE",
+      value: "[ INSTAGRAM FOLLOWERS + TIKTOK FOLLOWERS ]",
+      ok: null,
+    },
   ];
 
   return (
@@ -63,8 +68,8 @@ export default async function ConfigPage() {
       <DashboardHeader />
 
       {/* === Pattern B — Hero === */}
-      <section className="px-4 md:px-8 pt-32 pb-16">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12 items-end">
+      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-12 md:pb-16">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 md:gap-12 items-end">
           <div className="lg:col-span-7 flex flex-col min-w-0">
             <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD CONFIG | ACCÈS ADMIN ]

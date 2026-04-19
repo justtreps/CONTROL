@@ -1,3 +1,9 @@
+// MVP scope: CONTROL only ingests / scores / routes services that match
+// (platform=instagram|tiktok, service_type=followers). See src/lib/scope.ts.
+// For likes / views / comments / shares / saves / any other platform,
+// MyBoost must keep routing via its existing system — NOT through this
+// endpoint. A request outside the MVP scope will 404 with
+// "no_eligible_service" because the scoring pool is empty for those keys.
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { routeOrder } from "@/lib/router";
