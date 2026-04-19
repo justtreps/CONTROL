@@ -271,6 +271,19 @@ body.cursor-on-red.hovering-interactive #cursor-brackets::after {
   animation: loading-sweep 1.2s ease-in-out infinite;
 }
 
+/* === Brutal curtain slam (overshoot + bounce settle) === */
+@keyframes curtain-slam {
+  0%   { transform: translateY(-100%); }
+  60%  { transform: translateY(1.5vh); }
+  78%  { transform: translateY(-0.6vh); }
+  92%  { transform: translateY(0.3vh); }
+  100% { transform: translateY(0); }
+}
+.curtain-slam {
+  animation: curtain-slam 380ms cubic-bezier(0.6, 0, 0.7, 1) forwards;
+  will-change: transform;
+}
+
 /* === Iron curtain panel (red, with subtle metal-tole horizontal lines) === */
 .iron-curtain-panel {
   background:

@@ -12,36 +12,104 @@ const LOADING_MIN_MS = 800;
 const CONTROL_LETTERS = "CONTROL.".split("");
 const INITIATE_LETTERS = "ACCÉDER.".split("");
 
-// Arrival timing plan (total ~2.04s):
-//   t=0      — eye boots (100ms)
-//   t=100    — CONTROL letters (8 chars × 80ms stagger, 200ms each)
-//   t=860    — left supporting content + right [ TERMINAL NODE ] fade (200ms)
-//   t=1060   — INITIATE letters (9 chars × 60ms stagger, 200ms each)
-//   t=1740   — form + right footer fade (300ms)
 const DELAY_FADE_SUPPORT = 860;
 const DELAY_INITIATE_START = 1060;
 const DELAY_FORM_FADE = 1740;
 
-// Time the curtain is held closed (stase). Add 2 × 600ms for the close
-// and open animations -> total intro perceived ~1.6s.
-const INTRO_STASE_MS = 400;
+// Intro stages:
+//   0 = pre-mount, curtain off-screen above (no paint)
+//   1 = slamming down (380ms keyframe with overshoot + bounce)
+//   2 = stase (held closed, CONTROL + KITT visible)
+//   3 = opening (smooth 600ms slide back up)
+//   4 = done (unmount, login form takes over)
+const SLAM_MS = 380;
+const STASE_MS = 500;
+const OPEN_MS = 600;
+
+function LoginIntro({ onDone }: { onDone: () => void }) {
+  const [stage, setStage] = useState<0 | 1 | 2 | 3 | 4>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      setStage(1);
+      timers.push(setTimeout(() => !cancelled && setStage(2), SLAM_MS));
+      timers.push(
+        setTimeout(() => !cancelled && setStage(3), SLAM_MS + STASE_MS)
+      );
+      timers.push(
+        setTimeout(() => {
+          if (cancelled) return;
+          setStage(4);
+          onDone();
+        }, SLAM_MS + STASE_MS + OPEN_MS)
+      );
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      timers.forEach(clearTimeout);
+    };
+  }, [onDone]);
+
+  if (stage === 4) return null;
+
+  let curtainClass = "";
+  if (stage === 0) {
+    curtainClass = "-translate-y-full";
+  } else if (stage === 1) {
+    curtainClass = "curtain-slam";
+  } else if (stage === 2) {
+    curtainClass = "translate-y-0";
+  } else if (stage === 3) {
+    curtainClass = `-translate-y-full transition-transform duration-[${OPEN_MS}ms] ease-[cubic-bezier(0.77,0,0.175,1)]`;
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[10000] overflow-hidden"
+      data-cursor="invert"
+      role="status"
+      aria-live="polite"
+      aria-hidden={stage === 0}
+    >
+      {/* Curtain — CONTROL content lives inside so it descends WITH the panel */}
+      <div className={`absolute inset-0 iron-curtain-panel ${curtainClass}`}>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-black px-6">
+          <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-12">
+            [ NŒUD TERMINAL | CHARGEMENT ]
+          </div>
+          <h1 className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-center text-fluid-title">
+            CONTROL.
+          </h1>
+          <div className="flex flex-col items-center gap-3 mt-12">
+            <div className="font-mono text-xs tracking-widest">
+              PAR MY HUB SOLUTIONS
+            </div>
+            <div className="w-64 h-[1px] bg-black/30 overflow-hidden relative">
+              <div className="absolute inset-y-0 left-0 bg-black loading-bar" />
+            </div>
+          </div>
+        </div>
+      </div>
+      <span className="sr-only">Chargement de CONTROL.</span>
+    </div>
+  );
+}
 
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const from = params.get("from") ?? "/";
-  const { show: showLoading, hide: hideLoading } = useLoading();
+  const { show: showLoading } = useLoading();
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    showLoading();
-    // Close (600ms) + stase + open (600ms). hideLoading triggers the open.
-    const t = setTimeout(hideLoading, 600 + INTRO_STASE_MS);
-    return () => clearTimeout(t);
-  }, [showLoading, hideLoading]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,7 +148,6 @@ function LoginForm() {
   return (
     <>
       <div className="min-h-screen w-full grid grid-cols-1 md:grid-cols-2 relative">
-        {/* LEFT — black panel */}
         <div className="login-panel-left relative bg-[#030303] flex flex-col justify-between p-8 md:p-12 overflow-hidden min-h-[50vh] md:min-h-screen gap-12">
           <div className="relative z-10 flex flex-col gap-6">
             <div
@@ -128,12 +195,10 @@ function LoginForm() {
           </div>
         </div>
 
-        {/* RIGHT — red panel */}
         <div
           data-cursor="invert"
           className="login-panel-right relative bg-[#FF3300] text-black flex flex-col justify-between items-center p-8 md:p-12 min-h-[50vh] md:min-h-screen gap-12"
         >
-          {/* Top */}
           <div className="w-full max-w-sm">
             <div
               className="arrival-fade font-mono text-xs tracking-widest border border-black/30 px-3 py-1 w-max"
@@ -143,7 +208,6 @@ function LoginForm() {
             </div>
           </div>
 
-          {/* Middle */}
           <div className="w-full max-w-sm flex flex-col gap-6">
             <h2
               className="brand font-display text-5xl md:text-6xl uppercase tracking-tight leading-none"
@@ -220,7 +284,6 @@ function LoginForm() {
             </div>
           </div>
 
-          {/* Bottom */}
           <div
             className="arrival-form-fade w-full max-w-sm"
             style={{ animationDelay: `${DELAY_FORM_FADE}ms` }}
@@ -232,7 +295,6 @@ function LoginForm() {
         </div>
       </div>
 
-      {/* Curtain overlay */}
       <div
         className={`login-curtain fixed inset-0 z-[9999] pointer-events-none ${
           submitting ? "active" : ""
@@ -247,9 +309,16 @@ function LoginForm() {
 }
 
 export default function LoginPage() {
+  const [introDone, setIntroDone] = useState(false);
+
   return (
-    <Suspense fallback={null}>
-      <LoginForm />
-    </Suspense>
+    <>
+      <LoginIntro onDone={() => setIntroDone(true)} />
+      {introDone && (
+        <Suspense fallback={null}>
+          <LoginForm />
+        </Suspense>
+      )}
+    </>
   );
 }
