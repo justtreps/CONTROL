@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { PixelEye } from "./PixelEye";
 
 const LINKS = [
   { href: "/", label: "HOME" },
@@ -23,10 +24,10 @@ export function Nav() {
           onMouseEnter={() => setWatching(true)}
           onMouseLeave={() => setWatching(false)}
         >
+          <PixelEye watching={watching} />
           <Link
             href="/"
             className="brand text-xl tracking-[0.25em] interactive text-white"
-            data-watching={watching ? "1" : "0"}
           >
             CONTROL
           </Link>
