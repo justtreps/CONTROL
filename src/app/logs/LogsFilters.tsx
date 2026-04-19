@@ -10,6 +10,16 @@ type Current = {
   mode: string;
 };
 
+const FILTER =
+  "interactive bg-transparent border border-[#666666]/30 focus:border-[#FF3300] px-3 py-2 font-mono text-xs tracking-widest uppercase text-white outline-none transition-colors";
+
+const FIELDS = [
+  { key: "range", label: "PLAGE" },
+  { key: "platform", label: "PLATEFORME" },
+  { key: "status", label: "STATUT" },
+  { key: "mode", label: "MODE" },
+] as const;
+
 export function LogsFilters({
   platforms,
   current,
@@ -34,50 +44,75 @@ export function LogsFilters({
   );
 
   return (
-    <div className="flex flex-wrap gap-3 mb-5">
-      <select
-        value={current.range}
-        onChange={(e) => update({ range: e.target.value })}
-        className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-      >
-        <option value="24h">24h</option>
-        <option value="7d">7 jours</option>
-        <option value="30d">30 jours</option>
-        <option value="all">Tout</option>
-      </select>
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <FilterCell label={FIELDS[0].label}>
+        <select
+          value={current.range}
+          onChange={(e) => update({ range: e.target.value })}
+          className={FILTER}
+        >
+          <option value="24h">24H</option>
+          <option value="7d">7 JOURS</option>
+          <option value="30d">30 JOURS</option>
+          <option value="all">TOUT</option>
+        </select>
+      </FilterCell>
 
-      <select
-        value={current.platform}
-        onChange={(e) => update({ platform: e.target.value })}
-        className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-      >
-        <option value="all">Toutes plateformes</option>
-        {platforms.map((p) => (
-          <option key={p} value={p}>
-            {p}
-          </option>
-        ))}
-      </select>
+      <FilterCell label={FIELDS[1].label}>
+        <select
+          value={current.platform}
+          onChange={(e) => update({ platform: e.target.value })}
+          className={FILTER}
+        >
+          <option value="all">TOUTES</option>
+          {platforms.map((p) => (
+            <option key={p} value={p}>
+              {p.toUpperCase()}
+            </option>
+          ))}
+        </select>
+      </FilterCell>
 
-      <select
-        value={current.status}
-        onChange={(e) => update({ status: e.target.value })}
-        className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-      >
-        <option value="all">Tous statuts</option>
-        <option value="success">Succès seulement</option>
-        <option value="fail">Échecs seulement</option>
-      </select>
+      <FilterCell label={FIELDS[2].label}>
+        <select
+          value={current.status}
+          onChange={(e) => update({ status: e.target.value })}
+          className={FILTER}
+        >
+          <option value="all">TOUS</option>
+          <option value="success">SUCCÈS</option>
+          <option value="fail">ÉCHEC</option>
+        </select>
+      </FilterCell>
 
-      <select
-        value={current.mode}
-        onChange={(e) => update({ mode: e.target.value })}
-        className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-      >
-        <option value="all">Test + Réel</option>
-        <option value="dry">DRY_RUN seulement</option>
-        <option value="real">Réel seulement</option>
-      </select>
+      <FilterCell label={FIELDS[3].label}>
+        <select
+          value={current.mode}
+          onChange={(e) => update({ mode: e.target.value })}
+          className={FILTER}
+        >
+          <option value="all">TEST + RÉEL</option>
+          <option value="dry">TEST SEULEMENT</option>
+          <option value="real">RÉEL SEULEMENT</option>
+        </select>
+      </FilterCell>
+    </div>
+  );
+}
+
+function FilterCell({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="font-mono text-xs text-[#666666] tracking-widest uppercase">
+        {label}
+      </span>
+      {children}
     </div>
   );
 }
