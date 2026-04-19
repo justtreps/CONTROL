@@ -110,8 +110,23 @@ export default async function HomePage() {
       <DashboardHeader />
 
       {/* === Pattern B — Hero === */}
-      <section className="min-h-[80vh] w-full flex flex-col justify-end px-4 md:px-8 pb-12 pt-32 relative">
-        <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-end">
+      <section className="min-h-[80vh] w-full flex flex-col justify-end px-4 md:px-8 pb-12 pt-32 relative overflow-hidden">
+        {/* Background video — globe in red wireframe */}
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="metadata"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-50 mix-blend-screen z-0"
+          src="/planet-earth.mov"
+        />
+        {/* Fade to bg at top + bottom for content readability */}
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-[#030303] via-transparent to-[#030303]" />
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-r from-[#030303]/60 via-transparent to-[#030303]/60" />
+
+        <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8 items-end relative z-10">
           <div className="lg:col-span-8 flex flex-col z-20">
             <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD: 01 | SYS: CONTROL | OPTIQUE: ACTIVE ]
