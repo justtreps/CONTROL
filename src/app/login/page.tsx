@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PixelEye } from "@/components/PixelEye";
 import { useLoading } from "@/components/LoadingContext";
@@ -28,6 +28,8 @@ const OPEN_MS = 600;
 
 function LoginIntro({ onDone }: { onDone: () => void }) {
   const [stage, setStage] = useState<0 | 1 | 2 | 3 | 4>(0);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +46,7 @@ function LoginIntro({ onDone }: { onDone: () => void }) {
         setTimeout(() => {
           if (cancelled) return;
           setStage(4);
-          onDone();
+          onDoneRef.current();
         }, SLAM_MS + STASE_MS + OPEN_MS)
       );
     });
@@ -54,7 +56,7 @@ function LoginIntro({ onDone }: { onDone: () => void }) {
       cancelAnimationFrame(raf);
       timers.forEach(clearTimeout);
     };
-  }, [onDone]);
+  }, []);
 
   if (stage === 4) return null;
 
@@ -310,10 +312,11 @@ function LoginForm() {
 
 export default function LoginPage() {
   const [introDone, setIntroDone] = useState(false);
+  const handleIntroDone = useCallback(() => setIntroDone(true), []);
 
   return (
     <>
-      <LoginIntro onDone={() => setIntroDone(true)} />
+      {!introDone && <LoginIntro onDone={handleIntroDone} />}
       {introDone && (
         <Suspense fallback={null}>
           <LoginForm />
