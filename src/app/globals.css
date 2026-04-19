@@ -162,6 +162,16 @@ body.hovering-interactive #cursor-brackets::after {
 .bg-score-warn { background-color: #ffedd5; }
 .bg-score-bad  { background-color: #fee2e2; }
 
+/* === Animate shutter (logo polygon slow spin) === */
+@keyframes rotate-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-shutter {
+  animation: rotate-slow 360s linear infinite;
+  transform-origin: center;
+}
+
 /* === Reduced motion === */
 @media (prefers-reduced-motion: reduce) {
   #cursor-dot, #cursor-brackets {
