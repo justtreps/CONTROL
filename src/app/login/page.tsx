@@ -9,6 +9,19 @@ const CURTAIN_MS = 600;
 const API_TRIGGER_MS = 500;
 const LOADING_MIN_MS = 800;
 
+const CONTROL_LETTERS = "CONTROL.".split("");
+const INITIATE_LETTERS = "INITIATE.".split("");
+
+// Arrival timing plan (total ~2.04s):
+//   t=0      — eye boots (100ms)
+//   t=100    — CONTROL letters (8 chars × 80ms stagger, 200ms each)
+//   t=860    — left supporting content + right [ TERMINAL NODE ] fade (200ms)
+//   t=1060   — INITIATE letters (9 chars × 60ms stagger, 200ms each)
+//   t=1740   — form + right footer fade (300ms)
+const DELAY_FADE_SUPPORT = 860;
+const DELAY_INITIATE_START = 1060;
+const DELAY_FORM_FADE = 1740;
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -57,94 +70,148 @@ function LoginForm() {
     <>
       <div className="min-h-screen w-full grid grid-cols-1 md:grid-cols-2 relative">
         {/* LEFT — black panel */}
-        <div className="login-panel-left relative bg-[#030303] flex flex-col justify-between p-8 md:p-12 overflow-hidden min-h-[50vh] md:min-h-screen">
+        <div className="login-panel-left relative bg-[#030303] flex flex-col justify-between p-8 md:p-12 overflow-hidden min-h-[50vh] md:min-h-screen gap-12">
           <div className="relative z-10 flex flex-col gap-6">
-            <div className="font-mono text-xs text-[#666666] tracking-widest border border-[#666666]/30 px-3 py-1 w-max">
+            <div
+              className="arrival-fade font-mono text-xs text-[#666666] tracking-widest border border-[#666666]/30 px-3 py-1 w-max"
+              style={{ animationDelay: `${DELAY_FADE_SUPPORT}ms` }}
+            >
               [ NODE: CONTROL | OPTICS: LOCKED ]
             </div>
-            <PixelEye size={80} />
+            <div className="arrival-eye" style={{ animationDelay: "0ms" }}>
+              <PixelEye size={80} />
+            </div>
           </div>
 
-          <div className="relative z-10 flex flex-col gap-4">
-            <h1 className="brand font-display text-fluid-title uppercase tracking-tight leading-[0.85] m-0 text-white">
-              CONTROL.
+          <div className="relative z-10 flex flex-col">
+            <h1
+              className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-white"
+              style={{ fontSize: "clamp(4rem, 10vw, 9rem)" }}
+              aria-label="CONTROL."
+            >
+              {CONTROL_LETTERS.map((c, i) => (
+                <span
+                  key={i}
+                  className="arrival-letter"
+                  style={{ animationDelay: `${100 + i * 80}ms` }}
+                  aria-hidden="true"
+                >
+                  {c}
+                </span>
+              ))}
             </h1>
-            <p className="font-mono text-xs text-[#666666] tracking-widest uppercase max-w-sm mt-4 leading-relaxed">
+            <p
+              className="arrival-fade font-mono text-xs text-[#666666] tracking-widest uppercase max-w-sm mt-8 leading-relaxed"
+              style={{ animationDelay: `${DELAY_FADE_SUPPORT}ms` }}
+            >
               AUTONOMOUS QUALITY ROUTING ENGINE. / ENGINEERED BY MY HUB SOLUTIONS.
             </p>
           </div>
 
-          <div className="relative z-10 flex justify-between font-mono text-xs text-[#666666] tracking-widest">
+          <div
+            className="arrival-fade relative z-10 flex justify-between font-mono text-sm text-[#666666] tracking-widest"
+            style={{ animationDelay: `${DELAY_FADE_SUPPORT + 40}ms` }}
+          >
             <span>[ SYS_VER: 1.0.0 ]</span>
             <span>[ AUTH: PENDING ]</span>
           </div>
         </div>
 
         {/* RIGHT — red panel */}
-        <div className="login-panel-right relative bg-[#FF3300] text-black flex flex-col justify-center items-center p-8 md:p-12 min-h-[50vh] md:min-h-screen">
-          <div className="w-full max-w-sm flex flex-col gap-8">
-            <div className="font-mono text-xs tracking-widest border border-black/30 px-3 py-1 w-max">
+        <div className="login-panel-right relative bg-[#FF3300] text-black flex flex-col justify-between items-center p-8 md:p-12 min-h-[50vh] md:min-h-screen gap-12">
+          {/* Top */}
+          <div className="w-full max-w-sm">
+            <div
+              className="arrival-fade font-mono text-xs tracking-widest border border-black/30 px-3 py-1 w-max"
+              style={{ animationDelay: `${DELAY_FADE_SUPPORT}ms` }}
+            >
               [ TERMINAL NODE | ACCESS RESTRICTED ]
             </div>
+          </div>
 
-            <h2 className="brand font-display text-5xl md:text-6xl uppercase tracking-tight leading-none">
-              Initiate.
+          {/* Middle */}
+          <div className="w-full max-w-sm flex flex-col gap-6">
+            <h2
+              className="brand font-display text-5xl md:text-6xl uppercase tracking-tight leading-none"
+              aria-label="Initiate."
+            >
+              {INITIATE_LETTERS.map((c, i) => (
+                <span
+                  key={i}
+                  className="arrival-letter"
+                  style={{ animationDelay: `${DELAY_INITIATE_START + i * 60}ms` }}
+                  aria-hidden="true"
+                >
+                  {c}
+                </span>
+              ))}
             </h2>
 
-            <p className="font-mono text-xs tracking-widest uppercase leading-relaxed">
-              SUBMIT CREDENTIALS TO ESTABLISH SESSION.
-            </p>
+            <div
+              className="arrival-form-fade flex flex-col gap-6"
+              style={{ animationDelay: `${DELAY_FORM_FADE}ms` }}
+            >
+              <p className="font-mono text-xs tracking-widest uppercase leading-relaxed">
+                SUBMIT CREDENTIALS TO ESTABLISH SESSION.
+              </p>
 
-            <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-              <div className="flex flex-col gap-2">
-                <label
-                  htmlFor="pwd"
-                  className="font-mono text-xs tracking-widest uppercase"
+              <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+                <div className="flex flex-col gap-2">
+                  <label
+                    htmlFor="pwd"
+                    className="font-mono text-xs tracking-widest uppercase"
+                  >
+                    [ PASSWORD ]
+                  </label>
+                  <input
+                    id="pwd"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    autoFocus
+                    autoComplete="current-password"
+                    disabled={submitting}
+                    className="interactive w-full bg-transparent border border-black/50 focus:border-black px-4 py-3 font-mono text-sm tracking-widest placeholder:text-black/40 outline-none transition-colors disabled:opacity-60"
+                    placeholder="•••••••••"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || !password}
+                  className="interactive group relative w-full border border-black bg-black text-[#FF3300] py-4 px-6 overflow-hidden flex justify-between items-center text-left mt-2 disabled:opacity-60"
                 >
-                  [ PASSWORD ]
-                </label>
-                <input
-                  id="pwd"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoFocus
-                  autoComplete="current-password"
-                  disabled={submitting}
-                  className="interactive w-full bg-transparent border border-black/50 focus:border-black px-4 py-3 font-mono text-sm tracking-widest placeholder:text-black/40 outline-none transition-colors disabled:opacity-60"
-                  placeholder="•••••••••"
-                />
-              </div>
+                  <div className="absolute inset-0 bg-[#FF3300] transform translate-y-full group-hover:translate-y-0 transition-transform duration-500 ease-out z-0" />
+                  <span className="font-mono text-xs tracking-widest z-10 group-hover:text-black transition-colors duration-300">
+                    [ INITIATE ]
+                  </span>
+                  <iconify-icon
+                    icon="solar:arrow-right-linear"
+                    width="20"
+                    height="20"
+                    className="relative z-10 group-hover:text-black transition-colors duration-300"
+                  />
+                </button>
 
-              <button
-                type="submit"
-                disabled={submitting || !password}
-                className="interactive group relative w-full border border-black bg-black text-[#FF3300] py-4 px-6 overflow-hidden flex justify-between items-center text-left mt-2 disabled:opacity-60"
-              >
-                <div className="absolute inset-0 bg-[#FF3300] transform translate-y-full group-hover:translate-y-0 transition-transform duration-500 ease-out z-0" />
-                <span className="font-mono text-xs tracking-widest z-10 group-hover:text-black transition-colors duration-300">
-                  [ INITIATE ]
-                </span>
-                <iconify-icon
-                  icon="solar:arrow-right-linear"
-                  width="20"
-                  height="20"
-                  className="relative z-10 group-hover:text-black transition-colors duration-300"
-                />
-              </button>
+                {error && (
+                  <p
+                    role="alert"
+                    aria-live="polite"
+                    className="font-mono text-xs tracking-widest uppercase mt-2"
+                  >
+                    [ ERROR ] {error}
+                  </p>
+                )}
+              </form>
+            </div>
+          </div>
 
-              {error && (
-                <p
-                  role="alert"
-                  aria-live="polite"
-                  className="font-mono text-xs tracking-widest uppercase mt-2"
-                >
-                  [ ERROR ] {error}
-                </p>
-              )}
-            </form>
-
-            <div className="font-mono text-xs tracking-widest mt-8 pt-8 border-t border-black/30">
+          {/* Bottom */}
+          <div
+            className="arrival-form-fade w-full max-w-sm"
+            style={{ animationDelay: `${DELAY_FORM_FADE}ms` }}
+          >
+            <div className="font-mono text-xs tracking-widest pt-8 border-t border-black/30">
               BY MY HUB SOLUTIONS / © 2026
             </div>
           </div>

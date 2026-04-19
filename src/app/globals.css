@@ -218,6 +218,46 @@ body.hovering-interactive #cursor-brackets::after {
   animation: lid-blink 200ms linear;
 }
 
+/* === Login arrival animations (boot sequence) === */
+@keyframes eye-boot {
+  from { opacity: 0; transform: scale(0.8); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes letter-reveal {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in-soft {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.arrival-eye {
+  animation: eye-boot 100ms ease-out both;
+}
+.arrival-letter {
+  display: inline-block;
+  animation: letter-reveal 200ms ease-out both;
+}
+.arrival-fade {
+  animation: fade-in-soft 200ms ease-out both;
+}
+.arrival-form-fade {
+  animation: fade-in-soft 300ms ease-out both;
+}
+
+/* Reduced motion: skip stagger, everything fades in quickly */
+@media (prefers-reduced-motion: reduce) {
+  .arrival-eye,
+  .arrival-letter,
+  .arrival-fade,
+  .arrival-form-fade {
+    animation: fade-in-soft 100ms ease-out both !important;
+    animation-delay: 0s !important;
+    transform: none !important;
+  }
+}
+
 /* === Login split curtain === */
 .curtain-left {
   transform: translateX(-100%);
