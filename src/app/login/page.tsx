@@ -154,6 +154,20 @@ function LoginForm() {
     <>
       <div className="min-h-screen w-full grid grid-cols-1 md:grid-cols-2 relative">
         <div className="login-panel-left relative bg-[#030303] flex flex-col justify-between p-8 md:p-12 overflow-hidden min-h-[50vh] md:min-h-screen gap-12">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-0">
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+              className="max-w-[700px] w-full h-auto opacity-55 mix-blend-screen"
+              src="/planet-earth.mov"
+            />
+          </div>
+          <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-[#030303]/60 via-transparent to-[#030303]" />
+
           <div className="relative z-10 flex flex-col gap-6">
             <div className="font-mono text-xs text-[#666666] tracking-widest border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD: CONTROL | OPTIQUE: VERROUILLÉ ]
