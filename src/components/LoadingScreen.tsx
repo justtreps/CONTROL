@@ -46,17 +46,10 @@ export function LoadingScreen() {
       }`}
       aria-hidden={phase === "hidden"}
     >
-      {/* Top curtain — slides down from above */}
+      {/* Iron curtain — single panel descends from above, then retracts up */}
       <div
-        className={`absolute top-0 inset-x-0 h-[51vh] iron-curtain-panel transition-transform duration-[600ms] ease-[cubic-bezier(0.77,0,0.175,1)] will-change-transform ${
+        className={`absolute inset-0 iron-curtain-panel transition-transform duration-[600ms] ease-[cubic-bezier(0.77,0,0.175,1)] will-change-transform ${
           closed ? "translate-y-0" : "-translate-y-full"
-        }`}
-      />
-
-      {/* Bottom curtain — slides up from below */}
-      <div
-        className={`absolute bottom-0 inset-x-0 h-[51vh] iron-curtain-panel transition-transform duration-[600ms] ease-[cubic-bezier(0.77,0,0.175,1)] will-change-transform ${
-          closed ? "translate-y-0" : "translate-y-full"
         }`}
       />
 
