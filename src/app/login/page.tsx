@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { ControlEye } from "@/components/control";
 import { useLoading } from "@/components/LoadingContext";
 
-const ARRIVAL_HOLD_MS = 480;
+const ARRIVAL_HOLD_MS = 880;
 
 function LoginForm() {
   const params = useSearchParams();

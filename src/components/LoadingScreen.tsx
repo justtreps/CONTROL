@@ -7,7 +7,7 @@ import { ControlEye } from "./control";
 type Phase = "hidden" | "closing" | "stase" | "opening";
 
 const SLAM_MS = 380;
-const OPEN_MS = 380;
+const OPEN_MS = 600;
 
 export function LoadingScreen() {
   const { visible } = useLoading();
@@ -41,7 +41,8 @@ export function LoadingScreen() {
   if (phase === "hidden") curtainClass = "-translate-y-full";
   else if (phase === "closing") curtainClass = "curtain-slam";
   else if (phase === "stase") curtainClass = "translate-y-0";
-  else if (phase === "opening") curtainClass = "curtain-retract";
+  else if (phase === "opening")
+    curtainClass = `-translate-y-full transition-transform duration-[${OPEN_MS}ms] ease-[cubic-bezier(0.77,0,0.175,1)]`;
 
   return (
     <div
@@ -53,9 +54,10 @@ export function LoadingScreen() {
       }`}
       aria-hidden={phase === "hidden"}
     >
+      {/* Iron curtain — slams down via keyframe with overshoot, retracts smooth */}
       <div className={`absolute inset-0 iron-curtain-panel ${curtainClass}`}>
         <div
-          className={`absolute inset-0 flex flex-col items-center justify-center text-black px-6 transition-opacity duration-100 ${
+          className={`absolute inset-0 flex flex-col items-center justify-center text-black px-6 transition-opacity duration-150 ${
             contentVisible ? "opacity-100" : "opacity-0"
           }`}
         >
