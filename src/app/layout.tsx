@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Oswald, Space_Mono } from "next/font/google";
 import "./globals.css";
-import "iconify-icon";
 import { CustomCursor } from "@/components/CustomCursor";
 import { BackgroundGrid } from "@/components/BackgroundGrid";
 import { AppProviders } from "@/components/AppProviders";
