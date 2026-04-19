@@ -54,6 +54,8 @@ export function ConfigForms({
   const [testBotRunning, setTestBotRunning] = useState(false);
   const [scraperResult, setScraperResult] = useState<string | null>(null);
   const [scraperRunning, setScraperRunning] = useState(false);
+  const [scoringResult, setScoringResult] = useState<string | null>(null);
+  const [scoringRunning, setScoringRunning] = useState(false);
 
   async function saveKeys(e: React.FormEvent) {
     e.preventDefault();
@@ -149,6 +151,22 @@ export function ConfigForms({
       setScraperResult(`Erreur : ${data.error ?? "inconnue"}`);
     }
     setScraperRunning(false);
+  }
+
+  async function runScoring() {
+    setScoringRunning(true);
+    setScoringResult(null);
+    const res = await fetch("/api/config/run-scoring", { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      setScoringResult(
+        `${data.servicesScored} services scorés (${data.servicesSkipped} skip, aucune data)`
+      );
+      startTransition(() => router.refresh());
+    } else {
+      setScoringResult(`Erreur : ${data.error ?? "inconnue"}`);
+    }
+    setScoringRunning(false);
   }
 
   return (
@@ -248,6 +266,19 @@ export function ConfigForms({
             </button>
             {scraperResult && (
               <p className="text-sm mt-2 text-neutral-700">{scraperResult}</p>
+            )}
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={runScoring}
+              disabled={scoringRunning}
+              className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
+            >
+              {scoringRunning ? "Scoring..." : "Run scoring"}
+            </button>
+            {scoringResult && (
+              <p className="text-sm mt-2 text-neutral-700">{scoringResult}</p>
             )}
           </div>
         </div>
