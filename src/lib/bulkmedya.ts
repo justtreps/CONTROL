@@ -71,18 +71,15 @@ const TYPE_TESTS: Array<[string, RegExp]> = [
 ];
 
 export function classifyServiceType(name: string, category: string): string {
-  const nameLower = (name ?? "").toLowerCase();
-  const catLower = (category ?? "").toLowerCase();
-
-  // BulkMedya's `category` field is more reliable than the marketing-heavy
-  // service name — run the same priority tests on it first. If category
-  // says "Instagram Likes", trust it even if the display name mentions
-  // "followers" as a comparison.
+  // Join name + category into one haystack and let the strict priority
+  // regexes pick the winner. Priority order (likes → views → comments →
+  // shares → saves → stories → live_viewers → followers) resolves
+  // collisions like "Instagram Brazil Real Likes" when BulkMedya files
+  // the service under a generic "Followers" category — the specific
+  // "likes" token wins over the broader category label.
+  const haystack = `${name ?? ""} ${category ?? ""}`.toLowerCase();
   for (const [t, rx] of TYPE_TESTS) {
-    if (rx.test(catLower)) return t;
-  }
-  for (const [t, rx] of TYPE_TESTS) {
-    if (rx.test(nameLower)) return t;
+    if (rx.test(haystack)) return t;
   }
   return "other";
 }
