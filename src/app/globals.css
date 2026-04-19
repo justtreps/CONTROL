@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-brand: var(--font-unbounded), sans-serif;
+}
+
+html, body {
+  font-family: var(--font-sans);
+}
+
+.brand,
+h1.logo {
+  font-family: var(--font-brand);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.score-good { color: #15803d; }
+.score-warn { color: #c2410c; }
+.score-bad  { color: #b91c1c; }
+.bg-score-good { background-color: #dcfce7; }
+.bg-score-warn { background-color: #ffedd5; }
+.bg-score-bad  { background-color: #fee2e2; }

@@ -1,0 +1,113 @@
+// myscore — Quality scoring router for BulkMedya services
+// See /Users/cashout/Downloads/myscore-spec.md for context
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Service {
+  id              Int      @id @default(autoincrement())
+  bulkmedyaId     Int      @unique
+  name            String
+  category        String
+  platform        String
+  serviceType     String
+  ratePerK        Float
+  minQuantity     Int
+  maxQuantity     Int
+  refillSupported Boolean
+  cancelSupported Boolean  @default(false)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  testOrders      TestOrder[]
+  scores          ServiceScore[]
+
+  @@index([platform, serviceType, active])
+}
+
+model TestAccount {
+  id           Int       @id @default(autoincrement())
+  platform     String
+  username     String
+  userId       String
+  active       Boolean   @default(true)
+  lastTestedAt DateTime?
+  createdAt    DateTime  @default(now())
+  testOrders   TestOrder[]
+
+  @@unique([platform, username])
+  @@index([platform, active])
+}
+
+model TestOrder {
+  id               Int      @id @default(autoincrement())
+  service          Service  @relation(fields: [serviceId], references: [id])
+  serviceId        Int
+  testAccount      TestAccount @relation(fields: [testAccountId], references: [id])
+  testAccountId    Int
+  bulkmedyaOrderId String   @unique
+  targetQuantity   Int
+  baselineCount    Int
+  placedAt         DateTime @default(now())
+  completedAt      DateTime?
+  measurements     Measurement[]
+
+  @@index([serviceId, placedAt])
+}
+
+model Measurement {
+  id           Int      @id @default(autoincrement())
+  testOrder    TestOrder @relation(fields: [testOrderId], references: [id])
+  testOrderId  Int
+  checkedAt    DateTime @default(now())
+  checkpoint   String
+  actualCount  Int
+  realismData  Json
+  realismScore Float?
+
+  @@unique([testOrderId, checkpoint])
+  @@index([testOrderId, checkedAt])
+}
+
+model ServiceScore {
+  id               Int      @id @default(autoincrement())
+  service          Service  @relation(fields: [serviceId], references: [id])
+  serviceId        Int
+  currentScore     Float
+  completionFactor Float
+  realismScore     Float
+  speedScore       Float
+  dropScore        Float
+  computedAt       DateTime @default(now())
+
+  @@index([serviceId, computedAt])
+}
+
+model RoutingDecision {
+  id                 Int      @id @default(autoincrement())
+  platform           String
+  serviceType        String
+  quantity           Int
+  targetUrl          String
+  chosenServiceId    Int
+  chosenServiceScore Float
+  bulkmedyaOrderId   String?
+  success            Boolean
+  errorMessage       String?
+  decidedAt          DateTime @default(now())
+
+  @@index([decidedAt])
+  @@index([chosenServiceId])
+}
+
+model Config {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
