@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PixelEye } from "@/components/PixelEye";
 import { useLoading } from "@/components/LoadingContext";
@@ -22,15 +22,23 @@ const DELAY_FADE_SUPPORT = 860;
 const DELAY_INITIATE_START = 1060;
 const DELAY_FORM_FADE = 1740;
 
+const INTRO_DURATION_MS = 1500;
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const from = params.get("from") ?? "/";
-  const { show: showLoading } = useLoading();
+  const { show: showLoading, hide: hideLoading } = useLoading();
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    showLoading();
+    const t = setTimeout(hideLoading, INTRO_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [showLoading, hideLoading]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
