@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useLoading } from "./LoadingContext";
+import { ControlEye } from "./control";
 
 type Phase = "hidden" | "closing" | "stase" | "opening";
 
@@ -59,9 +60,11 @@ export function LoadingScreen() {
           contentVisible ? "opacity-100" : "opacity-0"
         }`}
       >
-        <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-12">
+        <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-10">
           [ NŒUD TERMINAL | CHARGEMENT ]
         </div>
+
+        <ControlEye size={140} className="mb-6" />
 
         <h1 className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-center text-fluid-title">
           CONTROL.

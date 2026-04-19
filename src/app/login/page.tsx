@@ -79,9 +79,10 @@ function LoginIntro({ onDone }: { onDone: () => void }) {
       {/* Curtain — CONTROL content lives inside so it descends WITH the panel */}
       <div className={`absolute inset-0 iron-curtain-panel ${curtainClass}`}>
         <div className="absolute inset-0 flex flex-col items-center justify-center text-black px-6">
-          <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-12">
+          <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-10">
             [ NŒUD TERMINAL | CHARGEMENT ]
           </div>
+          <ControlEye size={140} className="mb-6" />
           <h1 className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-center text-fluid-title">
             CONTROL.
           </h1>
@@ -170,10 +171,10 @@ function LoginForm() {
             <div className="font-mono text-xs text-[#666666] tracking-widest border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD: CONTROL | OPTIQUE: VERROUILLÉ ]
             </div>
-            <ControlEye size={80} />
           </div>
 
-          <div className="relative z-10 flex flex-col">
+          <div className="relative z-10 flex flex-col items-start gap-6">
+            <ControlEye size={140} />
             <h1
               className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-white"
               style={{ fontSize: "clamp(4rem, 10vw, 9rem)" }}
