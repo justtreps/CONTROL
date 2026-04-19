@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { PixelEye } from "@/components/PixelEye";
+import { ControlEye } from "@/components/control";
 import { useLoading } from "@/components/LoadingContext";
 
 const SUBMIT_MIN_VISIBLE_MS = 1000;
@@ -170,7 +170,7 @@ function LoginForm() {
             <div className="font-mono text-xs text-[#666666] tracking-widest border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD: CONTROL | OPTIQUE: VERROUILLÉ ]
             </div>
-            <PixelEye size={80} />
+            <ControlEye size={80} />
           </div>
 
           <div className="relative z-10 flex flex-col">

@@ -301,6 +301,329 @@ body.cursor-on-red.hovering-interactive #cursor-brackets::after {
     inset 0 -2px 0 rgba(0, 0, 0, 0.3);
 }
 
+/* =================================================================
+   CONTROL — Component library
+   Aliases over existing tokens so the lib CSS stays portable.
+   ================================================================= */
+:root {
+  --bg: var(--bg-color);
+  --white: var(--text-main);
+  --gray: var(--text-muted);
+}
+
+/* == ControlEye === */
+.control-eye { display: block; }
+.control-eye .lid {
+  transform-origin: 0 0;
+  transform-box: fill-box;
+  animation: ce-blink 6.8s infinite;
+}
+@keyframes ce-blink {
+  0%, 42%, 50%, 100% { transform: scaleY(1); }
+  45%, 48% { transform: scaleY(1.5); }
+}
+.control-eye .pupil {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: ce-pulse 2.8s ease-in-out infinite;
+}
+@keyframes ce-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+.control-eye .iris {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: ce-breathe 3.3s ease-in-out infinite;
+}
+@keyframes ce-breathe {
+  0%, 100% { opacity: 0.92; }
+  50% { opacity: 1; }
+}
+.control-eye .look-h {
+  animation: ce-look-h 15s ease-out infinite;
+  animation-delay: var(--h-delay, 0s);
+}
+@keyframes ce-look-h {
+  0%, 7%    { transform: translateX(0); }
+  9%, 17%   { transform: translateX(-4px); }
+  19%, 23%  { transform: translateX(-1.5px); }
+  25%, 31%  { transform: translateX(0); }
+  33%, 38%  { transform: translateX(3px); }
+  40%, 45%  { transform: translateX(4.5px); }
+  47%, 54%  { transform: translateX(0); }
+  56%, 60%  { transform: translateX(-3px); }
+  62%, 68%  { transform: translateX(0); }
+  70%, 74%  { transform: translateX(1.8px); }
+  76%, 81%  { transform: translateX(-3.5px); }
+  83%, 100% { transform: translateX(0); }
+}
+.control-eye .look-v {
+  animation: ce-look-v 11s ease-in-out infinite;
+  animation-delay: var(--v-delay, 0s);
+}
+@keyframes ce-look-v {
+  0%, 18%   { transform: translateY(0); }
+  21%, 26%  { transform: translateY(-0.6px); }
+  28%, 42%  { transform: translateY(0); }
+  45%, 52%  { transform: translateY(0.5px); }
+  54%, 74%  { transform: translateY(0); }
+  77%, 82%  { transform: translateY(-0.5px); }
+  84%, 100% { transform: translateY(0); }
+}
+.control-eye.is-active { filter: drop-shadow(0 0 5px rgba(255, 51, 0, 0.6)); }
+.control-eye.is-active .pupil { animation-duration: 0.9s; }
+.control-eye.is-active .look-h { animation-duration: 7s; }
+.control-eye.is-active .look-v { animation-duration: 5.5s; }
+
+/* == ControlRadar === */
+.control-radar { display: block; }
+.control-radar .sweep {
+  transform-origin: 16px 16px;
+  animation: cr-rotate 3.2s linear infinite;
+}
+@keyframes cr-rotate { to { transform: rotate(360deg); } }
+.control-radar .center {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: cr-pulse 2.4s ease-in-out infinite;
+}
+@keyframes cr-pulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.control-radar.is-active { filter: drop-shadow(0 0 5px rgba(255, 51, 0, 0.6)); }
+.control-radar.is-active .sweep { animation-duration: 1.4s; }
+.control-radar.is-active .center { animation-duration: 0.8s; }
+
+/* == ControlLogo === */
+.control-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.control-logo .wordmark {
+  font-family: var(--font-display-stack);
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--white);
+  line-height: 1;
+}
+
+/* == StatusDot === */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  vertical-align: baseline;
+  flex-shrink: 0;
+}
+.status-dot--active { background: var(--accent); }
+.status-dot--idle { background: var(--gray); }
+.status-dot--error { background: var(--accent); }
+.status-dot--warn { background: var(--white); }
+.status-dot.is-pulsing { animation: sd-pulse 1.6s ease-in-out infinite; }
+.status-dot--error.is-pulsing { animation: sd-blink 0.55s steps(2) infinite; }
+@keyframes sd-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes sd-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0.15; } }
+
+/* == StatusBadge === */
+.status-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  font-family: var(--font-mono-stack);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border: 1px solid var(--gray);
+  color: var(--gray);
+  line-height: 1.4;
+}
+.status-badge--active { border-color: var(--accent); color: var(--accent); }
+.status-badge--warn { border-color: var(--white); color: var(--white); }
+.status-badge--danger { background: var(--accent); color: var(--white); border-color: var(--accent); }
+
+/* == MetricDisplay === */
+.metric-display { display: flex; flex-direction: column; gap: 6px; }
+.metric-label {
+  font-family: var(--font-mono-stack);
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--gray);
+  text-transform: uppercase;
+}
+.metric-value {
+  font-family: var(--font-display-stack);
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: 1px;
+  color: var(--white);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.metric-unit {
+  color: var(--gray);
+  font-size: 0.5em;
+  margin-left: 6px;
+  font-weight: 400;
+}
+
+/* == SparkLine === */
+.sparkline { display: block; }
+
+/* == LogLine === */
+.log-line {
+  display: flex;
+  gap: 10px;
+  font-family: var(--font-mono-stack);
+  font-size: 11px;
+  padding: 5px 10px;
+  background: var(--surface);
+  border-left: 2px solid var(--gray);
+  line-height: 1.5;
+}
+.log-line--info { border-left-color: var(--gray); }
+.log-line--warn { border-left-color: var(--white); }
+.log-line--error { border-left-color: var(--accent); }
+.log-line--ok { border-left-color: var(--accent); }
+.log-time { color: var(--gray); flex-shrink: 0; }
+.log-level { font-weight: 700; min-width: 60px; flex-shrink: 0; }
+.log-line--info .log-level { color: var(--gray); }
+.log-line--warn .log-level { color: var(--white); }
+.log-line--error .log-level { color: var(--accent); }
+.log-line--ok .log-level { color: var(--accent); }
+.log-message { color: var(--white); }
+
+/* == SegmentedBar === */
+.seg-bar { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.seg-header {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono-stack);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--gray);
+  text-transform: uppercase;
+}
+.seg-value { color: var(--white); font-weight: 700; }
+.seg-track { display: flex; gap: 2px; height: 14px; }
+.seg-cell { flex: 1; background: transparent; border: 1px solid var(--gray); }
+.seg-cell.is-filled { background: var(--accent); border-color: var(--accent); }
+.seg-cell.is-filled.is-warn { background: var(--white); border-color: var(--white); }
+
+/* == BrutalistButton === */
+.btn {
+  font-family: var(--font-display-stack);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  padding: 12px 20px;
+  border: 1px solid var(--white);
+  background: transparent;
+  color: var(--white);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, filter 0.1s;
+}
+.btn:hover { background: var(--white); color: var(--bg); }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: var(--white); }
+.btn--primary:hover { filter: brightness(1.15); background: var(--accent); color: var(--white); }
+.btn--danger { border-color: var(--accent); color: var(--accent); background: transparent; }
+.btn--danger:hover { background: var(--accent); color: var(--white); }
+.btn--ghost { border-color: var(--gray); color: var(--gray); }
+.btn--ghost:hover { background: transparent; color: var(--white); border-color: var(--white); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn:disabled:hover { background: transparent; color: inherit; filter: none; }
+
+/* == SectionDivider === */
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0 16px;
+  color: var(--gray);
+}
+.divider .line { flex: 1; height: 1px; background: var(--gray); }
+.divider .label {
+  font-family: var(--font-mono-stack);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--gray);
+}
+.divider .label::before { content: '[ '; color: var(--accent); }
+.divider .label::after { content: ' ]'; color: var(--accent); }
+
+/* == KBDKey === */
+.kbd {
+  display: inline-block;
+  font-family: var(--font-mono-stack);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border: 1px solid var(--gray);
+  background: var(--surface);
+  color: var(--white);
+  min-width: 20px;
+  text-align: center;
+  vertical-align: baseline;
+  line-height: 1.3;
+}
+
+/* == BracketBox === */
+.brk {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-family: var(--font-mono-stack);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.brk .bracket { color: var(--accent); font-weight: 700; }
+
+/* == TerminalPrompt === */
+.term {
+  font-family: var(--font-mono-stack);
+  font-size: 12px;
+  color: var(--white);
+  padding: 8px 12px;
+  background: var(--surface);
+  border-left: 2px solid var(--accent);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.term .prompt-sym { color: var(--accent); font-weight: 700; }
+.term .cursor {
+  animation: term-cursor 1s step-end infinite;
+  color: var(--accent);
+}
+@keyframes term-cursor {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+/* == LoadingDots === */
+.dots {
+  display: inline-flex;
+  gap: 3px;
+  font-family: var(--font-mono-stack);
+  color: var(--accent);
+  font-size: 18px;
+  line-height: 1;
+  vertical-align: middle;
+}
+.dots span { animation: dots-bounce 1.4s ease-in-out infinite; }
+.dots span:nth-child(2) { animation-delay: 0.2s; }
+.dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dots-bounce {
+  0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
+
 /* === Reduced motion === */
 @media (prefers-reduced-motion: reduce) {
   #cursor-dot, #cursor-brackets {

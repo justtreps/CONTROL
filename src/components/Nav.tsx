@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { PixelEye } from "./PixelEye";
+import { ControlLogo } from "./control";
 
 const LINKS = [
   { href: "/", label: "ACCUEIL" },
@@ -14,24 +13,13 @@ const LINKS = [
 
 export function Nav() {
   const pathname = usePathname();
-  const [watching, setWatching] = useState(false);
 
   return (
     <header className="border-b border-grid bg-[var(--bg-color)]/80 backdrop-blur-sm relative z-20">
       <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-4">
-        <div
-          className="flex items-center gap-3"
-          onMouseEnter={() => setWatching(true)}
-          onMouseLeave={() => setWatching(false)}
-        >
-          <PixelEye watching={watching} />
-          <Link
-            href="/"
-            className="brand text-xl tracking-[0.25em] interactive text-white"
-          >
-            CONTROL
-          </Link>
-        </div>
+        <Link href="/" className="interactive">
+          <ControlLogo size="sm" />
+        </Link>
 
         <nav className="flex items-center gap-6 font-mono text-[11px] tracking-[0.2em]">
           {LINKS.map((l) => {
