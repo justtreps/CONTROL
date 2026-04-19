@@ -46,16 +46,15 @@ export function LoadingScreen() {
     <div
       role="status"
       aria-live="polite"
-      data-cursor="invert"
       className={`fixed inset-0 z-[10000] overflow-hidden ${
         phase === "hidden" ? "pointer-events-none" : ""
       }`}
       aria-hidden={phase === "hidden"}
     >
       {/* Curtain — CONTROL content lives inside so it descends WITH the panel */}
-      <div className={`absolute inset-0 iron-curtain-panel ${curtainClass}`}>
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-black px-6">
-          <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-10">
+      <div className={`absolute inset-0 iron-curtain-panel iron-curtain-panel--dark ${curtainClass}`}>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-[#FF3300] px-6">
+          <div className="font-mono text-xs tracking-widest border border-[#FF3300]/30 px-4 py-1 mb-10">
             [ NŒUD TERMINAL | CHARGEMENT ]
           </div>
           <ControlEye size={140} className="mb-6" />
@@ -66,8 +65,8 @@ export function LoadingScreen() {
             <div className="font-mono text-xs tracking-widest">
               PAR MY HUB SOLUTIONS
             </div>
-            <div className="w-64 h-[1px] bg-black/30 overflow-hidden relative">
-              <div className="absolute inset-y-0 left-0 bg-black loading-bar" />
+            <div className="w-64 h-[1px] bg-[#FF3300]/30 overflow-hidden relative">
+              <div className="absolute inset-y-0 left-0 bg-[#FF3300] loading-bar" />
             </div>
           </div>
         </div>
