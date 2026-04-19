@@ -1,9 +1,10 @@
+import { unstable_cache } from "next/cache";
 import Link from "next/link";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { RunScoringButton, SyncServicesButton } from "./HomeActions";
 
-export const revalidate = 30;
+export const dynamic = "force-dynamic";
 
 type Alert = {
   serviceId: number;
@@ -22,7 +23,7 @@ type TopService = {
   score: number;
 };
 
-async function loadData() {
+const loadData = unstable_cache(async () => {
   const now = Date.now();
   const last24h = new Date(now - 24 * 3600 * 1000);
   const last48h = new Date(now - 48 * 3600 * 1000);
@@ -94,7 +95,7 @@ async function loadData() {
     alerts: alerts.slice(0, 3),
     topServices: ranked.slice(0, 3),
   };
-}
+}, ["home-dashboard"], { revalidate: 30 });
 
 const ICONS = [
   "solar:target-linear",
