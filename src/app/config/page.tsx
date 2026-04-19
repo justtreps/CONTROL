@@ -64,17 +64,20 @@ export default async function ConfigPage() {
 
       {/* === Pattern B — Hero === */}
       <section className="px-4 md:px-8 pt-32 pb-16">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-end">
-          <div className="lg:col-span-7 flex flex-col">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12 items-end">
+          <div className="lg:col-span-7 flex flex-col min-w-0">
             <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max">
               [ NŒUD CONFIG | ACCÈS ADMIN ]
             </div>
-            <h1 className="brand font-display text-fluid-title uppercase tracking-tight text-white m-0">
+            <h1
+              className="brand font-display uppercase tracking-tight leading-[0.85] text-white m-0"
+              style={{ fontSize: "clamp(3rem, 7.5vw, 6.5rem)" }}
+            >
               Paramètres<br />
               <span className="text-[#FF3300]">Système.</span>
             </h1>
           </div>
-          <div className="lg:col-span-5 flex flex-col font-mono text-xs uppercase tracking-widest">
+          <div className="lg:col-span-5 flex flex-col font-mono text-xs uppercase tracking-widest min-w-0">
             {statusLines.map((s) => (
               <div
                 key={s.label}
