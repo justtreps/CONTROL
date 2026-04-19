@@ -50,6 +50,11 @@ export function ConfigForms({
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
 
+  const [testBotResult, setTestBotResult] = useState<string | null>(null);
+  const [testBotRunning, setTestBotRunning] = useState(false);
+  const [scraperResult, setScraperResult] = useState<string | null>(null);
+  const [scraperRunning, setScraperRunning] = useState(false);
+
   async function saveKeys(e: React.FormEvent) {
     e.preventDefault();
     setKeysMsg(null);
@@ -110,6 +115,40 @@ export function ConfigForms({
       setSyncResult(`Erreur : ${data.error ?? "inconnue"}`);
     }
     setSyncing(false);
+  }
+
+  async function runTestBot() {
+    setTestBotRunning(true);
+    setTestBotResult(null);
+    const res = await fetch("/api/config/run-test-bot", { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      const errs = data.errors?.length ? ` — ${data.errors.length} erreurs` : "";
+      setTestBotResult(
+        `${data.placed}/${data.attempted} commandes placées (${data.skipped} skip)${errs}`
+      );
+      startTransition(() => router.refresh());
+    } else {
+      setTestBotResult(`Erreur : ${data.error ?? "inconnue"}`);
+    }
+    setTestBotRunning(false);
+  }
+
+  async function runScraper() {
+    setScraperRunning(true);
+    setScraperResult(null);
+    const res = await fetch("/api/config/run-scraper", { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      const errs = data.errors?.length ? ` — ${data.errors.length} erreurs` : "";
+      setScraperResult(
+        `${data.measurements} measurements sur ${data.ordersScanned}/${data.ordersSeen} orders${errs}`
+      );
+      startTransition(() => router.refresh());
+    } else {
+      setScraperResult(`Erreur : ${data.error ?? "inconnue"}`);
+    }
+    setScraperRunning(false);
   }
 
   return (
@@ -176,6 +215,47 @@ export function ConfigForms({
           </p>
         )}
         {syncResult && <p className="text-sm mt-3">{syncResult}</p>}
+      </Section>
+
+      <Section title="Lancer manuellement (debug / test end-to-end)">
+        <p className="text-sm text-neutral-600 mb-4">
+          En prod, un cron Vercel déclenche ces jobs automatiquement (hourly
+          pour le test bot, every 5 min pour le scraper). Utilise ces boutons
+          pour un test immédiat.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <div>
+            <button
+              type="button"
+              onClick={runTestBot}
+              disabled={testBotRunning || !bulkmedyaSet || !rapidSet}
+              className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
+            >
+              {testBotRunning ? "Test bot..." : "Run test bot"}
+            </button>
+            {testBotResult && (
+              <p className="text-sm mt-2 text-neutral-700">{testBotResult}</p>
+            )}
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={runScraper}
+              disabled={scraperRunning || !rapidSet}
+              className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
+            >
+              {scraperRunning ? "Scraper..." : "Run scraper"}
+            </button>
+            {scraperResult && (
+              <p className="text-sm mt-2 text-neutral-700">{scraperResult}</p>
+            )}
+          </div>
+        </div>
+        {(!bulkmedyaSet || !rapidSet) && (
+          <p className="text-sm text-neutral-500 mt-3">
+            Configure les clés BulkMedya + RapidAPI avant de lancer les jobs.
+          </p>
+        )}
       </Section>
 
       <Section title={`Comptes test (${testAccounts.length})`}>

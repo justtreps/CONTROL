@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/api/cron/sync-services", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/test-bot", "schedule": "0 * * * *" },
+    { "path": "/api/cron/scraper", "schedule": "*/5 * * * *" }
+  ]
+}
