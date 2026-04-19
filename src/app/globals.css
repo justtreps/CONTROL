@@ -43,13 +43,8 @@ html, body {
 /* === Custom cursor === */
 @media (pointer: fine) {
   body.has-custom-cursor,
-  body.has-custom-cursor a,
-  body.has-custom-cursor button,
-  body.has-custom-cursor [role="button"],
-  body.has-custom-cursor input,
-  body.has-custom-cursor select,
-  body.has-custom-cursor textarea {
-    cursor: none;
+  body.has-custom-cursor * {
+    cursor: none !important;
   }
 }
 

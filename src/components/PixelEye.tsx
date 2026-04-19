@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useActivity } from "./ActivityContext";
 
 type Props = {
@@ -9,24 +9,38 @@ type Props = {
   className?: string;
 };
 
+// Look targets: only horizontal and slight-down. No "up" — felt unnatural.
+// Coordinates are translate offsets in 16x16 viewBox units.
 const POSITIONS: Array<[number, number]> = [
   [0, 0],
   [2, 0],
   [-2, 0],
-  [0, -2],
-  [2, -2],
-  [-2, -2],
+  [3, 0],
+  [-3, 0],
+  [1, 1],
+  [-1, 1],
+  [0, 1],
 ];
 
-const SCAN_INTERVAL_MS = 1200;
-const ACTIVITY_INTERVAL_MS = 400;
+const SCAN_MIN_MS = 1800;
+const SCAN_MAX_MS = 4000;
+const ACTIVITY_MIN_MS = 350;
+const ACTIVITY_MAX_MS = 700;
 const ACTIVITY_DURATION_MS = 1200;
+
+function pickHold(activity: boolean): number {
+  const min = activity ? ACTIVITY_MIN_MS : SCAN_MIN_MS;
+  const max = activity ? ACTIVITY_MAX_MS : SCAN_MAX_MS;
+  return min + Math.random() * (max - min);
+}
 
 export function PixelEye({ watching = false, size = 32, className = "" }: Props) {
   const [posIndex, setPosIndex] = useState(0);
   const [activity, setActivity] = useState(false);
   const [reduced, setReduced] = useState(false);
   const { flashTick } = useActivity();
+  const posIndexRef = useRef(posIndex);
+  posIndexRef.current = posIndex;
 
   useEffect(() => {
     const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -46,11 +60,28 @@ export function PixelEye({ watching = false, size = 32, className = "" }: Props)
 
   useEffect(() => {
     if (reduced || watching) return;
-    const interval = activity ? ACTIVITY_INTERVAL_MS : SCAN_INTERVAL_MS;
-    const id = setInterval(() => {
-      setPosIndex((p) => (p + 1) % POSITIONS.length);
-    }, interval);
-    return () => clearInterval(id);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = () => {
+      if (cancelled) return;
+      setPosIndex((current) => {
+        let candidate = Math.floor(Math.random() * POSITIONS.length);
+        let safety = 0;
+        while (candidate === current && safety < 6) {
+          candidate = Math.floor(Math.random() * POSITIONS.length);
+          safety++;
+        }
+        return candidate;
+      });
+      timer = setTimeout(tick, pickHold(activity));
+    };
+
+    timer = setTimeout(tick, pickHold(activity));
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [reduced, watching, activity]);
 
   let dx = 0;
