@@ -1,16 +1,13 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ControlEye } from "@/components/control";
 import { useLoading } from "@/components/LoadingContext";
 
-const SUBMIT_MIN_VISIBLE_MS = 1000;
-const SUBMIT_HIDE_DELAY_MS = 600;
-const ARRIVAL_HOLD_MS = 650;
+const ARRIVAL_HOLD_MS = 480;
 
 function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const from = params.get("from") ?? "/";
   const { show: showLoading, hide: hideLoading } = useLoading();
@@ -31,7 +28,6 @@ function LoginForm() {
     setError(null);
     setSubmitting(true);
     showLoading();
-    const start = Date.now();
 
     let res: Response;
     try {
@@ -55,13 +51,9 @@ function LoginForm() {
       return;
     }
 
-    const elapsed = Date.now() - start;
-    const remaining = Math.max(0, SUBMIT_MIN_VISIBLE_MS - elapsed);
-    setTimeout(() => {
-      router.push(from);
-      router.refresh();
-      setTimeout(() => hideLoading(), SUBMIT_HIDE_DELAY_MS);
-    }, remaining);
+    // Hard navigation: guarantees cookies are sent with the new page request
+    // and the curtain stays up until the next page paints.
+    window.location.href = from;
   }
 
   return (

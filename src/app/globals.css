@@ -284,6 +284,18 @@ body.cursor-on-red.hovering-interactive #cursor-brackets::after {
   will-change: transform;
 }
 
+/* === Brutal curtain retract (reverse slam — shoots up with overshoot) === */
+@keyframes curtain-retract {
+  0%   { transform: translateY(0); }
+  40%  { transform: translateY(-0.6vh); }
+  60%  { transform: translateY(0.4vh); }
+  100% { transform: translateY(-100%); }
+}
+.curtain-retract {
+  animation: curtain-retract 380ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+  will-change: transform;
+}
+
 /* === Iron curtain panel (red, with subtle metal-tole horizontal lines) === */
 .iron-curtain-panel {
   background:
