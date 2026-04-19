@@ -183,7 +183,10 @@ export default async function ServiceDetailPage({
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ DÉCOMPOSITION DU SCORE | MOYENNE 30J ]
             </div>
-            <h2 className="brand font-display text-4xl md:text-6xl tracking-tight uppercase leading-none text-white">
+            <h2
+              className="brand font-display tracking-tight uppercase leading-none text-white"
+              style={{ fontSize: "clamp(2rem, 4vw, 3.5rem)" }}
+            >
               Décomposition<br />du Score.
             </h2>
           </div>

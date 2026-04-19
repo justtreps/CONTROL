@@ -69,7 +69,10 @@ export default async function ServicesPage() {
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ ANNUAIRE DES SERVICES | TOTAL: {services.length} ]
             </div>
-            <h1 className="brand font-display text-4xl md:text-6xl tracking-tight uppercase leading-none text-white">
+            <h1
+              className="brand font-display tracking-tight uppercase leading-none text-white"
+              style={{ fontSize: "clamp(2rem, 4.5vw, 4rem)" }}
+            >
               Annuaire<br />des Services.
             </h1>
           </div>

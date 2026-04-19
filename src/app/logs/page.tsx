@@ -112,7 +112,10 @@ export default async function LogsPage({
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ JOURNAL DE ROUTAGE | FLUX EN DIRECT ]
             </div>
-            <h1 className="brand font-display text-4xl md:text-6xl tracking-tight uppercase leading-none text-white">
+            <h1
+              className="brand font-display tracking-tight uppercase leading-none text-white"
+              style={{ fontSize: "clamp(2rem, 4.5vw, 4rem)" }}
+            >
               Historique<br />des Décisions.
             </h1>
             <div className="font-mono text-xs text-[#666666] tracking-widest tabular-nums">

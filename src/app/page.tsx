@@ -140,7 +140,10 @@ export default async function HomePage() {
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
               [ MÉTRIQUES: LIVE | FENÊTRE: 24H ]
             </div>
-            <h2 className="brand font-display text-4xl md:text-6xl tracking-tight uppercase leading-none text-white">
+            <h2
+              className="brand font-display tracking-tight uppercase leading-none text-white"
+              style={{ fontSize: "clamp(2rem, 4vw, 3.5rem)" }}
+            >
               Métriques<br />Opérationnelles.
             </h2>
           </div>
