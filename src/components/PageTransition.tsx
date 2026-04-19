@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useLoading } from "./LoadingContext";
 
-// slam (380ms) + stase (500ms) — then smooth retract kicks in
-const HOLD_MS = 880;
+// Slam keyframe is 380ms + needs ~250ms stase to read CONTROL flash
+// before opening kicks in.
+const HOLD_MS = 650;
 
 export function PageTransition() {
   const pathname = usePathname();
@@ -17,6 +18,8 @@ export function PageTransition() {
       isFirstRef.current = false;
       return;
     }
+    // /login has its own LoginIntro curtain; don't double up.
+    if (pathname === "/login") return;
     show();
     const t = setTimeout(hide, HOLD_MS);
     return () => clearTimeout(t);
