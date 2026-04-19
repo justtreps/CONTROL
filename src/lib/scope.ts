@@ -16,6 +16,8 @@ export type ServiceTypeId =
   | "comments"
   | "shares"
   | "saves"
+  | "stories"
+  | "live_viewers"
   | "other";
 
 export type PlatformId =
@@ -50,6 +52,8 @@ export const SCOPE: { platforms: PlatformCfg[] } = {
         { id: "views", label: "Views", mvp: false },
         { id: "comments", label: "Comments", mvp: false },
         { id: "saves", label: "Saves", mvp: false },
+        { id: "stories", label: "Stories", mvp: false },
+        { id: "live_viewers", label: "Live viewers", mvp: false },
       ],
     },
     {
@@ -62,6 +66,7 @@ export const SCOPE: { platforms: PlatformCfg[] } = {
         { id: "views", label: "Views", mvp: false },
         { id: "shares", label: "Shares", mvp: false },
         { id: "comments", label: "Comments", mvp: false },
+        { id: "live_viewers", label: "Live viewers", mvp: false },
       ],
     },
     {

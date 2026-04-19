@@ -50,14 +50,42 @@ const PLATFORM_KEYWORDS: Array<[string, string[]]> = [
   ["spotify", ["spotify"]],
 ];
 
-const TYPE_KEYWORDS: Array<[string, string[]]> = [
-  ["followers", ["followers", "follower", "subscribers", "subs"]],
-  ["likes", ["likes", "like"]],
-  ["views", ["views", "view", "plays", "play"]],
-  ["comments", ["comments", "comment"]],
-  ["shares", ["shares", "share", "reposts"]],
-  ["saves", ["saves", "save", "bookmark"]],
+// STRICT PRIORITY ORDER — specific-before-generic to avoid misclassifying
+// "INSTAGRAM REAL LIKES" as followers because a substring like "follower"
+// accidentally matches. Regex uses word boundaries (\b) so "view" doesn't
+// match inside "viewers" or "preview" — each term is listed explicitly in
+// singular + plural forms (EN + FR).
+//
+// Order matters: likes > views > comments > shares > saves > stories >
+// live_viewers > followers. When the same text mentions several, the more
+// specific one (e.g. "likes") wins over the broader category keyword.
+const TYPE_TESTS: Array<[string, RegExp]> = [
+  ["likes",        /\b(likes?|j'aimes?)\b/i],
+  ["views",        /\b(views?|vues?|visionnages?|plays?)\b/i],
+  ["comments",     /\b(comments?|commentaires?)\b/i],
+  ["shares",       /\b(shares?|partages?|reposts?)\b/i],
+  ["saves",        /\b(saves?|sauvegardes?|enregistrements?|bookmarks?)\b/i],
+  ["stories",      /\b(story|stories)\b/i],
+  ["live_viewers", /\b(lives?|viewers?)\b/i],
+  ["followers",    /\b(followers?|abonn[eé]es?|subscribers?|subs)\b/i],
 ];
+
+export function classifyServiceType(name: string, category: string): string {
+  const nameLower = (name ?? "").toLowerCase();
+  const catLower = (category ?? "").toLowerCase();
+
+  // BulkMedya's `category` field is more reliable than the marketing-heavy
+  // service name — run the same priority tests on it first. If category
+  // says "Instagram Likes", trust it even if the display name mentions
+  // "followers" as a comparison.
+  for (const [t, rx] of TYPE_TESTS) {
+    if (rx.test(catLower)) return t;
+  }
+  for (const [t, rx] of TYPE_TESTS) {
+    if (rx.test(nameLower)) return t;
+  }
+  return "other";
+}
 
 function classify(name: string, category: string) {
   const haystack = `${name} ${category}`.toLowerCase();
@@ -68,13 +96,7 @@ function classify(name: string, category: string) {
       break;
     }
   }
-  let serviceType = "other";
-  for (const [t, kws] of TYPE_KEYWORDS) {
-    if (kws.some((k) => haystack.includes(k))) {
-      serviceType = t;
-      break;
-    }
-  }
+  const serviceType = classifyServiceType(name, category);
   return { platform, serviceType };
 }
 
@@ -164,6 +186,95 @@ export async function syncServices(): Promise<SyncResult> {
     updated,
     deactivated: deactivated.count,
     skippedOutOfScope,
+  };
+}
+
+export type ReparseResult = {
+  total: number;
+  corrected: number;
+  deactivatedOutOfScope: number;
+  reactivatedBackInScope: number;
+  corrections: Array<{
+    id: number;
+    bulkmedyaId: number;
+    name: string;
+    from: string;
+    to: string;
+    activeFrom: boolean;
+    activeTo: boolean;
+  }>;
+};
+
+// One-off migration: re-run classifyServiceType() against every Service row
+// in DB and fix rows whose stored type disagrees with the current parser.
+// Also re-applies the MVP scope filter (deactivates rows that fall out,
+// reactivates rows that come back in — e.g. a row previously mistyped as
+// "likes" that's actually "followers" and should be live again).
+export async function reparseServiceTypes(): Promise<ReparseResult> {
+  const rows = await prisma.service.findMany({
+    select: {
+      id: true,
+      bulkmedyaId: true,
+      name: true,
+      category: true,
+      platform: true,
+      serviceType: true,
+      active: true,
+    },
+  });
+
+  const corrections: ReparseResult["corrections"] = [];
+  let corrected = 0;
+  let deactivatedOutOfScope = 0;
+  let reactivatedBackInScope = 0;
+
+  for (const r of rows) {
+    const newType = classifyServiceType(r.name, r.category);
+    const inScope = isMvpPair(r.platform, newType);
+    const shouldBeActive = inScope;
+
+    const typeChanged = newType !== r.serviceType;
+    const activeChanged = shouldBeActive !== r.active;
+
+    if (!typeChanged && !activeChanged) continue;
+
+    await prisma.service.update({
+      where: { id: r.id },
+      data: {
+        serviceType: newType,
+        active: shouldBeActive,
+      },
+    });
+
+    corrections.push({
+      id: r.id,
+      bulkmedyaId: r.bulkmedyaId,
+      name: r.name,
+      from: r.serviceType,
+      to: newType,
+      activeFrom: r.active,
+      activeTo: shouldBeActive,
+    });
+
+    if (typeChanged) corrected++;
+    if (activeChanged && !shouldBeActive) deactivatedOutOfScope++;
+    if (activeChanged && shouldBeActive) reactivatedBackInScope++;
+
+    console.log(
+      `[reparse] #${r.bulkmedyaId} "${r.name.slice(0, 60)}" ${r.serviceType}→${newType} active:${r.active}→${shouldBeActive}`
+    );
+  }
+
+  console.log(
+    `[reparse] total=${rows.length} corrected=${corrected} deactivated=${deactivatedOutOfScope} reactivated=${reactivatedBackInScope}`
+  );
+
+  return {
+    total: rows.length,
+    corrected,
+    deactivatedOutOfScope,
+    reactivatedBackInScope,
+    corrections,
   };
 }
 
