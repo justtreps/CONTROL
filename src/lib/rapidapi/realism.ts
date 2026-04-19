@@ -42,7 +42,9 @@ export function computeInstagramRealism(
 
   const picPct = pct(sample, (f) => hasInstaCustomPic(f.profile_pic_url));
   const bioPct = pct(sample, (f) => Boolean(f.full_name?.trim()));
-  const postPct = pct(sample, (f) => !f.is_private);
+  // Proxy for "has posts" on Instagram: private accounts tend to be real humans;
+  // bots are almost always public. So is_private → +realism.
+  const postPct = pct(sample, (f) => f.is_private);
 
   // Ratio not available from simple endpoint. Renormalize weights 0.35+0.25+0.25 = 0.85.
   const total = 0.35 + 0.25 + 0.25;
