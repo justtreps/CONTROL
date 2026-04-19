@@ -96,15 +96,18 @@ model RoutingDecision {
   serviceType        String
   quantity           Int
   targetUrl          String
-  chosenServiceId    Int
-  chosenServiceScore Float
+  chosenServiceId    Int?
+  chosenServiceScore Float?
   bulkmedyaOrderId   String?
+  attempts           Int      @default(1)
   success            Boolean
+  dryRun             Boolean  @default(false)
   errorMessage       String?
   decidedAt          DateTime @default(now())
 
   @@index([decidedAt])
   @@index([chosenServiceId])
+  @@index([success, dryRun])
 }
 
 model Config {

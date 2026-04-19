@@ -57,6 +57,13 @@ export function ConfigForms({
   const [scoringResult, setScoringResult] = useState<string | null>(null);
   const [scoringRunning, setScoringRunning] = useState(false);
 
+  const [orderPlatform, setOrderPlatform] = useState("instagram");
+  const [orderType, setOrderType] = useState("followers");
+  const [orderQuantity, setOrderQuantity] = useState("100");
+  const [orderTargetUrl, setOrderTargetUrl] = useState("https://www.instagram.com/example/");
+  const [orderRunning, setOrderRunning] = useState(false);
+  const [orderResult, setOrderResult] = useState<Record<string, unknown> | null>(null);
+
   async function saveKeys(e: React.FormEvent) {
     e.preventDefault();
     setKeysMsg(null);
@@ -167,6 +174,25 @@ export function ConfigForms({
       setScoringResult(`Erreur : ${data.error ?? "inconnue"}`);
     }
     setScoringRunning(false);
+  }
+
+  async function submitTestOrder(e: React.FormEvent) {
+    e.preventDefault();
+    setOrderRunning(true);
+    setOrderResult(null);
+    const res = await fetch("/api/config/test-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        platform: orderPlatform,
+        service_type: orderType,
+        quantity: Number(orderQuantity),
+        target_url: orderTargetUrl,
+      }),
+    });
+    const data = await res.json();
+    setOrderResult(data);
+    setOrderRunning(false);
   }
 
   return (
@@ -286,6 +312,67 @@ export function ConfigForms({
           <p className="text-sm text-neutral-500 mt-3">
             Configure les clés BulkMedya + RapidAPI avant de lancer les jobs.
           </p>
+        )}
+      </Section>
+
+      <Section title="Tester le router /api/order">
+        <p className="text-sm text-neutral-600 mb-4">
+          Simule un appel de MyBoost. Respecte la var <code>DRY_RUN</code> (default{" "}
+          <code>true</code>) — aucune commande BulkMedya n&apos;est réellement
+          placée tant que DRY_RUN est actif. Le routing et le logging dans
+          RoutingDecision sont effectués normalement.
+        </p>
+        <form onSubmit={submitTestOrder} className="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
+          <select
+            value={orderPlatform}
+            onChange={(e) => setOrderPlatform(e.target.value)}
+            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
+          >
+            <option value="instagram">Instagram</option>
+            <option value="tiktok">TikTok</option>
+            <option value="youtube">YouTube</option>
+            <option value="twitter">Twitter</option>
+            <option value="facebook">Facebook</option>
+          </select>
+          <select
+            value={orderType}
+            onChange={(e) => setOrderType(e.target.value)}
+            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
+          >
+            <option value="followers">followers</option>
+            <option value="likes">likes</option>
+            <option value="views">views</option>
+            <option value="comments">comments</option>
+            <option value="shares">shares</option>
+            <option value="saves">saves</option>
+          </select>
+          <input
+            type="number"
+            value={orderQuantity}
+            onChange={(e) => setOrderQuantity(e.target.value)}
+            min={1}
+            className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
+            placeholder="quantity"
+          />
+          <input
+            type="url"
+            value={orderTargetUrl}
+            onChange={(e) => setOrderTargetUrl(e.target.value)}
+            className="rounded-md border-neutral-300 border px-3 py-2 text-sm sm:col-span-4"
+            placeholder="target URL"
+          />
+          <button
+            type="submit"
+            disabled={orderRunning}
+            className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50 sm:col-span-1"
+          >
+            {orderRunning ? "Routing..." : "Router cette commande"}
+          </button>
+        </form>
+        {orderResult && (
+          <pre className="mt-3 text-xs bg-neutral-50 border border-neutral-200 rounded-md p-3 overflow-x-auto">
+{JSON.stringify(orderResult, null, 2)}
+          </pre>
         )}
       </Section>
 
