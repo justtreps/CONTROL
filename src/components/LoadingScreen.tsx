@@ -35,8 +35,6 @@ export function LoadingScreen() {
     }
   }, [phase]);
 
-  const contentVisible = phase === "stase";
-
   let curtainClass = "";
   if (phase === "hidden") curtainClass = "-translate-y-full";
   else if (phase === "closing") curtainClass = "curtain-slam";
@@ -54,23 +52,16 @@ export function LoadingScreen() {
       }`}
       aria-hidden={phase === "hidden"}
     >
-      {/* Iron curtain — slams down via keyframe with overshoot, retracts smooth */}
+      {/* Curtain — CONTROL content lives inside so it descends WITH the panel */}
       <div className={`absolute inset-0 iron-curtain-panel ${curtainClass}`}>
-        <div
-          className={`absolute inset-0 flex flex-col items-center justify-center text-black px-6 transition-opacity duration-150 ${
-            contentVisible ? "opacity-100" : "opacity-0"
-          }`}
-        >
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-black px-6">
           <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-10">
             [ NŒUD TERMINAL | CHARGEMENT ]
           </div>
-
           <ControlEye size={140} className="mb-6" />
-
           <h1 className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-center text-fluid-title">
             CONTROL.
           </h1>
-
           <div className="flex flex-col items-center gap-3 mt-12">
             <div className="font-mono text-xs tracking-widest">
               PAR MY HUB SOLUTIONS

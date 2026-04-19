@@ -4,9 +4,9 @@ import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { useLoading } from "./LoadingContext";
 
-// Slam keyframe is 380ms + needs ~250ms stase to read CONTROL flash
-// before opening kicks in.
-const HOLD_MS = 650;
+// Same timing as LoginIntro: slam 380ms + stase 500ms = 880ms before
+// retract kicks in.
+const HOLD_MS = 880;
 
 export function PageTransition() {
   const pathname = usePathname();
