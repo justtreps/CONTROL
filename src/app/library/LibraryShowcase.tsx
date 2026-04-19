@@ -47,7 +47,7 @@ export function LibraryShowcase() {
     <div className="lib-page">
       <header className="page-header">
         <div className="page-title">
-          CONTROL <span className="slash">//</span> COMPONENT LIBRARY
+          CONTROL <span className="slash">{"//"}</span> COMPONENT LIBRARY
         </div>
         <div className="page-meta">16 COMPONENTS // REACT + PURE CSS</div>
       </header>
@@ -56,12 +56,12 @@ export function LibraryShowcase() {
       <div className="dash">
         <div className="dash-header">
           <ControlLogo size="sm" />
-          <span className="sep">//</span>
+          <span className="sep">{"//"}</span>
           <span>ROUTER NODE 03</span>
           <div className="meta">
             <StatusDot variant="active" />
             <span>OPERATIONAL</span>
-            <span className="sep">//</span>
+            <span className="sep">{"//"}</span>
             <span>{clock} UTC</span>
           </div>
         </div>
