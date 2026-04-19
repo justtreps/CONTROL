@@ -3,6 +3,7 @@ import { Inter, Oswald, Space_Mono } from "next/font/google";
 import "./globals.css";
 import { CustomCursor } from "@/components/CustomCursor";
 import { BackgroundGrid } from "@/components/BackgroundGrid";
+import { AppProviders } from "@/components/AppProviders";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -43,7 +44,7 @@ export default function RootLayout({
         <BackgroundGrid />
         <div className="noise-overlay" aria-hidden="true" />
         <CustomCursor />
-        {children}
+        <AppProviders>{children}</AppProviders>
       </body>
     </html>
   );

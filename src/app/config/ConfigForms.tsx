@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { useActivity } from "@/components/ActivityContext";
 
 type TestAccount = {
   id: number;
@@ -35,6 +36,7 @@ export function ConfigForms({
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const { flash } = useActivity();
 
   const [bulkmedyaKey, setBulkmedyaKey] = useState("");
   const [rapidApiKey, setRapidApiKey] = useState("");
@@ -119,6 +121,7 @@ export function ConfigForms({
       setSyncResult(
         `OK — ${data.total} services (${data.created} créés, ${data.updated} mis à jour, ${data.deactivated} désactivés).`
       );
+      flash();
       startTransition(() => router.refresh());
     } else {
       setSyncResult(`Erreur : ${data.error ?? "inconnue"}`);
@@ -136,6 +139,7 @@ export function ConfigForms({
       setTestBotResult(
         `${data.placed}/${data.attempted} commandes placées (${data.skipped} skip)${errs}`
       );
+      flash();
       startTransition(() => router.refresh());
     } else {
       setTestBotResult(`Erreur : ${data.error ?? "inconnue"}`);
@@ -153,6 +157,7 @@ export function ConfigForms({
       setScraperResult(
         `${data.measurements} measurements sur ${data.ordersScanned}/${data.ordersSeen} orders${errs}`
       );
+      flash();
       startTransition(() => router.refresh());
     } else {
       setScraperResult(`Erreur : ${data.error ?? "inconnue"}`);
@@ -169,6 +174,7 @@ export function ConfigForms({
       setScoringResult(
         `${data.servicesScored} services scorés (${data.servicesSkipped} skip, aucune data)`
       );
+      flash();
       startTransition(() => router.refresh());
     } else {
       setScoringResult(`Erreur : ${data.error ?? "inconnue"}`);
@@ -192,6 +198,7 @@ export function ConfigForms({
     });
     const data = await res.json();
     setOrderResult(data);
+    if (data?.success) flash();
     setOrderRunning(false);
   }
 
