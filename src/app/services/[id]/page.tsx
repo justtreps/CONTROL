@@ -79,7 +79,7 @@ export default async function ServiceDetailPage({
             href="/services"
             className="text-sm text-neutral-500 hover:text-neutral-900"
           >
-            ← Tous les services
+← Tous les services
           </Link>
           <h1 className="brand text-2xl mt-2">{service.name}</h1>
           <div className="flex flex-wrap gap-2 items-center text-xs text-neutral-500 mt-1">
@@ -89,9 +89,9 @@ export default async function ServiceDetailPage({
             <span className="bg-neutral-100 px-2 py-0.5 rounded">
               {service.serviceType}
             </span>
-            <span>BulkMedya ID {service.bulkmedyaId}</span>
+            <span>ID BulkMedya {service.bulkmedyaId}</span>
             <span>·</span>
-            <span>rate {service.ratePerK.toFixed(2)}/k</span>
+            <span>tarif {service.ratePerK.toFixed(2)}/k</span>
             <span>·</span>
             <span>
               min {service.minQuantity} / max {service.maxQuantity}
@@ -107,11 +107,11 @@ export default async function ServiceDetailPage({
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
           <ScoreCard label="Score total" score={latest?.currentScore ?? null} primary />
           <ScoreCard
-            label="Completion"
+            label="Livraison"
             score={latest ? latest.completionFactor * 100 : null}
           />
-          <ScoreCard label="Realism" score={latest?.realismScore ?? null} />
-          <ScoreCard label="Speed" score={latest?.speedScore ?? null} />
+          <ScoreCard label="Réalisme" score={latest?.realismScore ?? null} />
+          <ScoreCard label="Vitesse" score={latest?.speedScore ?? null} />
           <ScoreCard label="Drop" score={latest?.dropScore ?? null} />
         </div>
 
@@ -122,8 +122,8 @@ export default async function ServiceDetailPage({
           <div className="bg-white border border-neutral-200 rounded-lg p-4">
             {scorePoints.length < 2 ? (
               <p className="text-sm text-neutral-500 py-10 text-center">
-                Pas encore assez de data ({scorePoints.length} point
-                {scorePoints.length === 1 ? "" : "s"}). Le scoring engine
+                Pas encore assez de données ({scorePoints.length} point
+                {scorePoints.length === 1 ? "" : "s"}). Le moteur de scoring
                 écrira des points au fil du temps.
               </p>
             ) : (
@@ -134,25 +134,25 @@ export default async function ServiceDetailPage({
 
         <section>
           <h2 className="font-medium text-sm uppercase tracking-wide text-neutral-500 mb-3">
-            Test orders récents ({orderRows.length})
+            Commandes test récentes ({orderRows.length})
           </h2>
           {orderRows.length === 0 ? (
             <div className="bg-white border border-neutral-200 rounded-lg p-6 text-sm text-neutral-500">
-              Aucun test order pour ce service.
+              Aucune commande test pour ce service.
             </div>
           ) : (
             <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-neutral-50 text-xs uppercase text-neutral-600">
                   <tr>
-                    <th className="text-left px-4 py-3">Placé</th>
+                    <th className="text-left px-4 py-3">Placée</th>
                     <th className="text-left px-3 py-3">Compte</th>
-                    <th className="text-right px-3 py-3">Target</th>
-                    <th className="text-right px-3 py-3">Baseline</th>
-                    <th className="text-right px-3 py-3">Latest</th>
-                    <th className="text-right px-3 py-3">Delivered</th>
+                    <th className="text-right px-3 py-3">Cible</th>
+                    <th className="text-right px-3 py-3">Référence</th>
+                    <th className="text-right px-3 py-3">Dernier</th>
+                    <th className="text-right px-3 py-3">Livré</th>
                     <th className="text-left px-3 py-3">Checkpoint</th>
-                    <th className="text-left px-3 py-3">BM Order</th>
+                    <th className="text-left px-3 py-3">ID BM</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100">

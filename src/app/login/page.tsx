@@ -10,7 +10,7 @@ const API_TRIGGER_MS = 500;
 const LOADING_MIN_MS = 800;
 
 const CONTROL_LETTERS = "CONTROL.".split("");
-const INITIATE_LETTERS = "INITIATE.".split("");
+const INITIATE_LETTERS = "ACCÉDER.".split("");
 
 // Arrival timing plan (total ~2.04s):
 //   t=0      — eye boots (100ms)
@@ -76,7 +76,7 @@ function LoginForm() {
               className="arrival-fade font-mono text-xs text-[#666666] tracking-widest border border-[#666666]/30 px-3 py-1 w-max"
               style={{ animationDelay: `${DELAY_FADE_SUPPORT}ms` }}
             >
-              [ NODE: CONTROL | OPTICS: LOCKED ]
+              [ NŒUD: CONTROL | OPTIQUE: VERROUILLÉ ]
             </div>
             <div className="arrival-eye" style={{ animationDelay: "0ms" }}>
               <PixelEye size={80} />
@@ -104,7 +104,7 @@ function LoginForm() {
               className="arrival-fade font-mono text-xs text-[#666666] tracking-widest uppercase max-w-sm mt-8 leading-relaxed"
               style={{ animationDelay: `${DELAY_FADE_SUPPORT}ms` }}
             >
-              AUTONOMOUS QUALITY ROUTING ENGINE. / ENGINEERED BY MY HUB SOLUTIONS.
+              MOTEUR DE ROUTAGE QUALITÉ AUTONOME. / CONÇU PAR MY HUB SOLUTIONS.
             </p>
           </div>
 
@@ -113,7 +113,7 @@ function LoginForm() {
             style={{ animationDelay: `${DELAY_FADE_SUPPORT + 40}ms` }}
           >
             <span>[ SYS_VER: 1.0.0 ]</span>
-            <span>[ AUTH: PENDING ]</span>
+            <span>[ AUTH: EN ATTENTE ]</span>
           </div>
         </div>
 
@@ -128,7 +128,7 @@ function LoginForm() {
               className="arrival-fade font-mono text-xs tracking-widest border border-black/30 px-3 py-1 w-max"
               style={{ animationDelay: `${DELAY_FADE_SUPPORT}ms` }}
             >
-              [ TERMINAL NODE | ACCESS RESTRICTED ]
+              [ NŒUD TERMINAL | ACCÈS RESTREINT ]
             </div>
           </div>
 
@@ -136,7 +136,7 @@ function LoginForm() {
           <div className="w-full max-w-sm flex flex-col gap-6">
             <h2
               className="brand font-display text-5xl md:text-6xl uppercase tracking-tight leading-none"
-              aria-label="Initiate."
+              aria-label="Accéder."
             >
               {INITIATE_LETTERS.map((c, i) => (
                 <span
@@ -155,7 +155,7 @@ function LoginForm() {
               style={{ animationDelay: `${DELAY_FORM_FADE}ms` }}
             >
               <p className="font-mono text-xs tracking-widest uppercase leading-relaxed">
-                SUBMIT CREDENTIALS TO ESTABLISH SESSION.
+                SOUMETTEZ VOS IDENTIFIANTS POUR OUVRIR LA SESSION.
               </p>
 
               <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
@@ -164,7 +164,7 @@ function LoginForm() {
                     htmlFor="pwd"
                     className="font-mono text-xs tracking-widest uppercase"
                   >
-                    [ PASSWORD ]
+                    [ MOT DE PASSE ]
                   </label>
                   <input
                     id="pwd"
@@ -186,7 +186,7 @@ function LoginForm() {
                 >
                   <div className="absolute inset-0 bg-[#FF3300] transform translate-y-full group-hover:translate-y-0 transition-transform duration-500 ease-out z-0" />
                   <span className="font-mono text-xs tracking-widest z-10 group-hover:text-black transition-colors duration-300">
-                    [ INITIATE ]
+                    [ ACCÉDER ]
                   </span>
                   <iconify-icon
                     icon="solar:arrow-right-linear"
@@ -202,7 +202,7 @@ function LoginForm() {
                     aria-live="polite"
                     className="font-mono text-xs tracking-widest uppercase mt-2"
                   >
-                    [ ERROR ] {error}
+                    [ ERREUR ] {error}
                   </p>
                 )}
               </form>
@@ -215,7 +215,7 @@ function LoginForm() {
             style={{ animationDelay: `${DELAY_FORM_FADE}ms` }}
           >
             <div className="font-mono text-xs tracking-widest pt-8 border-t border-black/30">
-              BY MY HUB SOLUTIONS / © 2026
+              PAR MY HUB SOLUTIONS / © 2026
             </div>
           </div>
         </div>

@@ -106,7 +106,7 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
         >
           <option value="score">Tri : score</option>
           <option value="name">Tri : nom</option>
-          <option value="rate">Tri : rate</option>
+          <option value="rate">Tri : tarif</option>
           <option value="orders">Tri : nb tests</option>
         </select>
       </div>
@@ -116,15 +116,15 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
           <thead className="bg-neutral-50 text-neutral-600 text-xs uppercase tracking-wider">
             <tr>
               <th className="text-left px-4 py-3">Service</th>
-              <th className="text-left px-3 py-3">Platform</th>
+              <th className="text-left px-3 py-3">Plateforme</th>
               <th className="text-left px-3 py-3">Type</th>
               <th className="text-center px-3 py-3">Score</th>
-              <th className="text-left px-3 py-3">Sparkline (30)</th>
-              <th className="text-center px-3 py-3">Comp</th>
-              <th className="text-center px-3 py-3">Real</th>
-              <th className="text-center px-3 py-3">Speed</th>
+              <th className="text-left px-3 py-3">Tendance (30)</th>
+              <th className="text-center px-3 py-3">Livr.</th>
+              <th className="text-center px-3 py-3">Réal.</th>
+              <th className="text-center px-3 py-3">Vit.</th>
               <th className="text-center px-3 py-3">Drop</th>
-              <th className="text-right px-3 py-3">Rate/k</th>
+              <th className="text-right px-3 py-3">Tarif/k</th>
               <th className="text-right px-3 py-3">Min</th>
               <th className="text-right px-3 py-3">Tests</th>
             </tr>

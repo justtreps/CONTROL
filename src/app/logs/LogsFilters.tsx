@@ -65,8 +65,8 @@ export function LogsFilters({
         className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
       >
         <option value="all">Tous statuts</option>
-        <option value="success">Success seulement</option>
-        <option value="fail">Fail seulement</option>
+        <option value="success">Succès seulement</option>
+        <option value="fail">Échecs seulement</option>
       </select>
 
       <select
@@ -74,9 +74,9 @@ export function LogsFilters({
         onChange={(e) => update({ mode: e.target.value })}
         className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
       >
-        <option value="all">Dry + Real</option>
+        <option value="all">Test + Réel</option>
         <option value="dry">DRY_RUN seulement</option>
-        <option value="real">Real seulement</option>
+        <option value="real">Réel seulement</option>
       </select>
     </div>
   );

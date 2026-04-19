@@ -91,7 +91,7 @@ async function loadData() {
     metrics: [
       { label: "Services actifs", value: activeServices },
       { label: "Comptes test actifs", value: testAccountsCount },
-      { label: "Test orders 24h", value: recentTestOrders },
+      { label: "Commandes test 24h", value: recentTestOrders },
       { label: "Commandes routées 24h", value: recentRoutes },
     ],
     alerts,
@@ -106,7 +106,7 @@ export default async function Home() {
     <>
       <DashboardHeader />
       <main className="max-w-6xl mx-auto px-6 py-10">
-        <h1 className="brand text-3xl mb-8">Dashboard</h1>
+        <h1 className="brand text-3xl mb-8">Tableau de bord</h1>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
           {metrics.map((m) => (
@@ -158,7 +158,7 @@ export default async function Home() {
           </h2>
           {topServicesEntries.length === 0 ? (
             <div className="bg-white border border-neutral-200 rounded-lg p-6 text-sm text-neutral-500">
-              Aucun score encore calculé. Lance le test bot + scraper + scoring
+              Aucun score encore calculé. Lance le bot de test + scraper + scoring
               depuis <Link href="/config" className="underline">/config</Link>.
             </div>
           ) : (

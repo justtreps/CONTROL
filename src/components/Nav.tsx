@@ -6,9 +6,9 @@ import { useState } from "react";
 import { PixelEye } from "./PixelEye";
 
 const LINKS = [
-  { href: "/", label: "HOME" },
+  { href: "/", label: "ACCUEIL" },
   { href: "/services", label: "SERVICES" },
-  { href: "/logs", label: "LOGS" },
+  { href: "/logs", label: "JOURNAUX" },
   { href: "/config", label: "CONFIG" },
 ];
 
@@ -59,7 +59,7 @@ export function Nav() {
             }}
             className="interactive text-text-muted hover:text-white transition-colors"
           >
-            LOGOUT
+            DÉCONNEXION
           </button>
         </nav>
       </div>

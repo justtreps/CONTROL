@@ -15,7 +15,7 @@ export function LoadingScreen() {
     >
       <div className="flex flex-col items-center justify-center w-full h-full gap-12 relative px-6">
         <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1">
-          [ TERMINAL NODE | LOADING ]
+          [ NŒUD TERMINAL | CHARGEMENT ]
         </div>
 
         <h1 className="brand font-display uppercase tracking-tight leading-[0.85] m-0 text-center text-fluid-title">
@@ -24,14 +24,14 @@ export function LoadingScreen() {
 
         <div className="flex flex-col items-center gap-3 mt-8">
           <div className="font-mono text-xs tracking-widest">
-            BY MY HUB SOLUTIONS
+            PAR MY HUB SOLUTIONS
           </div>
           <div className="w-64 h-[1px] bg-black/30 overflow-hidden relative">
             <div className="absolute inset-y-0 left-0 bg-black loading-bar" />
           </div>
         </div>
       </div>
-      <span className="sr-only">CONTROL loading.</span>
+      <span className="sr-only">Chargement de CONTROL.</span>
     </div>
   );
 }

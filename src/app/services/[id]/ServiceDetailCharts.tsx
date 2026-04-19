@@ -25,9 +25,9 @@ type SeriesKey = "total" | "completion" | "realism" | "speed" | "drop";
 
 const SERIES: Array<{ key: SeriesKey; label: string; color: string }> = [
   { key: "total", label: "Score total", color: "#171717" },
-  { key: "completion", label: "Completion", color: "#2563eb" },
-  { key: "realism", label: "Realism", color: "#16a34a" },
-  { key: "speed", label: "Speed", color: "#c2410c" },
+  { key: "completion", label: "Livraison", color: "#2563eb" },
+  { key: "realism", label: "Réalisme", color: "#16a34a" },
+  { key: "speed", label: "Vitesse", color: "#c2410c" },
   { key: "drop", label: "Drop", color: "#a21caf" },
 ];
 

@@ -9,9 +9,21 @@ type Props = {
   className?: string;
 };
 
+const POSITIONS: Array<[number, number]> = [
+  [0, 0],
+  [2, 0],
+  [-2, 0],
+  [0, -2],
+  [2, -2],
+  [-2, -2],
+];
+
+const SCAN_INTERVAL_MS = 1200;
+const ACTIVITY_INTERVAL_MS = 400;
 const ACTIVITY_DURATION_MS = 1200;
 
 export function PixelEye({ watching = false, size = 32, className = "" }: Props) {
+  const [posIndex, setPosIndex] = useState(0);
   const [activity, setActivity] = useState(false);
   const [reduced, setReduced] = useState(false);
   const { flashTick } = useActivity();
@@ -32,13 +44,27 @@ export function PixelEye({ watching = false, size = 32, className = "" }: Props)
     return () => clearTimeout(t);
   }, [flashTick]);
 
-  const irisClass = [
-    "pixel-iris",
-    reduced ? "reduced" : watching ? "watching" : "scanning",
-    activity ? "activity" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  useEffect(() => {
+    if (reduced || watching) return;
+    const interval = activity ? ACTIVITY_INTERVAL_MS : SCAN_INTERVAL_MS;
+    const id = setInterval(() => {
+      setPosIndex((p) => (p + 1) % POSITIONS.length);
+    }, interval);
+    return () => clearInterval(id);
+  }, [reduced, watching, activity]);
+
+  let dx = 0;
+  let dy = 0;
+  if (watching) {
+    dx = -2;
+    dy = 1;
+  } else if (!reduced) {
+    [dx, dy] = POSITIONS[posIndex];
+  }
+
+  const filter = activity
+    ? "brightness(1.3) drop-shadow(0 0 1px #FF3300)"
+    : "none";
 
   return (
     <svg
@@ -57,7 +83,13 @@ export function PixelEye({ watching = false, size = 32, className = "" }: Props)
       <rect x="5" y="11" width="6" height="1" fill="#FFFFFF" />
 
       {/* Iris 4x4 red + pupille 2x2 noire + reflet 1x1 blanc */}
-      <g className={irisClass}>
+      <g
+        className="pixel-iris"
+        style={{
+          transform: `translate(${dx}px, ${dy}px)`,
+          filter,
+        }}
+      >
         <rect x="6" y="6" width="4" height="4" fill="#FF3300" />
         <rect x="7" y="7" width="2" height="2" fill="#000000" />
         <rect x="6" y="6" width="1" height="1" fill="#FFFFFF" />

@@ -258,7 +258,7 @@ export function ConfigForms({
           disabled={syncing || !bulkmedyaSet}
           className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
         >
-          {syncing ? "Synchronisation..." : "Sync services maintenant"}
+          {syncing ? "Synchronisation..." : "Synchroniser les services"}
         </button>
         {!bulkmedyaSet && (
           <p className="text-sm text-neutral-500 mt-2">
@@ -282,7 +282,7 @@ export function ConfigForms({
               disabled={testBotRunning || !bulkmedyaSet || !rapidSet}
               className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
             >
-              {testBotRunning ? "Test bot..." : "Run test bot"}
+              {testBotRunning ? "Bot..." : "Lancer le bot de test"}
             </button>
             {testBotResult && (
               <p className="text-sm mt-2 text-neutral-700">{testBotResult}</p>
@@ -295,7 +295,7 @@ export function ConfigForms({
               disabled={scraperRunning || !rapidSet}
               className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
             >
-              {scraperRunning ? "Scraper..." : "Run scraper"}
+              {scraperRunning ? "Scraper..." : "Lancer le scraper"}
             </button>
             {scraperResult && (
               <p className="text-sm mt-2 text-neutral-700">{scraperResult}</p>
@@ -308,7 +308,7 @@ export function ConfigForms({
               disabled={scoringRunning}
               className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50"
             >
-              {scoringRunning ? "Scoring..." : "Run scoring"}
+              {scoringRunning ? "Scoring..." : "Lancer le scoring"}
             </button>
             {scoringResult && (
               <p className="text-sm mt-2 text-neutral-700">{scoringResult}</p>
@@ -359,21 +359,21 @@ export function ConfigForms({
             onChange={(e) => setOrderQuantity(e.target.value)}
             min={1}
             className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
-            placeholder="quantity"
+            placeholder="quantité"
           />
           <input
             type="url"
             value={orderTargetUrl}
             onChange={(e) => setOrderTargetUrl(e.target.value)}
             className="rounded-md border-neutral-300 border px-3 py-2 text-sm sm:col-span-4"
-            placeholder="target URL"
+            placeholder="URL cible"
           />
           <button
             type="submit"
             disabled={orderRunning}
             className="bg-neutral-900 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-neutral-800 disabled:opacity-50 sm:col-span-1"
           >
-            {orderRunning ? "Routing..." : "Router cette commande"}
+            {orderRunning ? "Routage..." : "Router cette commande"}
           </button>
         </form>
         {orderResult && (
@@ -395,14 +395,14 @@ export function ConfigForms({
           </select>
           <input
             required
-            placeholder="username"
+            placeholder="nom d'utilisateur"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
           />
           <input
             required
-            placeholder="user_id (numeric)"
+            placeholder="user_id (numérique)"
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
             className="rounded-md border-neutral-300 border px-3 py-2 text-sm"

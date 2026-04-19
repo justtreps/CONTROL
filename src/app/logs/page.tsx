@@ -71,7 +71,7 @@ export default async function LogsPage({
       <DashboardHeader />
       <main className="max-w-7xl mx-auto px-6 py-10">
         <div className="flex items-baseline justify-between mb-6">
-          <h1 className="brand text-3xl">Logs</h1>
+          <h1 className="brand text-3xl">Journaux</h1>
           <p className="text-sm text-neutral-500 tabular-nums">
             {total} décisions
           </p>
@@ -94,13 +94,13 @@ export default async function LogsPage({
                 <th className="text-left px-4 py-3">Date</th>
                 <th className="text-left px-3 py-3">Plat.</th>
                 <th className="text-left px-3 py-3">Type</th>
-                <th className="text-right px-3 py-3">Qty</th>
+                <th className="text-right px-3 py-3">Qté</th>
                 <th className="text-left px-3 py-3">Service choisi</th>
                 <th className="text-center px-3 py-3">Score</th>
-                <th className="text-center px-3 py-3">Status</th>
+                <th className="text-center px-3 py-3">Statut</th>
                 <th className="text-center px-3 py-3">Mode</th>
-                <th className="text-right px-3 py-3">Att.</th>
-                <th className="text-left px-3 py-3">BM Order / Error</th>
+                <th className="text-right px-3 py-3">Tent.</th>
+                <th className="text-left px-3 py-3">ID BM / Erreur</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
@@ -137,11 +137,11 @@ export default async function LogsPage({
                     <td className="px-3 py-2.5 text-center">
                       {r.success ? (
                         <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-800">
-                          success
+                          succès
                         </span>
                       ) : (
                         <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-800">
-                          fail
+                          échec
                         </span>
                       )}
                     </td>
