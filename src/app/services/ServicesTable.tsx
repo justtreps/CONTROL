@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { Sparkline } from "@/components/Sparkline";
@@ -25,6 +26,9 @@ export type ServiceRow = {
 
 type SortKey = "score" | "name" | "rate" | "orders";
 
+const FILTER_INPUT =
+  "interactive bg-transparent border border-[#666666]/30 focus:border-[#FF3300] px-3 py-2 font-mono text-xs tracking-widest uppercase text-white placeholder:text-[#666666]/60 outline-none transition-colors";
+
 export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
   const platforms = useMemo(
     () => Array.from(new Set(rows.map((r) => r.platform))).sort(),
@@ -43,12 +47,14 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
   const filtered = useMemo(() => {
     let out = rows;
     if (platform !== "all") out = out.filter((r) => r.platform === platform);
-    if (serviceType !== "all") out = out.filter((r) => r.serviceType === serviceType);
+    if (serviceType !== "all")
+      out = out.filter((r) => r.serviceType === serviceType);
     if (query.trim()) {
       const q = query.toLowerCase();
       out = out.filter(
         (r) =>
-          r.name.toLowerCase().includes(q) || r.category.toLowerCase().includes(q)
+          r.name.toLowerCase().includes(q) ||
+          r.category.toLowerCase().includes(q)
       );
     }
 
@@ -68,108 +74,127 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
 
   return (
     <>
-      <div className="flex flex-wrap gap-3 mb-5 items-center">
+      {/* Filters bar — Pattern B compact style */}
+      <div className="flex flex-wrap gap-3 px-4 md:px-6 py-4 border-b border-[#666666]/20 bg-[#0D0D0D]">
         <input
-          placeholder="Rechercher nom ou catégorie..."
+          placeholder="RECHERCHER..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="rounded-md border-neutral-300 border px-3 py-2 text-sm w-64"
+          className={`${FILTER_INPUT} w-64`}
         />
         <select
           value={platform}
           onChange={(e) => setPlatform(e.target.value)}
-          className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
+          className={FILTER_INPUT}
         >
-          <option value="all">Toutes plateformes</option>
+          <option value="all">TOUTES PLATEFORMES</option>
           {platforms.map((p) => (
             <option key={p} value={p}>
-              {p}
+              {p.toUpperCase()}
             </option>
           ))}
         </select>
         <select
           value={serviceType}
           onChange={(e) => setServiceType(e.target.value)}
-          className="rounded-md border-neutral-300 border px-3 py-2 text-sm"
+          className={FILTER_INPUT}
         >
-          <option value="all">Tous types</option>
+          <option value="all">TOUS TYPES</option>
           {types.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {t.toUpperCase()}
             </option>
           ))}
         </select>
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value as SortKey)}
-          className="rounded-md border-neutral-300 border px-3 py-2 text-sm ml-auto"
+          className={`${FILTER_INPUT} ml-auto`}
         >
-          <option value="score">Tri : score</option>
-          <option value="name">Tri : nom</option>
-          <option value="rate">Tri : tarif</option>
-          <option value="orders">Tri : nb tests</option>
+          <option value="score">TRI : SCORE</option>
+          <option value="name">TRI : NOM</option>
+          <option value="rate">TRI : TARIF</option>
+          <option value="orders">TRI : NB TESTS</option>
         </select>
       </div>
 
-      <div className="bg-white border border-neutral-200 rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-50 text-neutral-600 text-xs uppercase tracking-wider">
-            <tr>
-              <th className="text-left px-4 py-3">Service</th>
-              <th className="text-left px-3 py-3">Plateforme</th>
-              <th className="text-left px-3 py-3">Type</th>
-              <th className="text-center px-3 py-3">Score</th>
-              <th className="text-left px-3 py-3">Tendance (30)</th>
-              <th className="text-center px-3 py-3">Livr.</th>
-              <th className="text-center px-3 py-3">Réal.</th>
-              <th className="text-center px-3 py-3">Vit.</th>
-              <th className="text-center px-3 py-3">Drop</th>
-              <th className="text-right px-3 py-3">Tarif/k</th>
-              <th className="text-right px-3 py-3">Min</th>
-              <th className="text-right px-3 py-3">Tests</th>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead className="bg-[#0D0D0D] text-[#666666] font-mono text-xs uppercase tracking-widest">
+            <tr className="border-b border-[#666666]/20">
+              <th className="text-left px-4 py-3 font-normal">Service</th>
+              <th className="text-left px-3 py-3 font-normal">Plat.</th>
+              <th className="text-left px-3 py-3 font-normal">Type</th>
+              <th className="text-center px-3 py-3 font-normal">Score</th>
+              <th className="text-left px-3 py-3 font-normal">Tendance</th>
+              <th className="text-center px-3 py-3 font-normal">Livr.</th>
+              <th className="text-center px-3 py-3 font-normal">Réal.</th>
+              <th className="text-center px-3 py-3 font-normal">Vit.</th>
+              <th className="text-center px-3 py-3 font-normal">Drop</th>
+              <th className="text-right px-3 py-3 font-normal">Tarif/k</th>
+              <th className="text-right px-3 py-3 font-normal">Min</th>
+              <th className="text-right px-3 py-3 font-normal">Tests</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-neutral-100">
+          <tbody>
             {filtered.map((r) => (
-              <tr key={r.id} className="hover:bg-neutral-50">
-                <td className="px-4 py-2.5 max-w-xs">
-                  <div className="font-medium text-neutral-900 truncate" title={r.name}>
+              <tr
+                key={r.id}
+                className="interactive border-b border-[#666666]/20 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] transition-all duration-200"
+              >
+                <td className="px-4 py-3 max-w-xs">
+                  <Link
+                    href={`/services/${r.id}`}
+                    className="block brand font-display text-sm uppercase tracking-tight text-white truncate"
+                    title={r.name}
+                  >
                     {r.name}
-                  </div>
-                  <div className="text-xs text-neutral-500 truncate" title={r.category}>
+                  </Link>
+                  <div
+                    className="font-mono text-xs text-[#666666] tracking-widest uppercase truncate mt-1"
+                    title={r.category}
+                  >
                     {r.category}
                   </div>
                 </td>
-                <td className="px-3 py-2.5 text-neutral-700">{r.platform}</td>
-                <td className="px-3 py-2.5 text-neutral-700">{r.serviceType}</td>
-                <td className="px-3 py-2.5 text-center">
+                <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
+                  {r.platform}
+                </td>
+                <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
+                  {r.serviceType}
+                </td>
+                <td className="px-3 py-3 text-center">
                   <ScoreBadge score={r.currentScore} />
                 </td>
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-3">
                   <Sparkline values={r.history} />
                 </td>
-                <td className="px-3 py-2.5 text-center">
+                <td className="px-3 py-3 text-center">
                   <ScoreBadge
-                    score={r.completionFactor !== null ? r.completionFactor * 100 : null}
+                    score={
+                      r.completionFactor !== null
+                        ? r.completionFactor * 100
+                        : null
+                    }
                     size="sm"
                   />
                 </td>
-                <td className="px-3 py-2.5 text-center">
+                <td className="px-3 py-3 text-center">
                   <ScoreBadge score={r.realismScore} size="sm" />
                 </td>
-                <td className="px-3 py-2.5 text-center">
+                <td className="px-3 py-3 text-center">
                   <ScoreBadge score={r.speedScore} size="sm" />
                 </td>
-                <td className="px-3 py-2.5 text-center">
+                <td className="px-3 py-3 text-center">
                   <ScoreBadge score={r.dropScore} size="sm" />
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums">
+                <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
                   {r.ratePerK.toFixed(2)}
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-neutral-600">
+                <td className="px-3 py-3 text-right font-mono text-xs text-[#666666] tabular-nums">
                   {r.minQuantity}
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-neutral-600">
+                <td className="px-3 py-3 text-right font-mono text-xs text-[#666666] tabular-nums">
                   {r.testOrderCount}
                 </td>
               </tr>
@@ -177,8 +202,8 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
           </tbody>
         </table>
         {filtered.length === 0 && (
-          <div className="px-4 py-10 text-center text-sm text-neutral-500">
-            Aucun service ne correspond à ces filtres.
+          <div className="px-4 py-16 text-center font-mono text-xs text-[#666666] tracking-widest uppercase">
+            AUCUN SERVICE NE CORRESPOND À CES FILTRES.
           </div>
         )}
       </div>
