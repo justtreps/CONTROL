@@ -272,12 +272,12 @@ export default function LoginPage() {
 
   return (
     <>
+      {/* Login form is always mounted behind, so when the curtain
+          retracts the page is already there to be revealed. */}
+      <Suspense fallback={null}>
+        <LoginForm />
+      </Suspense>
       {!introDone && <LoginIntro onDone={handleIntroDone} />}
-      {introDone && (
-        <Suspense fallback={null}>
-          <LoginForm />
-        </Suspense>
-      )}
     </>
   );
 }
