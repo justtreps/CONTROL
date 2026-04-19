@@ -5,9 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { PixelEye } from "@/components/PixelEye";
 import { useLoading } from "@/components/LoadingContext";
 
-const CURTAIN_MS = 600;
-const API_TRIGGER_MS = 500;
-const LOADING_MIN_MS = 800;
+const SUBMIT_MIN_VISIBLE_MS = 1000;
+const SUBMIT_HIDE_DELAY_MS = 600;
 
 // (Login arrival animations removed — only the iron curtain plays.)
 
@@ -105,7 +104,7 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const from = params.get("from") ?? "/";
-  const { show: showLoading } = useLoading();
+  const { show: showLoading, hide: hideLoading } = useLoading();
 
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -116,33 +115,39 @@ function LoginForm() {
     if (submitting || !password) return;
     setError(null);
     setSubmitting(true);
+    showLoading();
     const start = Date.now();
 
-    const fetchPromise = fetch("/api/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-
-    await new Promise((r) => setTimeout(r, API_TRIGGER_MS));
-    const res = await fetchPromise;
-
-    if (res.ok) {
-      sessionStorage.setItem("control:curtain-shown", "1");
-      showLoading();
-      const elapsed = Date.now() - start;
-      const totalMin = CURTAIN_MS + LOADING_MIN_MS;
-      const remaining = Math.max(0, totalMin - elapsed);
-      setTimeout(() => {
-        router.push(from);
-        router.refresh();
-      }, remaining);
+    let res: Response;
+    try {
+      res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+    } catch {
+      hideLoading();
+      setError("Erreur réseau");
+      setSubmitting(false);
       return;
     }
 
-    const data = await res.json().catch(() => ({}));
-    setError(data.error ?? "Mot de passe incorrect");
-    setSubmitting(false);
+    if (!res.ok) {
+      hideLoading();
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Mot de passe incorrect");
+      setSubmitting(false);
+      return;
+    }
+
+    sessionStorage.setItem("control:curtain-shown", "1");
+    const elapsed = Date.now() - start;
+    const remaining = Math.max(0, SUBMIT_MIN_VISIBLE_MS - elapsed);
+    setTimeout(() => {
+      router.push(from);
+      router.refresh();
+      setTimeout(() => hideLoading(), SUBMIT_HIDE_DELAY_MS);
+    }, remaining);
   }
 
   return (
@@ -251,16 +256,6 @@ function LoginForm() {
             </div>
           </div>
         </div>
-      </div>
-
-      <div
-        className={`login-curtain fixed inset-0 z-[9999] pointer-events-none ${
-          submitting ? "active" : ""
-        }`}
-        aria-hidden="true"
-      >
-        <div className="curtain-left absolute inset-y-0 left-0 w-1/2 bg-[#030303]" />
-        <div className="curtain-right absolute inset-y-0 right-0 w-1/2 bg-[#FF3300]" />
       </div>
     </>
   );
