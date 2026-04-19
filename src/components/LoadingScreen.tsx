@@ -1,20 +1,72 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useLoading } from "./LoadingContext";
+
+type Phase = "hidden" | "closing" | "stase" | "opening";
+
+const CURTAIN_MS = 600;
 
 export function LoadingScreen() {
   const { visible } = useLoading();
-  if (!visible) return null;
+  const [phase, setPhase] = useState<Phase>("hidden");
+
+  useEffect(() => {
+    if (visible && (phase === "hidden" || phase === "opening")) {
+      setPhase("closing");
+      return;
+    }
+    if (!visible && (phase === "closing" || phase === "stase")) {
+      setPhase("opening");
+      return;
+    }
+  }, [visible, phase]);
+
+  useEffect(() => {
+    if (phase === "closing") {
+      const t = setTimeout(() => setPhase("stase"), CURTAIN_MS);
+      return () => clearTimeout(t);
+    }
+    if (phase === "opening") {
+      const t = setTimeout(() => setPhase("hidden"), CURTAIN_MS);
+      return () => clearTimeout(t);
+    }
+  }, [phase]);
+
+  const closed = phase === "closing" || phase === "stase";
+  const contentVisible = phase === "stase";
 
   return (
     <div
       role="status"
       aria-live="polite"
       data-cursor="invert"
-      className="fixed inset-0 z-[10000] bg-[#FF3300] text-black flex flex-col items-center justify-center animate-loading-fade-in"
+      className={`fixed inset-0 z-[10000] overflow-hidden ${
+        phase === "hidden" ? "pointer-events-none" : ""
+      }`}
+      aria-hidden={phase === "hidden"}
     >
-      <div className="flex flex-col items-center justify-center w-full h-full gap-12 relative px-6">
-        <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1">
+      {/* Top curtain — slides down from above */}
+      <div
+        className={`absolute top-0 inset-x-0 h-[51vh] iron-curtain-panel transition-transform duration-[600ms] ease-[cubic-bezier(0.77,0,0.175,1)] will-change-transform ${
+          closed ? "translate-y-0" : "-translate-y-full"
+        }`}
+      />
+
+      {/* Bottom curtain — slides up from below */}
+      <div
+        className={`absolute bottom-0 inset-x-0 h-[51vh] iron-curtain-panel transition-transform duration-[600ms] ease-[cubic-bezier(0.77,0,0.175,1)] will-change-transform ${
+          closed ? "translate-y-0" : "translate-y-full"
+        }`}
+      />
+
+      {/* Content overlay — only opaque during stase */}
+      <div
+        className={`absolute inset-0 flex flex-col items-center justify-center text-black px-6 transition-opacity duration-200 ${
+          contentVisible ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <div className="font-mono text-xs tracking-widest border border-black/30 px-4 py-1 mb-12">
           [ NŒUD TERMINAL | CHARGEMENT ]
         </div>
 
@@ -22,7 +74,7 @@ export function LoadingScreen() {
           CONTROL.
         </h1>
 
-        <div className="flex flex-col items-center gap-3 mt-8">
+        <div className="flex flex-col items-center gap-3 mt-12">
           <div className="font-mono text-xs tracking-widest">
             PAR MY HUB SOLUTIONS
           </div>
@@ -31,6 +83,7 @@ export function LoadingScreen() {
           </div>
         </div>
       </div>
+
       <span className="sr-only">Chargement de CONTROL.</span>
     </div>
   );

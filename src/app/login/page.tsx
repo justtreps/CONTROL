@@ -22,7 +22,9 @@ const DELAY_FADE_SUPPORT = 860;
 const DELAY_INITIATE_START = 1060;
 const DELAY_FORM_FADE = 1740;
 
-const INTRO_DURATION_MS = 1500;
+// Time the curtain is held closed (stase). Add 2 × 600ms for the close
+// and open animations -> total intro perceived ~1.6s.
+const INTRO_STASE_MS = 400;
 
 function LoginForm() {
   const router = useRouter();
@@ -36,7 +38,8 @@ function LoginForm() {
 
   useEffect(() => {
     showLoading();
-    const t = setTimeout(hideLoading, INTRO_DURATION_MS);
+    // Close (600ms) + stase + open (600ms). hideLoading triggers the open.
+    const t = setTimeout(hideLoading, 600 + INTRO_STASE_MS);
     return () => clearTimeout(t);
   }, [showLoading, hideLoading]);
 
