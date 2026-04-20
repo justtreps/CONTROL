@@ -5,6 +5,7 @@ import { PoolStatsHero } from "./PoolStatsHero";
 import { PoolHistoryChart } from "./PoolHistoryChart";
 import { PoolControls } from "./PoolControls";
 import { PoolActiveJobs } from "./PoolActiveJobs";
+import { PoolAccountsList } from "./PoolAccountsList";
 import { PoolToastProvider } from "./PoolToast";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,9 @@ export default async function PoolPage() {
 
       {/* === Section 4 — Active jobs (5s polling, conditional render) === */}
       <PoolActiveJobs />
+
+      {/* === Section 5 — Accounts list === */}
+      <PoolAccountsList />
     </PoolToastProvider>
   );
 }
