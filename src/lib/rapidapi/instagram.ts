@@ -172,13 +172,25 @@ function pickNumber(v: unknown): number | null {
 export async function fetchInstagramUserInfo(
   usernameOrId: string
 ): Promise<InstagramUserInfo> {
-  // The scraper API exposes /user/?username_or_id=X or /user_by_username/
-  // depending on the version. Use the same base path convention as the
-  // followers call — /user/?username_or_id=X. If the shape doesn't match
-  // we throw and the caller counts it as fetch_info_failed.
-  const json = (await call(
-    `/user/?username_or_id=${encodeURIComponent(usernameOrId)}`
-  )) as RawUserInfo;
+  // Endpoint pattern mirrors /userfollowers/?username_or_id=X — the
+  // provider exposes /userinfo/?username_or_id=X for the per-account
+  // profile stats. If this 404s on another tier we fall back to
+  // /user_by_username/?username=X.
+  let json: RawUserInfo;
+  try {
+    json = (await call(
+      `/userinfo/?username_or_id=${encodeURIComponent(usernameOrId)}`
+    )) as RawUserInfo;
+  } catch (primary) {
+    const msg = (primary as Error).message;
+    if (/\b404\b/.test(msg) || /does not exist/i.test(msg)) {
+      json = (await call(
+        `/user_by_username/?username=${encodeURIComponent(usernameOrId)}`
+      )) as RawUserInfo;
+    } else {
+      throw primary;
+    }
+  }
 
   // Try, in order: data.user.*, data.*, top-level
   const d = json?.data ?? {};
