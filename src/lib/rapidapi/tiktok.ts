@@ -64,3 +64,58 @@ export async function fetchTikTokFollowers(
 
   return { count: json.data.total ?? 0, sample };
 }
+
+// Resolve a @handle to its numeric user_id (+ profile stats). Used by
+// the pool scraper to convert seed usernames before calling the
+// followers endpoint.
+type RawUserInfo = {
+  code?: number;
+  data?: {
+    user?: {
+      id?: string;
+      unique_id?: string;
+      nickname?: string;
+      follower_count?: number;
+      following_count?: number;
+      aweme_count?: number;
+      signature?: string;
+    };
+    stats?: {
+      followerCount?: number;
+      followingCount?: number;
+      videoCount?: number;
+    };
+  };
+};
+
+export type TikTokUserInfo = {
+  userId: string;
+  uniqueId: string;
+  followerCount: number;
+  followingCount: number;
+  mediaCount: number;
+};
+
+export async function fetchTikTokUserByUsername(
+  username: string
+): Promise<TikTokUserInfo> {
+  const json = (await call(
+    `/user/info?unique_id=${encodeURIComponent(username)}`
+  )) as RawUserInfo;
+
+  const u = json?.data?.user;
+  const s = json?.data?.stats;
+  if (!u || !u.id) {
+    throw new Error(
+      `Unexpected TikTok user response: ${JSON.stringify(json).slice(0, 200)}`
+    );
+  }
+
+  return {
+    userId: u.id,
+    uniqueId: u.unique_id ?? username,
+    followerCount: s?.followerCount ?? u.follower_count ?? 0,
+    followingCount: s?.followingCount ?? u.following_count ?? 0,
+    mediaCount: s?.videoCount ?? u.aweme_count ?? 0,
+  };
+}

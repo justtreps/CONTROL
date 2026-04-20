@@ -16,7 +16,10 @@
 
 import { prisma } from "@/lib/prisma";
 import { fetchInstagramFollowers } from "@/lib/rapidapi/instagram";
-import { fetchTikTokFollowers } from "@/lib/rapidapi/tiktok";
+import {
+  fetchTikTokFollowers,
+  fetchTikTokUserByUsername,
+} from "@/lib/rapidapi/tiktok";
 import { getPoolConfig } from "./config";
 
 export type ScrapeStats = {
@@ -173,7 +176,11 @@ export async function runScrapeTranche({
           stats.addedA += added;
           stats.a.pagesDone++;
         } else if (seed.platform === "tiktok") {
-          const { sample } = await fetchTikTokFollowers(seed.username);
+          // TikTok followers endpoint wants a numeric user_id, not the
+          // @handle. Resolve once per seed.
+          const info = await fetchTikTokUserByUsername(seed.username);
+          stats.callsUsed++;
+          const { sample } = await fetchTikTokFollowers(info.userId);
           stats.callsUsed++;
           let added = 0;
           for (const f of sample) {
