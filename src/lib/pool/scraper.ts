@@ -2,25 +2,50 @@
 //
 // Each tranche (called by the orchestrator every minute with ~8s budget)
 // picks ONE seed from PoolSeedAccount and scrapes one page of its
-// followers, OR runs a batch of method-B random-username probes. State
-// is checkpointed in PoolJob.stats so the next tranche resumes exactly
-// where this one stopped.
+// followers. Phase A flow per candidate:
+//   1. Prefilter with what /followers already gives us — reject if
+//      private / verified.
+//   2. Call /user/info to get followers/media/following counts (1 extra
+//      call per candidate; only fires when the prefilter passed).
+//   3. Strict qualify against PoolConfig thresholds.
+//   4. Upsert as status='available' WITH counts stored.
+// Every rejection is counted by reason in stats.candidatesRejected so
+// operators can see exactly why a run produced few accounts.
 //
-// Candidates are upserted as 'available' with minimal info — the
-// health check (lib/pool/health-check.ts) is the authoritative gate
-// that validates follower/media counts against PoolConfig thresholds
-// and invalidates rows that don't qualify.
-//
-// This keeps Method A cheap: one RapidAPI call per seed per tranche.
-// For faster pool builds, trigger multiple scrape jobs in parallel.
+// Method B (random-username probes) remains a stub — not a priority yet.
 
 import { prisma } from "@/lib/prisma";
-import { fetchInstagramFollowers } from "@/lib/rapidapi/instagram";
+import {
+  fetchInstagramFollowers,
+  fetchInstagramUserInfo,
+} from "@/lib/rapidapi/instagram";
 import {
   fetchTikTokFollowers,
   fetchTikTokUserByUsername,
 } from "@/lib/rapidapi/tiktok";
 import { getPoolConfig } from "./config";
+
+export type RejectionBreakdown = {
+  private: number;
+  verified: number;
+  too_many_followers: number;
+  too_much_media: number;
+  too_many_following: number;
+  fetch_info_failed: number;
+  other: number;
+};
+
+function emptyRejections(): RejectionBreakdown {
+  return {
+    private: 0,
+    verified: 0,
+    too_many_followers: 0,
+    too_much_media: 0,
+    too_many_following: 0,
+    fetch_info_failed: 0,
+    other: 0,
+  };
+}
 
 export type ScrapeStats = {
   target: number;
@@ -29,6 +54,10 @@ export type ScrapeStats = {
   addedA: number;
   addedB: number;
   callsUsed: number;
+  seedsProcessed: number;
+  candidatesFetched: number;
+  candidatesQualified: number;
+  candidatesRejected: RejectionBreakdown;
   errors: string[];
   // Phase A checkpoint
   a: {
@@ -54,6 +83,10 @@ export function initScrapeStats(
     addedA: 0,
     addedB: 0,
     callsUsed: 0,
+    seedsProcessed: 0,
+    candidatesFetched: 0,
+    candidatesQualified: 0,
+    candidatesRejected: emptyRejections(),
     errors: [],
     a: {
       doneSeedIds: [],
@@ -63,6 +96,22 @@ export function initScrapeStats(
     },
     b: { attempts: 0 },
   };
+}
+
+// Retro-compat: old in-flight jobs may have stats without the new
+// counters. Hydrate missing fields so the scraper doesn't crash.
+function ensureStatsShape(s: ScrapeStats): ScrapeStats {
+  if (typeof s.seedsProcessed !== "number") s.seedsProcessed = 0;
+  if (typeof s.candidatesFetched !== "number") s.candidatesFetched = 0;
+  if (typeof s.candidatesQualified !== "number") s.candidatesQualified = 0;
+  if (!s.candidatesRejected) s.candidatesRejected = emptyRejections();
+  else {
+    const r = s.candidatesRejected;
+    for (const k of Object.keys(emptyRejections()) as Array<keyof RejectionBreakdown>) {
+      if (typeof r[k] !== "number") r[k] = 0;
+    }
+  }
+  return s;
 }
 
 async function pickNextSeed(
@@ -79,8 +128,6 @@ async function pickNextSeed(
   });
 }
 
-// Run ~one tranche (≤ budgetMs). Mutates and returns the stats.
-// Returns { done: true } once the target is reached or both phases exhausted.
 export async function runScrapeTranche({
   stats,
   budgetMs,
@@ -90,6 +137,7 @@ export async function runScrapeTranche({
   budgetMs: number;
   stopRequested: () => Promise<boolean>;
 }): Promise<{ done: boolean; stats: ScrapeStats }> {
+  ensureStatsShape(stats);
   const cfg = await getPoolConfig();
   const deadline = Date.now() + budgetMs;
 
@@ -99,8 +147,6 @@ export async function runScrapeTranche({
       : [stats.platform];
 
   const wantA = Math.max(1, Math.round(stats.target * cfg.methodARatio));
-
-  // Convenience: how many rows we've actually added so far.
   const totalAdded = () => stats.addedA + stats.addedB;
 
   // --- Phase A ---------------------------------------------------------
@@ -116,11 +162,8 @@ export async function runScrapeTranche({
           platformsToRun[stats.a.doneSeedIds.length % platformsToRun.length];
         const seed = await pickNextSeed(pickFor, stats.a.doneSeedIds);
         if (!seed) {
-          // No more seeds for this platform — try the other one(s).
-          const remaining = platformsToRun.filter(
-            (p) =>
-              p !== pickFor /* in mixed mode rotate through others */
-          );
+          // Rotate to any other available platform.
+          const remaining = platformsToRun.filter((p) => p !== pickFor);
           let replaced = false;
           for (const p of remaining) {
             const s = await pickNextSeed(p, stats.a.doneSeedIds);
@@ -132,10 +175,7 @@ export async function runScrapeTranche({
               break;
             }
           }
-          if (!replaced) {
-            // No more usable seeds — move to Phase B.
-            break;
-          }
+          if (!replaced) break; // No more seeds — advance to Phase B.
         } else {
           stats.a.currentSeedId = seed.id;
           stats.a.seedPlatform = seed.platform;
@@ -143,7 +183,6 @@ export async function runScrapeTranche({
         }
       }
 
-      // Scrape one page for the current seed.
       const seed = await prisma.poolSeedAccount.findUnique({
         where: { id: stats.a.currentSeedId! },
       });
@@ -154,80 +193,21 @@ export async function runScrapeTranche({
 
       try {
         if (seed.platform === "instagram") {
-          const { sample } = await fetchInstagramFollowers(seed.username);
-          stats.callsUsed++;
-          let added = 0;
-          for (const f of sample) {
-            if (cfg.requireNotPrivate && f.is_private) continue;
-            const res = await prisma.testAccount.upsert({
-              where: { platform_username: { platform: "instagram", username: f.username } },
-              update: {}, // already in DB, leave as-is
-              create: {
-                platform: "instagram",
-                username: f.username,
-                userId: f.id,
-                status: "available",
-                scrapeSource: "big_account_followers",
-                scrapeSeedAccount: seed.username,
-              },
-            });
-            if (res.firstSeenAt.getTime() > Date.now() - 2000) added++;
-          }
-          stats.addedA += added;
-          stats.a.pagesDone++;
+          await processInstagramSeed({ seed, stats, cfg });
         } else if (seed.platform === "tiktok") {
-          // TikTok followers endpoint wants a numeric user_id, not the
-          // @handle. Resolve once per seed.
-          const info = await fetchTikTokUserByUsername(seed.username);
-          stats.callsUsed++;
-          const { sample } = await fetchTikTokFollowers(info.userId);
-          stats.callsUsed++;
-          let added = 0;
-          for (const f of sample) {
-            if (cfg.requireNotPrivate /* tiktok followers don't expose is_private */) {
-              // skip — TikTok follower API doesn't give is_private per follower
-            }
-            if (
-              f.follower_count > cfg.maxFollowerCount ||
-              f.aweme_count > cfg.maxMediaCount ||
-              f.following_count > cfg.maxFollowingCount
-            ) {
-              continue;
-            }
-            const res = await prisma.testAccount.upsert({
-              where: {
-                platform_username: {
-                  platform: "tiktok",
-                  username: f.unique_id,
-                },
-              },
-              update: {},
-              create: {
-                platform: "tiktok",
-                username: f.unique_id,
-                userId: f.id,
-                status: "available",
-                lastFollowerCount: f.follower_count,
-                lastMediaCount: f.aweme_count,
-                lastFollowingCount: f.following_count,
-                scrapeSource: "big_account_followers",
-                scrapeSeedAccount: seed.username,
-              },
-            });
-            if (res.firstSeenAt.getTime() > Date.now() - 2000) added++;
-          }
-          stats.addedA += added;
-          stats.a.pagesDone++;
+          await processTikTokSeed({ seed, stats, cfg });
         }
       } catch (e) {
         stats.errors.push(
-          `seed ${seed.username}/${seed.platform}: ${(e as Error).message.slice(0, 120)}`
+          `seed ${seed.username}/${seed.platform}: ${(e as Error).message.slice(0, 160)}`
         );
       }
 
-      // One page per seed for now (cursor support = future improvement).
+      // Close this seed (one page per run for now; multi-page needs a
+      // cursor we don't have yet).
       if (stats.a.pagesDone >= cfg.maxPagesPerSeed || stats.a.pagesDone >= 1) {
         stats.a.doneSeedIds.push(stats.a.currentSeedId!);
+        stats.seedsProcessed++;
         stats.a.currentSeedId = null;
         stats.a.seedPlatform = null;
       }
@@ -236,17 +216,176 @@ export async function runScrapeTranche({
   }
 
   // --- Phase B (random-username probes) ------------------------------
-  // MVP: skipped for now — the IG/TT rapidapi helpers don't expose a
-  // reliable user-info-by-username endpoint yet. Method-A alone builds
-  // a pool from the seeds' followers lists.
+  // MVP stub. Left noop until a generic user-info-by-username helper
+  // exists for method B; Phase A with relaxed thresholds already gives
+  // us a working pool.
   if (stats.phase === "b") {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const _attempts = stats.b.attempts;
-    // Intentional no-op until rapidapi user_info is wired.
+    // noop
   }
 
   const reachedTarget = totalAdded() >= stats.target;
-  const exhausted = stats.phase === "b"; // phase B currently no-op => we're done
-
+  const exhausted = stats.phase === "b";
   return { done: reachedTarget || exhausted, stats };
+}
+
+// ---------- Instagram branch ----------------------------------------------
+
+async function processInstagramSeed({
+  seed,
+  stats,
+  cfg,
+}: {
+  seed: { id: number; username: string; platform: string };
+  stats: ScrapeStats;
+  cfg: {
+    requireNotPrivate: boolean;
+    maxFollowerCount: number;
+    maxMediaCount: number;
+    maxFollowingCount: number;
+    maxRapidapiCallsPerScrapeRun: number;
+  };
+}) {
+  const { sample } = await fetchInstagramFollowers(seed.username);
+  stats.callsUsed++;
+
+  for (const f of sample) {
+    stats.candidatesFetched++;
+
+    // Prefilter: is_verified is a hard NO; private depends on config.
+    if (f.is_verified) {
+      stats.candidatesRejected.verified++;
+      continue;
+    }
+    if (cfg.requireNotPrivate && f.is_private) {
+      stats.candidatesRejected.private++;
+      continue;
+    }
+
+    // Quota guard — never overrun the per-run budget.
+    if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) {
+      stats.candidatesRejected.other++;
+      continue;
+    }
+
+    // Deep fetch for counts.
+    let info;
+    try {
+      info = await fetchInstagramUserInfo(f.username);
+      stats.callsUsed++;
+    } catch (e) {
+      stats.candidatesRejected.fetch_info_failed++;
+      stats.errors.push(
+        `user_info @${f.username}: ${(e as Error).message.slice(0, 120)}`
+      );
+      continue;
+    }
+
+    if (cfg.requireNotPrivate && info.isPrivate) {
+      stats.candidatesRejected.private++;
+      continue;
+    }
+    if (info.followerCount > cfg.maxFollowerCount) {
+      stats.candidatesRejected.too_many_followers++;
+      continue;
+    }
+    if (info.mediaCount > cfg.maxMediaCount) {
+      stats.candidatesRejected.too_much_media++;
+      continue;
+    }
+    if (info.followingCount > cfg.maxFollowingCount) {
+      stats.candidatesRejected.too_many_following++;
+      continue;
+    }
+
+    // Qualified — upsert with real counts.
+    const res = await prisma.testAccount.upsert({
+      where: { platform_username: { platform: "instagram", username: f.username } },
+      update: {},
+      create: {
+        platform: "instagram",
+        username: f.username,
+        userId: f.id,
+        status: "available",
+        lastFollowerCount: info.followerCount,
+        lastMediaCount: info.mediaCount,
+        lastFollowingCount: info.followingCount,
+        scrapeSource: "big_account_followers",
+        scrapeSeedAccount: seed.username,
+      },
+    });
+    if (res.firstSeenAt.getTime() > Date.now() - 2000) {
+      stats.addedA++;
+      stats.candidatesQualified++;
+    }
+  }
+
+  stats.a.pagesDone++;
+}
+
+// ---------- TikTok branch -------------------------------------------------
+// TT follower API already returns follower/following/media counts per
+// follower, so we get everything from a single `/user/followers` call
+// per seed (plus 1 call to resolve the seed's numeric user_id).
+
+async function processTikTokSeed({
+  seed,
+  stats,
+  cfg,
+}: {
+  seed: { id: number; username: string; platform: string };
+  stats: ScrapeStats;
+  cfg: {
+    maxFollowerCount: number;
+    maxMediaCount: number;
+    maxFollowingCount: number;
+  };
+}) {
+  const info = await fetchTikTokUserByUsername(seed.username);
+  stats.callsUsed++;
+  const { sample } = await fetchTikTokFollowers(info.userId);
+  stats.callsUsed++;
+
+  for (const f of sample) {
+    stats.candidatesFetched++;
+
+    if (f.follower_count > cfg.maxFollowerCount) {
+      stats.candidatesRejected.too_many_followers++;
+      continue;
+    }
+    if (f.aweme_count > cfg.maxMediaCount) {
+      stats.candidatesRejected.too_much_media++;
+      continue;
+    }
+    if (f.following_count > cfg.maxFollowingCount) {
+      stats.candidatesRejected.too_many_following++;
+      continue;
+    }
+
+    const res = await prisma.testAccount.upsert({
+      where: {
+        platform_username: {
+          platform: "tiktok",
+          username: f.unique_id,
+        },
+      },
+      update: {},
+      create: {
+        platform: "tiktok",
+        username: f.unique_id,
+        userId: f.id,
+        status: "available",
+        lastFollowerCount: f.follower_count,
+        lastMediaCount: f.aweme_count,
+        lastFollowingCount: f.following_count,
+        scrapeSource: "big_account_followers",
+        scrapeSeedAccount: seed.username,
+      },
+    });
+    if (res.firstSeenAt.getTime() > Date.now() - 2000) {
+      stats.addedA++;
+      stats.candidatesQualified++;
+    }
+  }
+
+  stats.a.pagesDone++;
 }

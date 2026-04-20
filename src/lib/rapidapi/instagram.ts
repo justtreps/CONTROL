@@ -100,3 +100,137 @@ export async function fetchInstagramFollowers(
 
   return { count, sample };
 }
+
+// Per-account profile info used by the pool scraper to validate that
+// a candidate is "near-virgin" before inserting. One call per candidate
+// (pre-filtered by is_private / is_verified upstream to save quota).
+export type InstagramUserInfo = {
+  userId: string;
+  username: string;
+  followerCount: number;
+  followingCount: number;
+  mediaCount: number;
+  isPrivate: boolean;
+  isVerified: boolean;
+};
+
+type RawUserInfo = {
+  data?: {
+    // Legacy graphql shape
+    edge_followed_by?: { count?: number };
+    edge_follow?: { count?: number };
+    edge_owner_to_timeline_media?: { count?: number };
+    is_private?: boolean;
+    is_verified?: boolean;
+    id?: string;
+    username?: string;
+    // Flat shape — mirrors the /userfollowers/ items[] style
+    pk?: string;
+    pk_id?: string;
+    full_name?: string;
+    follower_count?: number;
+    following_count?: number;
+    media_count?: number;
+    // Some endpoints nest user under data.user
+    user?: {
+      pk?: string;
+      pk_id?: string;
+      id?: string;
+      username?: string;
+      follower_count?: number;
+      following_count?: number;
+      media_count?: number;
+      is_private?: boolean;
+      is_verified?: boolean;
+    };
+  };
+  // Some endpoints return top-level user stats
+  follower_count?: number;
+  following_count?: number;
+  media_count?: number;
+  is_private?: boolean;
+  is_verified?: boolean;
+  pk?: string;
+  username?: string;
+};
+
+function pickString(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  return "";
+}
+
+function pickNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+export async function fetchInstagramUserInfo(
+  usernameOrId: string
+): Promise<InstagramUserInfo> {
+  // The scraper API exposes /user/?username_or_id=X or /user_by_username/
+  // depending on the version. Use the same base path convention as the
+  // followers call — /user/?username_or_id=X. If the shape doesn't match
+  // we throw and the caller counts it as fetch_info_failed.
+  const json = (await call(
+    `/user/?username_or_id=${encodeURIComponent(usernameOrId)}`
+  )) as RawUserInfo;
+
+  // Try, in order: data.user.*, data.*, top-level
+  const d = json?.data ?? {};
+  const u = d.user ?? {};
+
+  const followerCount =
+    pickNumber(u.follower_count) ??
+    pickNumber(d.follower_count) ??
+    pickNumber(d.edge_followed_by?.count) ??
+    pickNumber(json.follower_count);
+
+  const followingCount =
+    pickNumber(u.following_count) ??
+    pickNumber(d.following_count) ??
+    pickNumber(d.edge_follow?.count) ??
+    pickNumber(json.following_count);
+
+  const mediaCount =
+    pickNumber(u.media_count) ??
+    pickNumber(d.media_count) ??
+    pickNumber(d.edge_owner_to_timeline_media?.count) ??
+    pickNumber(json.media_count);
+
+  if (
+    followerCount === null ||
+    followingCount === null ||
+    mediaCount === null
+  ) {
+    throw new Error(
+      `Unexpected Instagram user_info response: ${JSON.stringify(json).slice(0, 200)}`
+    );
+  }
+
+  const userId =
+    pickString(u.id) ||
+    pickString(u.pk) ||
+    pickString(u.pk_id) ||
+    pickString(d.id) ||
+    pickString(d.pk) ||
+    pickString(d.pk_id) ||
+    pickString(json.pk) ||
+    "";
+  const username =
+    pickString(u.username) || pickString(d.username) || pickString(json.username) || usernameOrId;
+
+  return {
+    userId: userId || username,
+    username,
+    followerCount,
+    followingCount,
+    mediaCount,
+    isPrivate: Boolean(u.is_private ?? d.is_private ?? json.is_private),
+    isVerified: Boolean(u.is_verified ?? d.is_verified ?? json.is_verified),
+  };
+}

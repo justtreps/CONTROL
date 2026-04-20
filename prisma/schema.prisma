@@ -103,10 +103,13 @@ model PoolConfig {
   healthCheckEnabled               Boolean  @default(true)
   healthCheckCron                  String   @default("0 3 * * *")
 
-  // Fresh-account qualification thresholds
-  maxFollowerCount                 Int      @default(0)
-  maxMediaCount                    Int      @default(0)
-  maxFollowingCount                Int      @default(20)
+  // Fresh-account qualification thresholds.
+  // Defaults relaxed from 0/0/20 (never anyone matched) to 10/2/100
+  // so followers of big accounts that have a handful of posts / a
+  // handful of followers still qualify as "near-virgin".
+  maxFollowerCount                 Int      @default(10)
+  maxMediaCount                    Int      @default(2)
+  maxFollowingCount                Int      @default(100)
   requireNotPrivate                Boolean  @default(true)
 
   // Invalidation rules applied by the health check
