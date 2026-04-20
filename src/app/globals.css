@@ -118,47 +118,47 @@ body.hovering-interactive #cursor-brackets::after {
   border-color: var(--accent);
 }
 
-/* === Continuous glitch on hover — RGB-split jitter on the brackets === */
-@keyframes cursor-glitch-jitter-a {
-  0%, 100% { transform: translate(0, 0); border-color: var(--accent); }
-  20%      { transform: translate(-1.5px, 1px); border-color: #00E5FF; }
-  40%      { transform: translate(1px, -1.5px); border-color: var(--accent); }
-  60%      { transform: translate(-1px, -1px); border-color: #FFFFFF; }
-  80%      { transform: translate(1.5px, 1px); border-color: var(--accent); }
-}
-@keyframes cursor-glitch-jitter-b {
-  0%, 100% { transform: translate(0, 0); border-color: var(--accent); }
-  25%      { transform: translate(1.5px, -1px); border-color: var(--accent); }
-  50%      { transform: translate(-1px, 1.5px); border-color: #00E5FF; }
-  75%      { transform: translate(1px, 1px); border-color: var(--accent); }
-}
-body.hovering-interactive #cursor-brackets::before {
-  animation: cursor-glitch-jitter-a 0.24s steps(5) infinite;
-}
-body.hovering-interactive #cursor-brackets::after {
-  animation: cursor-glitch-jitter-b 0.28s steps(4) infinite;
+/* === Continuous glitch on hovered element ====================
+   Hard horizontal chromatic aberration (cyan left / red right) that
+   pulses through different offsets with steps() for a choppy "decompose"
+   feel. Only the text-shadow moves — no layout shift, no transform on
+   the element itself, so readability is preserved.
+
+   Applied to .interactive:hover. text-shadow is inherited to child
+   text, so hovering a button/link container glitches its label too. */
+
+@keyframes hover-glitch-rgb {
+  0%   { text-shadow: -2px 0 0 #00E5FF, 2px 0 0 #FF3300; }
+  12%  { text-shadow: -5px 0 0 #00E5FF, 5px 0 0 #FF3300; }
+  24%  { text-shadow: -1px 0 0 #00E5FF, 1px 0 0 #FF3300, 0 -1px 0 rgba(255,255,255,0.6); }
+  36%  { text-shadow: -3px 0 0 #00E5FF, 3px 0 0 #FF3300; }
+  48%  { text-shadow: -6px 0 0 #00E5FF, 6px 0 0 #FF3300; }
+  60%  { text-shadow: -2px 0 0 #00E5FF, 2px 0 0 #FF3300, 0 1px 0 rgba(255,255,255,0.5); }
+  72%  { text-shadow: -4px 0 0 #00E5FF, 4px 0 0 #FF3300; }
+  84%  { text-shadow: -1px 0 0 #00E5FF, 1px 0 0 #FF3300; }
+  100% { text-shadow: -2px 0 0 #00E5FF, 2px 0 0 #FF3300; }
 }
 
-/* Glitch on red zones keeps the black outline but shifts through white
-   flashes for the chromatic aberration instead of cyan (keeps contrast). */
-@keyframes cursor-glitch-jitter-a-black {
-  0%, 100% { transform: translate(0, 0); border-color: #000; }
-  20%      { transform: translate(-1.5px, 1px); border-color: #FFFFFF; }
-  40%      { transform: translate(1px, -1.5px); border-color: #000; }
-  60%      { transform: translate(-1px, -1px); border-color: #FFFFFF; }
-  80%      { transform: translate(1.5px, 1px); border-color: #000; }
+.interactive:hover {
+  animation: hover-glitch-rgb 0.22s steps(9) infinite;
 }
-@keyframes cursor-glitch-jitter-b-black {
-  0%, 100% { transform: translate(0, 0); border-color: #000; }
-  25%      { transform: translate(1.5px, -1px); border-color: #000; }
-  50%      { transform: translate(-1px, 1.5px); border-color: #FFFFFF; }
-  75%      { transform: translate(1px, 1px); border-color: #000; }
+
+/* On red zones (cursor-on-red), cyan/red don't read — use black/white
+   for the chromatic split instead. */
+@keyframes hover-glitch-bw {
+  0%   { text-shadow: -2px 0 0 #000, 2px 0 0 #FFF; }
+  12%  { text-shadow: -5px 0 0 #000, 5px 0 0 #FFF; }
+  24%  { text-shadow: -1px 0 0 #000, 1px 0 0 #FFF; }
+  36%  { text-shadow: -3px 0 0 #000, 3px 0 0 #FFF; }
+  48%  { text-shadow: -6px 0 0 #000, 6px 0 0 #FFF; }
+  60%  { text-shadow: -2px 0 0 #000, 2px 0 0 #FFF; }
+  72%  { text-shadow: -4px 0 0 #000, 4px 0 0 #FFF; }
+  84%  { text-shadow: -1px 0 0 #000, 1px 0 0 #FFF; }
+  100% { text-shadow: -2px 0 0 #000, 2px 0 0 #FFF; }
 }
-body.cursor-on-red.hovering-interactive #cursor-brackets::before {
-  animation: cursor-glitch-jitter-a-black 0.24s steps(5) infinite;
-}
-body.cursor-on-red.hovering-interactive #cursor-brackets::after {
-  animation: cursor-glitch-jitter-b-black 0.28s steps(4) infinite;
+
+body.cursor-on-red .interactive:hover {
+  animation: hover-glitch-bw 0.22s steps(9) infinite;
 }
 
 /* === Cursor on red zones (login right panel, LoadingScreen, danger zones) === */
