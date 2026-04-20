@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
 import { fetchFollowerSnapshot, type Platform } from "@/lib/rapidapi";
-import { pickAndAssignAccount } from "@/lib/pool/assign";
+import { pickAndAssignAccount, invalidateAccount } from "@/lib/pool/assign";
+import { fetchOracleFor } from "@/lib/pool/oracle";
 import type { Service, TestAccount } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -115,15 +116,75 @@ export async function runTestBot(
         continue;
       }
 
-      const baseline = await fetchFollowerSnapshot(
-        service.platform as Platform,
-        account.username,
+      // ─── Baseline-at-placement ────────────────────────────────────
+      // Just before the BulkMedya /add call, re-read the account from
+      // the oracle by stable user_id. Gives us:
+      //  1. The CURRENT username (in case the account renamed since
+      //     scrape — so the BulkMedya link lands on the right profile)
+      //  2. A fresh follower_count used as the TestOrder baseline
+      //  3. A chance to abort cleanly if the account is now a ghost
+      //     or drifted past the invalidate thresholds
+      const oracle = await fetchOracleFor(
+        service.platform,
         account.userId
       );
+      if (!oracle.ok) {
+        if (oracle.reason === "ghost" && poolPick) {
+          // Account vanished between scrape and now → permanently invalid.
+          await invalidateAccount(poolPick.id, "deleted");
+          assignedAccountId = null;
+        } else if (poolPick) {
+          // Transient oracle error — release the account so we can retry later.
+          await prisma.testAccount.update({
+            where: { id: poolPick.id },
+            data: {
+              status: "available",
+              assignedAt: null,
+              assignedTestOrderId: null,
+              active: true,
+            },
+          });
+          assignedAccountId = null;
+        }
+        result.errors.push({
+          serviceId: service.id,
+          serviceName: service.name,
+          reason:
+            oracle.reason === "ghost"
+              ? `account_ghost_${account.userId}`
+              : `oracle_error: ${oracle.message.slice(0, 80)}`,
+        });
+        continue;
+      }
+
+      // Use the oracle's CURRENT username for the target URL and for
+      // realism sampling. Sync the DB row if it drifted.
+      const currentUsername = oracle.username || account.username;
+      if (currentUsername !== account.username) {
+        await prisma.testAccount.update({
+          where: { id: account.id },
+          data: { username: currentUsername },
+        });
+        account = { ...account, username: currentUsername };
+      }
+
+      // Realism sample still comes from fetchFollowerSnapshot (it does
+      // a /followers call and scores the sample). Baseline count comes
+      // from the oracle — it's the authoritative number at placement time.
+      const sample = await fetchFollowerSnapshot(
+        service.platform as Platform,
+        currentUsername,
+        oracle.userId
+      );
+      const baseline = {
+        count: oracle.followerCount,
+        realismScore: sample.realismScore,
+        realismData: sample.realismData,
+      };
 
       const order = await placeOrder({
         service: service.bulkmedyaId,
-        link: targetUrlFor(service.platform, account.username),
+        link: targetUrlFor(service.platform, currentUsername),
         quantity: service.minQuantity,
       });
 
