@@ -11,6 +11,7 @@ type Account = {
   username: string;
   userId: string;
   status: string;
+  invalidReason: string | null;
   scrapeSource: string | null;
   firstSeenAt: string;
   lastCheckedAt: string;
@@ -31,6 +32,14 @@ const STATUS_COLOR: Record<string, string> = {
   consumed: "#999999",
   invalid: "#FFFFFF",
   archived: "#666666",
+};
+
+const REASON_SHORT: Record<string, string> = {
+  deleted: "DELETED",
+  became_active: "ACTIVE",
+  became_private: "PRIVATE",
+  banned: "BANNED",
+  manual: "MANUAL",
 };
 
 const FILTER =
@@ -242,13 +251,20 @@ export function PoolAccountsList() {
                   <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
                     {r.platform}
                   </td>
-                  <td className="px-3 py-3">
+                  <td className="px-3 py-3 whitespace-nowrap">
                     <span
                       className="font-mono text-xs tracking-widest uppercase"
                       style={{ color: STATUS_COLOR[r.status] ?? "#FFFFFF" }}
                     >
                       {r.status.toUpperCase()}
                     </span>
+                    {r.status === "invalid" && r.invalidReason && (
+                      <span className="ml-2 font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                        ·{" "}
+                        {REASON_SHORT[r.invalidReason] ??
+                          r.invalidReason.toUpperCase()}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase">
                     {r.scrapeSource ?? "—"}

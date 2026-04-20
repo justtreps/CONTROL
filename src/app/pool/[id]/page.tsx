@@ -15,6 +15,16 @@ const STATUS_TOKEN: Record<string, { label: string; color: string }> = {
   archived: { label: "ARCHIVED", color: "#444444" },
 };
 
+// Secondary badge used when status='invalid' — colors per-reason so a
+// "deleted" row looks clearly different from a "became_active" row.
+const REASON_TOKEN: Record<string, { label: string; color: string }> = {
+  deleted: { label: "DELETED", color: "#FF3300" },
+  became_active: { label: "BECAME ACTIVE", color: "#FFCC00" },
+  became_private: { label: "BECAME PRIVATE", color: "#FFFFFF" },
+  banned: { label: "BANNED", color: "#FF3300" },
+  manual: { label: "MANUAL INVALIDATE", color: "#666666" },
+};
+
 export default async function PoolAccountPage({
   params,
 }: {
@@ -38,6 +48,13 @@ export default async function PoolAccountPage({
   if (!account) return notFound();
 
   const statusCfg = STATUS_TOKEN[account.status] ?? STATUS_TOKEN.available;
+  const reasonCfg =
+    account.status === "invalid" && account.invalidReason
+      ? REASON_TOKEN[account.invalidReason] ?? {
+          label: account.invalidReason.toUpperCase(),
+          color: "#666666",
+        }
+      : null;
   const externalUrl =
     account.platform === "instagram"
       ? `https://www.instagram.com/${account.username}/`
@@ -67,13 +84,24 @@ export default async function PoolAccountPage({
               <h1 className="brand font-display text-4xl sm:text-5xl md:text-7xl uppercase tracking-tight leading-[0.9] text-white m-0 break-words">
                 @{account.username}
               </h1>
-              <div className="mt-4 flex items-center gap-3">
+              <div className="mt-4 flex items-center gap-3 flex-wrap">
                 <span
                   className="inline-block border px-3 py-1 font-mono text-xs tracking-widest uppercase"
                   style={{ borderColor: statusCfg.color, color: statusCfg.color }}
                 >
                   [ {statusCfg.label} ]
                 </span>
+                {reasonCfg && (
+                  <span
+                    className="inline-block border px-3 py-1 font-mono text-xs tracking-widest uppercase"
+                    style={{
+                      borderColor: reasonCfg.color,
+                      color: reasonCfg.color,
+                    }}
+                  >
+                    [ {reasonCfg.label} ]
+                  </span>
+                )}
                 {account.scrapeSource && (
                   <span className="font-mono text-xs text-[#666666] tracking-widest uppercase">
                     SOURCE: {account.scrapeSource.replace(/_/g, " ")}
@@ -96,7 +124,17 @@ export default async function PoolAccountPage({
               {account.invalidatedAt && (
                 <BriefRow
                   label="INVALIDATED"
-                  value={`${fmt(account.invalidatedAt)} (${account.invalidReason ?? "?"})`}
+                  value={fmt(account.invalidatedAt)}
+                  accent
+                />
+              )}
+              {account.invalidReason && (
+                <BriefRow
+                  label="REASON"
+                  value={
+                    (REASON_TOKEN[account.invalidReason]?.label ??
+                      account.invalidReason.toUpperCase())
+                  }
                   accent
                 />
               )}
