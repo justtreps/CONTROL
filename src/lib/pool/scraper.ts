@@ -15,14 +15,12 @@
 // Method B (random-username probes) remains a stub — not a priority yet.
 
 import { prisma } from "@/lib/prisma";
-import {
-  fetchInstagramFollowers,
-  fetchInstagramUserInfo,
-} from "@/lib/rapidapi/instagram";
+import { fetchInstagramFollowers } from "@/lib/rapidapi/instagram";
 import {
   fetchTikTokFollowers,
   fetchTikTokUserByUsername,
 } from "@/lib/rapidapi/tiktok";
+import { fetchIgOracle, fetchTtOracle } from "./oracle";
 import { getPoolConfig } from "./config";
 
 export type RejectionBreakdown = {
@@ -32,6 +30,7 @@ export type RejectionBreakdown = {
   too_much_media: number;
   too_many_following: number;
   fetch_info_failed: number;
+  ghost: number;
   other: number;
 };
 
@@ -43,6 +42,7 @@ function emptyRejections(): RejectionBreakdown {
     too_much_media: 0,
     too_many_following: 0,
     fetch_info_failed: 0,
+    ghost: 0,
     other: 0,
   };
 }
@@ -267,48 +267,57 @@ async function processInstagramSeed({
       continue;
     }
 
-    // Deep fetch for counts.
-    let info;
-    try {
-      info = await fetchInstagramUserInfo(f.username);
-      stats.callsUsed++;
-    } catch (e) {
-      stats.candidatesRejected.fetch_info_failed++;
-      stats.errors.push(
-        `user_info @${f.username}: ${(e as Error).message.slice(0, 120)}`
-      );
+    // Deep fetch for counts via the oracle (RapidAPI /userinfo by
+    // user_id). Using the stable id dodges the race where a user
+    // renames between /followers (T0) and /userinfo (T1) and the
+    // username lookup 404s.
+    const oracle = await fetchIgOracle(f.id);
+    stats.callsUsed++;
+
+    if (!oracle.ok) {
+      if (oracle.reason === "ghost") {
+        stats.candidatesRejected.ghost++;
+      } else {
+        stats.candidatesRejected.fetch_info_failed++;
+        stats.errors.push(
+          `oracle @${f.username}/${f.id}: ${oracle.message.slice(0, 120)}`
+        );
+      }
       continue;
     }
 
-    if (cfg.requireNotPrivate && info.isPrivate) {
+    if (cfg.requireNotPrivate && oracle.isPrivate) {
       stats.candidatesRejected.private++;
       continue;
     }
-    if (info.followerCount > cfg.maxFollowerCount) {
+    if (oracle.followerCount > cfg.maxFollowerCount) {
       stats.candidatesRejected.too_many_followers++;
       continue;
     }
-    if (info.mediaCount > cfg.maxMediaCount) {
+    if (oracle.mediaCount > cfg.maxMediaCount) {
       stats.candidatesRejected.too_much_media++;
       continue;
     }
-    if (info.followingCount > cfg.maxFollowingCount) {
+    if (oracle.followingCount > cfg.maxFollowingCount) {
       stats.candidatesRejected.too_many_following++;
       continue;
     }
 
-    // Qualified — upsert with real counts.
+    // Qualified — upsert with the oracle's CURRENT username (stable
+    // user_id is the dedup key in spirit, but Prisma's unique index is
+    // [platform, username] so we write the oracle username there).
+    const storedUsername = oracle.username || f.username;
     const res = await prisma.testAccount.upsert({
-      where: { platform_username: { platform: "instagram", username: f.username } },
+      where: { platform_username: { platform: "instagram", username: storedUsername } },
       update: {},
       create: {
         platform: "instagram",
-        username: f.username,
-        userId: f.id,
+        username: storedUsername,
+        userId: oracle.userId,
         status: "available",
-        lastFollowerCount: info.followerCount,
-        lastMediaCount: info.mediaCount,
-        lastFollowingCount: info.followingCount,
+        lastFollowerCount: oracle.followerCount,
+        lastMediaCount: oracle.mediaCount,
+        lastFollowingCount: oracle.followingCount,
         scrapeSource: "big_account_followers",
         scrapeSeedAccount: seed.username,
       },
@@ -348,6 +357,7 @@ async function processTikTokSeed({
   for (const f of sample) {
     stats.candidatesFetched++;
 
+    // Cheap prefilter from the /followers payload (no extra call).
     if (f.follower_count > cfg.maxFollowerCount) {
       stats.candidatesRejected.too_many_followers++;
       continue;
@@ -361,22 +371,54 @@ async function processTikTokSeed({
       continue;
     }
 
+    // Cross-validate via oracle by user_id — catches "ghost" cases
+    // where the follower object is stale (account deleted/banned
+    // between the /followers snapshot and now).
+    const oracle = await fetchTtOracle(f.id);
+    stats.callsUsed++;
+    if (!oracle.ok) {
+      if (oracle.reason === "ghost") stats.candidatesRejected.ghost++;
+      else {
+        stats.candidatesRejected.fetch_info_failed++;
+        stats.errors.push(
+          `oracle @${f.unique_id}/${f.id}: ${oracle.message.slice(0, 120)}`
+        );
+      }
+      continue;
+    }
+
+    // Re-qualify with the fresh oracle counts (they may differ from
+    // the /followers snapshot).
+    if (oracle.followerCount > cfg.maxFollowerCount) {
+      stats.candidatesRejected.too_many_followers++;
+      continue;
+    }
+    if (oracle.mediaCount > cfg.maxMediaCount) {
+      stats.candidatesRejected.too_much_media++;
+      continue;
+    }
+    if (oracle.followingCount > cfg.maxFollowingCount) {
+      stats.candidatesRejected.too_many_following++;
+      continue;
+    }
+
+    const storedUsername = oracle.username || f.unique_id;
     const res = await prisma.testAccount.upsert({
       where: {
         platform_username: {
           platform: "tiktok",
-          username: f.unique_id,
+          username: storedUsername,
         },
       },
       update: {},
       create: {
         platform: "tiktok",
-        username: f.unique_id,
-        userId: f.id,
+        username: storedUsername,
+        userId: oracle.userId,
         status: "available",
-        lastFollowerCount: f.follower_count,
-        lastMediaCount: f.aweme_count,
-        lastFollowingCount: f.following_count,
+        lastFollowerCount: oracle.followerCount,
+        lastMediaCount: oracle.mediaCount,
+        lastFollowingCount: oracle.followingCount,
         scrapeSource: "big_account_followers",
         scrapeSeedAccount: seed.username,
       },

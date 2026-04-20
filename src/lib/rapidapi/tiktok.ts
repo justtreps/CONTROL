@@ -119,3 +119,38 @@ export async function fetchTikTokUserByUsername(
     mediaCount: s?.videoCount ?? u.aweme_count ?? 0,
   };
 }
+
+// Resolve by numeric user_id. Used by the pool oracle to verify that
+// a follower returned by /user/followers still exists under the same
+// stable id + fetch fresh counts. Returns null on 404-ish responses
+// so the caller can reject as 'ghost' cleanly.
+export async function fetchTikTokUserByUserId(
+  userId: string
+): Promise<TikTokUserInfo | null> {
+  const json = (await call(
+    `/user/info?user_id=${encodeURIComponent(userId)}`
+  )) as RawUserInfo & { msg?: string };
+
+  if (json?.code !== 0) {
+    // TikTok wraps errors in { code: -1, msg: "..." }
+    const msg = (json.msg ?? "").toString().toLowerCase();
+    if (msg.includes("not found") || msg.includes("userinfo is failed")) {
+      return null;
+    }
+    throw new Error(
+      `Unexpected TikTok user response: ${JSON.stringify(json).slice(0, 200)}`
+    );
+  }
+
+  const u = json?.data?.user;
+  const s = json?.data?.stats;
+  if (!u || !u.id) return null;
+
+  return {
+    userId: u.id,
+    uniqueId: u.unique_id ?? "",
+    followerCount: s?.followerCount ?? u.follower_count ?? 0,
+    followingCount: s?.followingCount ?? u.following_count ?? 0,
+    mediaCount: s?.videoCount ?? u.aweme_count ?? 0,
+  };
+}

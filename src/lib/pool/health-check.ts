@@ -1,12 +1,13 @@
 // Pool health check — verifies accounts are still virgin.
 //
 // Iterates through 'available' accounts ordered by lastCheckedAt ASC
-// (oldest first), calls RapidAPI user-info, and either updates the
-// counts or invalidates the row per PoolConfig rules:
-//   - 404 / persistent error  → invalid_reason='deleted'
-//   - follower > threshold     → 'became_active'
-//   - media > threshold        → 'became_active'
-//   - is_private (IG only)     → 'became_private'
+// (oldest first), calls the oracle (lib/pool/oracle.ts), and either
+// updates counts or invalidates per PoolConfig rules:
+//   - ghost (RapidAPI says 'Not found')  → invalid_reason='deleted'
+//   - follower_count > threshold          → 'became_active'
+//   - media_count > threshold             → 'became_active'
+//   - is_private (IG only)                → 'became_private'
+//   - oracle returned a different username → UPDATE username in place
 //
 // Tranche-based like the scraper: checkpoint cursor lives in
 // PoolJob.stats so a killed Vercel function resumes cleanly.
@@ -15,11 +16,8 @@
 // platform AND auto_refill_enabled=true, a new scrape job is queued.
 
 import { prisma } from "@/lib/prisma";
-import {
-  fetchInstagramFollowers,
-} from "@/lib/rapidapi/instagram";
-import { fetchTikTokFollowers } from "@/lib/rapidapi/tiktok";
 import { getPoolConfig } from "./config";
+import { fetchOracleFor } from "./oracle";
 
 export type HealthStats = {
   platform: "instagram" | "tiktok" | "both";
@@ -48,56 +46,6 @@ export function initHealthStats(
   };
 }
 
-// For MVP we re-use fetchInstagramFollowers/fetchTikTokFollowers as a
-// coarse liveness check on the ACCOUNT's own handle (it confirms the
-// profile exists + gives an approximate follower count on the top of
-// the response). When we add a proper user-info RapidAPI endpoint
-// we'll swap this for a single lightweight call per account.
-async function probe(
-  platform: string,
-  username: string,
-  userId: string
-): Promise<{
-  ok: true;
-  followerCount: number;
-  mediaCount: number;
-  followingCount: number;
-  isPrivate: boolean;
-} | { ok: false; status: "deleted" | "other"; message: string }> {
-  try {
-    if (platform === "instagram") {
-      const { count, sample } = await fetchInstagramFollowers(username);
-      // We don't have per-account media/following from this endpoint — leave
-      // media/following at 0 so only follower_count + is_private are checked.
-      const first = sample[0];
-      return {
-        ok: true,
-        followerCount: count,
-        mediaCount: 0,
-        followingCount: 0,
-        isPrivate: Boolean(first?.is_private),
-      };
-    }
-    if (platform === "tiktok") {
-      const { count } = await fetchTikTokFollowers(userId);
-      return {
-        ok: true,
-        followerCount: count,
-        mediaCount: 0,
-        followingCount: 0,
-        isPrivate: false,
-      };
-    }
-  } catch (e) {
-    const msg = (e as Error).message;
-    if (/\b404\b/.test(msg) || /not found/i.test(msg)) {
-      return { ok: false, status: "deleted", message: msg };
-    }
-    return { ok: false, status: "other", message: msg };
-  }
-  return { ok: false, status: "other", message: "unsupported platform" };
-}
-
 export async function runHealthCheckTranche({
   stats,
   budgetMs,
@@ -113,7 +61,6 @@ export async function runHealthCheckTranche({
   const platforms: string[] =
     stats.platform === "both" ? ["instagram", "tiktok"] : [stats.platform];
 
-  // Within each tranche, pull a small sub-batch (10 accounts) and process.
   while (Date.now() < deadline) {
     if (await stopRequested()) return { done: false, stats };
     if (stats.callsUsed >= cfg.maxRapidapiCallsPerHealthcheck)
@@ -134,13 +81,13 @@ export async function runHealthCheckTranche({
     for (const r of rows) {
       if (Date.now() > deadline) break;
 
-      const res = await probe(r.platform, r.username, r.userId);
+      const oracle = await fetchOracleFor(r.platform, r.userId);
       stats.callsUsed++;
       stats.checked++;
       stats.lastProcessedId = r.id;
 
-      if (!res.ok) {
-        if (res.status === "deleted") {
+      if (!oracle.ok) {
+        if (oracle.reason === "ghost") {
           await prisma.testAccount.update({
             where: { id: r.id },
             data: {
@@ -153,7 +100,7 @@ export async function runHealthCheckTranche({
           });
           stats.invalidated++;
         } else {
-          stats.errors.push(`#${r.id}: ${res.message.slice(0, 100)}`);
+          stats.errors.push(`#${r.id}: ${oracle.message.slice(0, 100)}`);
           await prisma.testAccount.update({
             where: { id: r.id },
             data: { lastCheckedAt: new Date() },
@@ -162,11 +109,19 @@ export async function runHealthCheckTranche({
         continue;
       }
 
-      // Qualify against rules
+      // Track username drift so the row stays addressable by the CURRENT
+      // handle (needed for BulkMedya link construction).
+      const renamed =
+        oracle.username.length > 0 &&
+        oracle.username.toLowerCase() !== r.username.toLowerCase();
+
       let invalidReason: string | null = null;
-      if (res.followerCount > cfg.invalidateIfFollowerAbove) invalidReason = "became_active";
-      else if (res.mediaCount > cfg.invalidateIfMediaAbove) invalidReason = "became_active";
-      else if (r.platform === "instagram" && res.isPrivate) invalidReason = "became_private";
+      if (oracle.followerCount > cfg.invalidateIfFollowerAbove)
+        invalidReason = "became_active";
+      else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
+        invalidReason = "became_active";
+      else if (r.platform === "instagram" && oracle.isPrivate)
+        invalidReason = "became_private";
 
       await prisma.testAccount.update({
         where: { id: r.id },
@@ -176,16 +131,18 @@ export async function runHealthCheckTranche({
               invalidReason,
               invalidatedAt: new Date(),
               lastCheckedAt: new Date(),
-              lastFollowerCount: res.followerCount,
-              lastMediaCount: res.mediaCount,
-              lastFollowingCount: res.followingCount,
+              lastFollowerCount: oracle.followerCount,
+              lastMediaCount: oracle.mediaCount,
+              lastFollowingCount: oracle.followingCount,
               active: false,
+              ...(renamed ? { username: oracle.username } : {}),
             }
           : {
               lastCheckedAt: new Date(),
-              lastFollowerCount: res.followerCount,
-              lastMediaCount: res.mediaCount,
-              lastFollowingCount: res.followingCount,
+              lastFollowerCount: oracle.followerCount,
+              lastMediaCount: oracle.mediaCount,
+              lastFollowingCount: oracle.followingCount,
+              ...(renamed ? { username: oracle.username } : {}),
             },
       });
       if (invalidReason) stats.invalidated++;
