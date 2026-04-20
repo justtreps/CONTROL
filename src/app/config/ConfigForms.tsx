@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useLoading } from "@/components/LoadingContext";
@@ -303,19 +304,22 @@ export function ConfigForms({
                 {testAccounts.map((a) => (
                   <li
                     key={a.id}
-                    className="flex items-center justify-between py-3 font-mono text-xs tracking-widest uppercase"
+                    className="flex items-center justify-between py-3 font-mono text-xs tracking-widest uppercase gap-3"
                   >
-                    <div>
+                    <Link
+                      href={`/pool/${a.id}`}
+                      className="interactive flex-1 min-w-0 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] hover:pl-2 transition-all truncate block"
+                    >
                       <span className="text-white">{a.platform}</span>
                       <span className="ml-2 text-[#666666]">@{a.username}</span>
                       <span className="ml-2 text-[#666666]/60">
                         ID:{a.userId}
                       </span>
-                    </div>
+                    </Link>
                     <button
                       type="button"
                       onClick={() => removeAccount(a.id)}
-                      className="interactive text-[#FF3300] hover:text-white transition-colors"
+                      className="interactive flex-shrink-0 text-[#FF3300] hover:text-white transition-colors"
                     >
                       [ SUPPRIMER ]
                     </button>
