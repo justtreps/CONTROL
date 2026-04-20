@@ -41,10 +41,122 @@ model TestAccount {
   active       Boolean   @default(true)
   lastTestedAt DateTime?
   createdAt    DateTime  @default(now())
-  testOrders   TestOrder[]
+
+  // ── Pool system extensions (see pool-full-control.md) ──
+  // Lifecycle state for accounts in the pool:
+  //   available → assigned → consumed  (normal happy path, 1 account = 1 test)
+  //   available → invalid              (disqualified by health check)
+  //   consumed|invalid → archived      (after 90d, via cleanup job)
+  status                 String    @default("available")
+
+  assignedTestOrderId    Int?
+  assignedAt             DateTime?
+  consumedAt             DateTime?
+
+  firstSeenAt            DateTime  @default(now())
+  lastCheckedAt          DateTime  @default(now())
+  lastFollowerCount      Int?
+  lastMediaCount         Int?
+  lastFollowingCount     Int?
+
+  // 'big_account_followers' | 'random_username' | 'manual'
+  scrapeSource           String?
+  scrapeSeedAccount      String?
+
+  // 'banned' | 'became_active' | 'became_private' | 'deleted' | 'other'
+  invalidReason          String?
+  invalidatedAt          DateTime?
+
+  notes                  String?
+
+  testOrders             TestOrder[]
 
   @@unique([platform, username])
   @@index([platform, active])
+  @@index([platform, status])
+  @@index([status, assignedAt])
+  @@index([platform, status, firstSeenAt])
+  @@index([platform, userId])
+}
+
+// Single-row config for the pool system (id=1). Editable from the /pool UI.
+model PoolConfig {
+  id                               Int      @id @default(1)
+
+  // Auto-refill
+  autoRefillEnabled                Boolean  @default(true)
+  refillThresholdInstagram         Int      @default(500)
+  refillTargetInstagram            Int      @default(1000)
+  refillThresholdTiktok            Int      @default(500)
+  refillTargetTiktok               Int      @default(1000)
+
+  // RapidAPI budget caps per run
+  maxRapidapiCallsPerScrapeRun     Int      @default(10000)
+  maxRapidapiCallsPerHealthcheck   Int      @default(1000)
+  maxAttemptsMethodB               Int      @default(5000)
+  maxPagesPerSeed                  Int      @default(50)
+
+  // Split between big-account scraping (A) and random-username probing (B)
+  methodARatio                     Float    @default(0.7)
+
+  // Health check schedule (cron expression — read by the orchestrator)
+  healthCheckEnabled               Boolean  @default(true)
+  healthCheckCron                  String   @default("0 3 * * *")
+
+  // Fresh-account qualification thresholds
+  maxFollowerCount                 Int      @default(0)
+  maxMediaCount                    Int      @default(0)
+  maxFollowingCount                Int      @default(20)
+  requireNotPrivate                Boolean  @default(true)
+
+  // Invalidation rules applied by the health check
+  invalidateIfFollowerAbove        Int      @default(5)
+  invalidateIfMediaAbove           Int      @default(0)
+
+  updatedAt                        DateTime @updatedAt
+}
+
+// Big accounts whose followers list we paginate (scrape method A).
+model PoolSeedAccount {
+  id        Int      @id @default(autoincrement())
+  platform  String
+  username  String
+  enabled   Boolean  @default(true)
+  priority  Int      @default(0)
+  addedAt   DateTime @default(now())
+
+  @@unique([platform, username])
+  @@index([platform, enabled, priority])
+}
+
+// Username prefixes for the random-probe scraper (method B).
+model PoolUsernamePrefix {
+  id      Int     @id @default(autoincrement())
+  prefix  String  @unique
+  enabled Boolean @default(true)
+}
+
+// Run history for scrape / health-check / cleanup jobs, with a
+// cooperative stop flag so the orchestrator can bail mid-batch.
+model PoolJob {
+  id             Int      @id @default(autoincrement())
+  jobType        String   // 'scrape' | 'health_check' | 'cleanup'
+  platform       String?  // null = multi-platform
+  trigger        String   // 'manual' | 'cron' | 'auto_refill'
+
+  status         String   @default("pending")
+  // 'pending' | 'running' | 'completed' | 'stopped' | 'error'
+
+  startedAt      DateTime @default(now())
+  endedAt        DateTime?
+
+  stats          Json?
+  error          String?
+
+  stopRequested  Boolean  @default(false)
+
+  @@index([status, startedAt])
+  @@index([jobType, status])
 }
 
 model TestOrder {
