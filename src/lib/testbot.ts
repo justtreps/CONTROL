@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
 import { fetchFollowerSnapshot, type Platform } from "@/lib/rapidapi";
+import { pickAndAssignAccount } from "@/lib/pool/assign";
 import type { Service, TestAccount } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -12,7 +13,11 @@ function targetUrlFor(platform: string, username: string): string {
   throw new Error(`Unknown platform: ${platform}`);
 }
 
-async function pickAccountForService(service: Service): Promise<TestAccount | null> {
+// Legacy fallback: pre-pool manual accounts (scrapeSource IS NULL OR 'manual').
+// Used only when the auto pool is empty for the platform.
+async function pickLegacyAccountForService(
+  service: Service
+): Promise<TestAccount | null> {
   const cutoff = new Date(Date.now() - ACCOUNT_COOLDOWN_HOURS * 3600 * 1000);
 
   const recent = await prisma.testOrder.findMany({
@@ -25,6 +30,8 @@ async function pickAccountForService(service: Service): Promise<TestAccount | nu
     where: {
       platform: service.platform,
       active: true,
+      status: { in: ["available"] },
+      OR: [{ scrapeSource: null }, { scrapeSource: "manual" }],
       ...(excludeIds.length > 0 && { id: { notIn: excludeIds } }),
     },
     orderBy: [{ lastTestedAt: { sort: "asc", nulls: "first" } }, { id: "asc" }],
@@ -70,8 +77,34 @@ export async function runTestBot(
 
   for (const service of due) {
     result.attempted++;
+    let assignedAccountId: number | null = null;
+
     try {
-      const account = await pickAccountForService(service);
+      // ─── Resolve account ──────────────────────────────────────────
+      // Primary path: pull a virgin account from the pool in an atomic
+      // transaction (status flips available→assigned in the same tx).
+      // testOrderId is supplied after TestOrder creation — so we first
+      // create TestOrder with a temp account reference, then we'd need
+      // to swap. Cleaner: create TestOrder AFTER pick, then backfill
+      // assignedTestOrderId in a second update.
+      let account: TestAccount | null = null;
+
+      // Try the pool first (status='available' only, ordered by firstSeenAt)
+      const poolPick = await pickAndAssignAccount({
+        platform: service.platform,
+        testOrderId: -1, // placeholder; backfilled below after TestOrder exists
+      });
+
+      if (poolPick) {
+        account = poolPick;
+        assignedAccountId = poolPick.id;
+      } else {
+        // Fallback: manually-seeded accounts (pre-pool era). These keep
+        // `scrapeSource IS NULL` or 'manual' and don't get consumed — they
+        // can be reused with the cooldown logic below.
+        account = await pickLegacyAccountForService(service);
+      }
+
       if (!account) {
         result.skipped++;
         result.errors.push({
@@ -95,6 +128,20 @@ export async function runTestBot(
       });
 
       if ("error" in order) {
+        // Pool-assigned accounts that failed to order → rollback to available
+        // so we don't burn a virgin account on a BulkMedya error.
+        if (poolPick) {
+          await prisma.testAccount.update({
+            where: { id: poolPick.id },
+            data: {
+              status: "available",
+              assignedAt: null,
+              assignedTestOrderId: null,
+              active: true,
+            },
+          });
+          assignedAccountId = null;
+        }
         result.errors.push({
           serviceId: service.id,
           serviceName: service.name,
@@ -113,6 +160,14 @@ export async function runTestBot(
         },
       });
 
+      // Pool-assigned: backfill the real TestOrder id on the account.
+      if (poolPick) {
+        await prisma.testAccount.update({
+          where: { id: poolPick.id },
+          data: { assignedTestOrderId: testOrder.id },
+        });
+      }
+
       await prisma.measurement.create({
         data: {
           testOrderId: testOrder.id,
@@ -123,13 +178,31 @@ export async function runTestBot(
         },
       });
 
-      await prisma.testAccount.update({
-        where: { id: account.id },
-        data: { lastTestedAt: new Date() },
-      });
+      // Legacy accounts: keep the cooldown mechanism.
+      if (!poolPick) {
+        await prisma.testAccount.update({
+          where: { id: account.id },
+          data: { lastTestedAt: new Date() },
+        });
+      }
 
       result.placed++;
     } catch (e) {
+      // Rollback pool assignment on any unexpected error so the virgin
+      // account returns to the pool.
+      if (assignedAccountId) {
+        await prisma.testAccount
+          .update({
+            where: { id: assignedAccountId },
+            data: {
+              status: "available",
+              assignedAt: null,
+              assignedTestOrderId: null,
+              active: true,
+            },
+          })
+          .catch(() => null);
+      }
       result.errors.push({
         serviceId: service.id,
         serviceName: service.name,
