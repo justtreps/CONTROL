@@ -118,47 +118,118 @@ body.hovering-interactive #cursor-brackets::after {
   border-color: var(--accent);
 }
 
-/* === Continuous glitch on hovered element ====================
-   Hard horizontal chromatic aberration (cyan left / red right) that
-   pulses through different offsets with steps() for a choppy "decompose"
-   feel. Only the text-shadow moves — no layout shift, no transform on
-   the element itself, so readability is preserved.
+/* === Punctual glitch burst on hovered element ================
+   Most of the cycle = no effect. Every ~2.8s a short ~300ms "bug"
+   burst fires: chromatic split + two horizontal slices that detach
+   left/right via polygon clip-path. After the burst, everything
+   snaps back to normal — readability is preserved 85% of the time.
 
-   Applied to .interactive:hover. text-shadow is inherited to child
-   text, so hovering a button/link container glitches its label too. */
+   text-shadow is inherited to child text, so hovering a container
+   glitches its inner text. clip-path is scoped to a few % of the
+   cycle so letters are never gone long enough to be unreadable. */
 
-@keyframes hover-glitch-rgb {
-  0%   { text-shadow: -2px 0 0 #00E5FF, 2px 0 0 #FF3300; }
-  12%  { text-shadow: -5px 0 0 #00E5FF, 5px 0 0 #FF3300; }
-  24%  { text-shadow: -1px 0 0 #00E5FF, 1px 0 0 #FF3300, 0 -1px 0 rgba(255,255,255,0.6); }
-  36%  { text-shadow: -3px 0 0 #00E5FF, 3px 0 0 #FF3300; }
-  48%  { text-shadow: -6px 0 0 #00E5FF, 6px 0 0 #FF3300; }
-  60%  { text-shadow: -2px 0 0 #00E5FF, 2px 0 0 #FF3300, 0 1px 0 rgba(255,255,255,0.5); }
-  72%  { text-shadow: -4px 0 0 #00E5FF, 4px 0 0 #FF3300; }
-  84%  { text-shadow: -1px 0 0 #00E5FF, 1px 0 0 #FF3300; }
-  100% { text-shadow: -2px 0 0 #00E5FF, 2px 0 0 #FF3300; }
+@keyframes hover-glitch-burst {
+  /* Long idle phase — nothing happens 85% of the cycle. */
+  0%, 85%, 100% {
+    text-shadow: none;
+    clip-path: none;
+    transform: translateX(0);
+  }
+
+  /* Phase 1 — chromatic bloom at the entry of the burst. */
+  86% {
+    text-shadow: -3px 0 0 #00E5FF, 3px 0 0 #FF3300;
+  }
+  87% {
+    text-shadow: -8px 0 0 #00E5FF, 8px 0 0 #FF3300;
+    transform: translateX(4px);
+  }
+
+  /* Phase 2 — a narrow upper band detaches to the right. */
+  89% {
+    text-shadow: 6px 0 0 #FF3300, -4px 0 0 #00E5FF;
+    clip-path: polygon(
+      0 0, 100% 0,
+      100% 22%, -12% 22%,
+      -12% 38%, 100% 38%,
+      100% 100%, 0 100%
+    );
+    transform: translateX(-3px);
+  }
+
+  /* Phase 3 — lower band detaches to the other side. */
+  91% {
+    text-shadow: -6px 0 0 #00E5FF, 4px 0 0 #FF3300;
+    clip-path: polygon(
+      0 0, 100% 0,
+      100% 62%, 10% 62%,
+      10% 78%, 100% 78%,
+      100% 100%, 0 100%
+    );
+    transform: translateX(3px);
+  }
+
+  /* Phase 4 — one last chromatic flicker, bands rejoined. */
+  93% {
+    text-shadow: -4px 0 0 #00E5FF, 4px 0 0 #FF3300;
+    clip-path: none;
+    transform: translateX(-1px);
+  }
+  95% {
+    text-shadow: -1px 0 0 #00E5FF, 1px 0 0 #FF3300;
+    transform: translateX(0);
+  }
 }
 
 .interactive:hover {
-  animation: hover-glitch-rgb 0.22s steps(9) infinite;
+  animation: hover-glitch-burst 2.8s linear infinite;
 }
 
-/* On red zones (cursor-on-red), cyan/red don't read — use black/white
-   for the chromatic split instead. */
-@keyframes hover-glitch-bw {
-  0%   { text-shadow: -2px 0 0 #000, 2px 0 0 #FFF; }
-  12%  { text-shadow: -5px 0 0 #000, 5px 0 0 #FFF; }
-  24%  { text-shadow: -1px 0 0 #000, 1px 0 0 #FFF; }
-  36%  { text-shadow: -3px 0 0 #000, 3px 0 0 #FFF; }
-  48%  { text-shadow: -6px 0 0 #000, 6px 0 0 #FFF; }
-  60%  { text-shadow: -2px 0 0 #000, 2px 0 0 #FFF; }
-  72%  { text-shadow: -4px 0 0 #000, 4px 0 0 #FFF; }
-  84%  { text-shadow: -1px 0 0 #000, 1px 0 0 #FFF; }
-  100% { text-shadow: -2px 0 0 #000, 2px 0 0 #FFF; }
+/* Red zones — black/white chromatic split + same band logic. */
+@keyframes hover-glitch-burst-bw {
+  0%, 85%, 100% {
+    text-shadow: none;
+    clip-path: none;
+    transform: translateX(0);
+  }
+  86% { text-shadow: -3px 0 0 #000, 3px 0 0 #FFF; }
+  87% {
+    text-shadow: -8px 0 0 #000, 8px 0 0 #FFF;
+    transform: translateX(4px);
+  }
+  89% {
+    text-shadow: 6px 0 0 #000, -4px 0 0 #FFF;
+    clip-path: polygon(
+      0 0, 100% 0,
+      100% 22%, -12% 22%,
+      -12% 38%, 100% 38%,
+      100% 100%, 0 100%
+    );
+    transform: translateX(-3px);
+  }
+  91% {
+    text-shadow: -6px 0 0 #000, 4px 0 0 #FFF;
+    clip-path: polygon(
+      0 0, 100% 0,
+      100% 62%, 10% 62%,
+      10% 78%, 100% 78%,
+      100% 100%, 0 100%
+    );
+    transform: translateX(3px);
+  }
+  93% {
+    text-shadow: -4px 0 0 #000, 4px 0 0 #FFF;
+    clip-path: none;
+    transform: translateX(-1px);
+  }
+  95% {
+    text-shadow: -1px 0 0 #000, 1px 0 0 #FFF;
+    transform: translateX(0);
+  }
 }
 
 body.cursor-on-red .interactive:hover {
-  animation: hover-glitch-bw 0.22s steps(9) infinite;
+  animation: hover-glitch-burst-bw 2.8s linear infinite;
 }
 
 /* === Cursor on red zones (login right panel, LoadingScreen, danger zones) === */
