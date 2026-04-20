@@ -1,47 +1,66 @@
-// One-shot remediation endpoint. The prior PoolConfig defaults
-// rejected accounts that had ANY media_count > 0, so the health
-// check + sweep wrongly flipped rows to status='invalid' reason=
-// 'became_active' for accounts that actually still qualify under
-// the current (follower-only) rules.
+// Remediation endpoint — reactivates rows that were wrongly flipped
+// to status='invalid' reason='became_active' under the old media-
+// count rule but still qualify under the current (follower + following
+// only) criteria.
 //
-// This route finds those rows — status='invalid' AND
-// invalidReason='became_active' AND lastFollowerCount <= 5 — and
-// reactivates them: status='available', reason/invalidatedAt
-// cleared, active=true. It doesn't touch anything that was
-// invalidated for a different reason (deleted / became_private /
-// manual / banned) or that actually has too many followers.
+// Eligible: status='invalid' AND reason='became_active' AND
+//   lastFollowerCount ≤ followerCap (default from PoolConfig) AND
+//   lastFollowingCount ≤ followingCap (default from PoolConfig)
 //
-// Will be deleted once it runs cleanly.
+// Rows with 'deleted' / 'became_private' / 'manual' / 'banned' are
+// untouched. Rows that grew past the follower cap stay invalid.
+// Idempotent: safe to re-run; once reactivated a row is no longer a
+// candidate (its status isn't 'invalid' anymore).
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getPoolConfig } from "@/lib/pool/config";
 
 export const maxDuration = 30;
 
 export async function POST(req: Request) {
   const url = new URL(req.url);
+  const cfg = await getPoolConfig();
+
   const followerCap = Math.max(
     0,
-    Number(url.searchParams.get("followerCap") ?? 5) || 5
+    Number(url.searchParams.get("followerCap") ?? cfg.invalidateIfFollowerAbove) || cfg.invalidateIfFollowerAbove
+  );
+  const followingCap = Math.max(
+    0,
+    Number(url.searchParams.get("followingCap") ?? cfg.maxFollowingCount) || cfg.maxFollowingCount
   );
   const dryRun = url.searchParams.get("dryRun") === "1";
 
-  try {
-    const candidates = await prisma.testAccount.findMany({
-      where: {
-        status: "invalid",
-        invalidReason: "became_active",
+  const whereEligible: import("@prisma/client").Prisma.TestAccountWhereInput = {
+    status: "invalid",
+    invalidReason: "became_active",
+    AND: [
+      {
         OR: [
           { lastFollowerCount: null },
           { lastFollowerCount: { lte: followerCap } },
         ],
       },
+      {
+        OR: [
+          { lastFollowingCount: null },
+          { lastFollowingCount: { lte: followingCap } },
+        ],
+      },
+    ],
+  };
+
+  try {
+    const candidates = await prisma.testAccount.findMany({
+      where: whereEligible,
       select: {
         id: true,
         platform: true,
         username: true,
         lastFollowerCount: true,
         lastMediaCount: true,
+        lastFollowingCount: true,
       },
     });
 
@@ -49,20 +68,15 @@ export async function POST(req: Request) {
       return NextResponse.json({
         ok: true,
         dryRun: true,
+        followerCap,
+        followingCap,
         candidates: candidates.length,
         sample: candidates.slice(0, 10),
       });
     }
 
     const res = await prisma.testAccount.updateMany({
-      where: {
-        status: "invalid",
-        invalidReason: "became_active",
-        OR: [
-          { lastFollowerCount: null },
-          { lastFollowerCount: { lte: followerCap } },
-        ],
-      },
+      where: whereEligible,
       data: {
         status: "available",
         invalidReason: null,
@@ -75,6 +89,7 @@ export async function POST(req: Request) {
       ok: true,
       reactivated: res.count,
       followerCap,
+      followingCap,
       sample: candidates.slice(0, 10),
     });
   } catch (e) {

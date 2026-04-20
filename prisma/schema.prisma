@@ -141,6 +141,21 @@ model PoolUsernamePrefix {
   enabled Boolean @default(true)
 }
 
+// Decision log for the suggested-seeds workflow: each row records
+// that a given (platform, username) was either promoted to
+// PoolSeedAccount (action='integrated') or dismissed (action='rejected')
+// so the /api/pool/seeds/suggestions endpoint never surfaces it again.
+model PoolSeedSuggestionAction {
+  id        Int      @id @default(autoincrement())
+  platform  String
+  username  String
+  action    String   // 'integrated' | 'rejected'
+  actedAt   DateTime @default(now())
+
+  @@unique([platform, username])
+  @@index([platform, action])
+}
+
 // Run history for scrape / health-check / cleanup jobs, with a
 // cooperative stop flag so the orchestrator can bail mid-batch.
 model PoolJob {

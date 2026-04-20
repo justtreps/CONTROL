@@ -6,6 +6,9 @@ import { PoolHistoryChart } from "./PoolHistoryChart";
 import { PoolControls } from "./PoolControls";
 import { PoolActiveJobs } from "./PoolActiveJobs";
 import { PoolAccountsList } from "./PoolAccountsList";
+import { PoolSettings } from "./PoolSettings";
+import { PoolSeedsCard } from "./PoolSeedsCard";
+import { PoolPrefixesCard } from "./PoolPrefixesCard";
 import { PoolToastProvider } from "./PoolToast";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +46,34 @@ export default async function PoolPage() {
 
       {/* === Section 5 — Accounts list === */}
       <PoolAccountsList />
+
+      {/* === Section 7 — Settings (Pattern D, 4 sub-cards) === */}
+      <PoolSettings
+        initialConfig={{
+          autoRefillEnabled: config.autoRefillEnabled,
+          refillThresholdInstagram: config.refillThresholdInstagram,
+          refillTargetInstagram: config.refillTargetInstagram,
+          refillThresholdTiktok: config.refillThresholdTiktok,
+          refillTargetTiktok: config.refillTargetTiktok,
+          maxRapidapiCallsPerScrapeRun: config.maxRapidapiCallsPerScrapeRun,
+          maxRapidapiCallsPerHealthcheck: config.maxRapidapiCallsPerHealthcheck,
+          maxAttemptsMethodB: config.maxAttemptsMethodB,
+          maxPagesPerSeed: config.maxPagesPerSeed,
+          methodARatio: config.methodARatio,
+          healthCheckEnabled: config.healthCheckEnabled,
+          healthCheckCron: config.healthCheckCron,
+          maxFollowerCount: config.maxFollowerCount,
+          maxFollowingCount: config.maxFollowingCount,
+          requireNotPrivate: config.requireNotPrivate,
+          invalidateIfFollowerAbove: config.invalidateIfFollowerAbove,
+        }}
+      />
+
+      {/* === Section 8a — Seeds (2 cols: active + suggestions) === */}
+      <PoolSeedsCard />
+
+      {/* === Section 8b — Prefixes (chips) === */}
+      <PoolPrefixesCard />
     </PoolToastProvider>
   );
 }
