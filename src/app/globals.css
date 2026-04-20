@@ -118,6 +118,49 @@ body.hovering-interactive #cursor-brackets::after {
   border-color: var(--accent);
 }
 
+/* === Continuous glitch on hover — RGB-split jitter on the brackets === */
+@keyframes cursor-glitch-jitter-a {
+  0%, 100% { transform: translate(0, 0); border-color: var(--accent); }
+  20%      { transform: translate(-1.5px, 1px); border-color: #00E5FF; }
+  40%      { transform: translate(1px, -1.5px); border-color: var(--accent); }
+  60%      { transform: translate(-1px, -1px); border-color: #FFFFFF; }
+  80%      { transform: translate(1.5px, 1px); border-color: var(--accent); }
+}
+@keyframes cursor-glitch-jitter-b {
+  0%, 100% { transform: translate(0, 0); border-color: var(--accent); }
+  25%      { transform: translate(1.5px, -1px); border-color: var(--accent); }
+  50%      { transform: translate(-1px, 1.5px); border-color: #00E5FF; }
+  75%      { transform: translate(1px, 1px); border-color: var(--accent); }
+}
+body.hovering-interactive #cursor-brackets::before {
+  animation: cursor-glitch-jitter-a 0.24s steps(5) infinite;
+}
+body.hovering-interactive #cursor-brackets::after {
+  animation: cursor-glitch-jitter-b 0.28s steps(4) infinite;
+}
+
+/* Glitch on red zones keeps the black outline but shifts through white
+   flashes for the chromatic aberration instead of cyan (keeps contrast). */
+@keyframes cursor-glitch-jitter-a-black {
+  0%, 100% { transform: translate(0, 0); border-color: #000; }
+  20%      { transform: translate(-1.5px, 1px); border-color: #FFFFFF; }
+  40%      { transform: translate(1px, -1.5px); border-color: #000; }
+  60%      { transform: translate(-1px, -1px); border-color: #FFFFFF; }
+  80%      { transform: translate(1.5px, 1px); border-color: #000; }
+}
+@keyframes cursor-glitch-jitter-b-black {
+  0%, 100% { transform: translate(0, 0); border-color: #000; }
+  25%      { transform: translate(1.5px, -1px); border-color: #000; }
+  50%      { transform: translate(-1px, 1.5px); border-color: #FFFFFF; }
+  75%      { transform: translate(1px, 1px); border-color: #000; }
+}
+body.cursor-on-red.hovering-interactive #cursor-brackets::before {
+  animation: cursor-glitch-jitter-a-black 0.24s steps(5) infinite;
+}
+body.cursor-on-red.hovering-interactive #cursor-brackets::after {
+  animation: cursor-glitch-jitter-b-black 0.28s steps(4) infinite;
+}
+
 /* === Cursor on red zones (login right panel, LoadingScreen, danger zones) === */
 body.cursor-on-red #cursor-dot {
   background-color: #000;
