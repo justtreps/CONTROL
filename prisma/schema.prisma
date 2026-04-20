@@ -248,3 +248,17 @@ model Config {
   value     Json
   updatedAt DateTime @updatedAt
 }
+
+// Single-row (id=1) kill switch for each major subsystem. Every gated
+// endpoint reads this once per request and 503s / skips if its toggle
+// is false. Default: everything ENABLED so an empty row acts as a
+// no-op, never a surprise outage.
+model SystemToggle {
+  id                       Int      @id @default(1)
+  poolScrapeEnabled        Boolean  @default(true)
+  poolHealthcheckEnabled   Boolean  @default(true)
+  routingApiEnabled        Boolean  @default(true)
+  testBotEnabled           Boolean  @default(true)
+  scoringEngineEnabled     Boolean  @default(true)
+  updatedAt                DateTime @updatedAt
+}

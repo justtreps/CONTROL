@@ -1,6 +1,7 @@
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { getPoolStats, getPoolHistory30d } from "@/lib/pool/stats";
 import { getPoolConfig } from "@/lib/pool/config";
+import { getSystemToggles } from "@/lib/system/toggles";
 import { PoolStatsHero } from "./PoolStatsHero";
 import { PoolHistoryChart } from "./PoolHistoryChart";
 import { PoolControls } from "./PoolControls";
@@ -9,15 +10,17 @@ import { PoolAccountsList } from "./PoolAccountsList";
 import { PoolSettings } from "./PoolSettings";
 import { PoolSeedsCard } from "./PoolSeedsCard";
 import { PoolPrefixesCard } from "./PoolPrefixesCard";
+import { SystemKillSwitch } from "./SystemKillSwitch";
 import { PoolToastProvider } from "./PoolToast";
 
 export const dynamic = "force-dynamic";
 
 export default async function PoolPage() {
-  const [stats, history, config] = await Promise.all([
+  const [stats, history, config, toggles] = await Promise.all([
     getPoolStats(),
     getPoolHistory30d(),
     getPoolConfig(),
+    getSystemToggles(),
   ]);
 
   return (
@@ -26,6 +29,17 @@ export default async function PoolPage() {
 
       {/* === Section 1 — Hero (Pattern B) === */}
       <PoolStatsHero initialStats={stats} />
+
+      {/* === Section 1.5 — Kill Switch === */}
+      <SystemKillSwitch
+        initialToggles={{
+          poolScrapeEnabled: toggles.poolScrapeEnabled,
+          poolHealthcheckEnabled: toggles.poolHealthcheckEnabled,
+          routingApiEnabled: toggles.routingApiEnabled,
+          testBotEnabled: toggles.testBotEnabled,
+          scoringEngineEnabled: toggles.scoringEngineEnabled,
+        }}
+      />
 
       {/* === Section 2 — Graph (Pattern E) === */}
       <PoolHistoryChart initialData={history} />

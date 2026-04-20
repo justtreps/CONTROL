@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { routeOrder } from "@/lib/router";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 30;
 
@@ -37,6 +38,18 @@ function verifyApiKey(req: Request): boolean {
 export async function POST(req: Request) {
   if (!verifyApiKey(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const toggles = await getSystemToggles();
+  if (!toggles.routingApiEnabled) {
+    return NextResponse.json(
+      {
+        error: "system_paused",
+        message:
+          "CONTROL routing is paused by the kill switch. Fall back to your existing routing system.",
+      },
+      { status: 503 }
+    );
   }
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));

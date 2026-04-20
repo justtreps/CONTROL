@@ -3,6 +3,7 @@ import { placeOrder } from "@/lib/bulkmedya";
 import { fetchFollowerSnapshot, type Platform } from "@/lib/rapidapi";
 import { pickAndAssignAccount, invalidateAccount } from "@/lib/pool/assign";
 import { fetchOracleFor } from "@/lib/pool/oracle";
+import { getSystemToggles } from "@/lib/system/toggles";
 import type { Service, TestAccount } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -51,6 +52,13 @@ export async function runTestBot(
 ): Promise<TestBotResult> {
   const maxOrders = opts.maxOrders ?? 10;
   const result: TestBotResult = { attempted: 0, placed: 0, skipped: 0, errors: [] };
+
+  // Kill-switch: when test-bot is disabled we force a simulated path
+  // — no real BulkMedya calls fire, TestOrder rows are written with a
+  // simulated_<ts> id so the rest of the pipeline (scoring, health
+  // check) keeps working without contaminating the pool.
+  const toggles = await getSystemToggles();
+  const simulated = !toggles.testBotEnabled;
 
   const cutoff = new Date(Date.now() - SERVICE_COOLDOWN_HOURS * 3600 * 1000);
 
@@ -182,11 +190,13 @@ export async function runTestBot(
         realismData: sample.realismData,
       };
 
-      const order = await placeOrder({
-        service: service.bulkmedyaId,
-        link: targetUrlFor(service.platform, currentUsername),
-        quantity: service.minQuantity,
-      });
+      const order = simulated
+        ? { order: Date.now() } // simulated BulkMedya id when killswitch is off
+        : await placeOrder({
+            service: service.bulkmedyaId,
+            link: targetUrlFor(service.platform, currentUsername),
+            quantity: service.minQuantity,
+          });
 
       if ("error" in order) {
         // Pool-assigned accounts that failed to order → rollback to available
@@ -215,7 +225,7 @@ export async function runTestBot(
         data: {
           serviceId: service.id,
           testAccountId: account.id,
-          bulkmedyaOrderId: String(order.order),
+          bulkmedyaOrderId: simulated ? `sim-${order.order}` : String(order.order),
           targetQuantity: service.minQuantity,
           baselineCount: baseline.count,
         },

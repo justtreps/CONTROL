@@ -25,6 +25,7 @@ import {
   type HealthStats,
 } from "./health-check";
 import { archiveOldRecords } from "./cleanup";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 const BUDGET_MS = 8_000; // keep well under Vercel 10s hobby limit
 
@@ -45,14 +46,35 @@ async function stopRequestedFor(jobId: number): Promise<boolean> {
 }
 
 export async function runOrchestratorTick(): Promise<OrchestratorResult> {
-  // Pick the oldest non-terminal job. 'running' rows also get picked up
-  // in case a previous tick died mid-tranche — the tranche runners are
-  // idempotent (they read from DB + the checkpoint in job.stats).
+  // Kill-switch gate: skip any job whose subsystem is paused. Those
+  // jobs stay in 'pending' forever until the toggle is flipped back on
+  // — that's the whole point of the kill switch.
+  const toggles = await getSystemToggles();
+  const disabledTypes: string[] = [];
+  if (!toggles.poolScrapeEnabled) disabledTypes.push("scrape");
+  if (!toggles.poolHealthcheckEnabled) disabledTypes.push("health_check");
+
+  // Pick the oldest non-terminal job whose subsystem is still enabled.
+  // 'running' rows also get picked up in case a previous tick died
+  // mid-tranche — the tranche runners are idempotent (they read from
+  // DB + the checkpoint in job.stats).
   const job = await prisma.poolJob.findFirst({
-    where: { status: { in: ["pending", "running"] } },
+    where: {
+      status: { in: ["pending", "running"] },
+      ...(disabledTypes.length
+        ? { jobType: { notIn: disabledTypes } }
+        : {}),
+    },
     orderBy: { startedAt: "asc" },
   });
-  if (!job) return { ran: false };
+  if (!job) {
+    return {
+      ran: false,
+      ...(disabledTypes.length
+        ? { skipped: `paused_by_toggle:${disabledTypes.join(",")}` }
+        : {}),
+    } as OrchestratorResult & { skipped?: string };
+  }
 
   if (job.status === "pending") {
     await prisma.poolJob.update({

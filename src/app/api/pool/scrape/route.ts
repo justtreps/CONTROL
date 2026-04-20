@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { initScrapeStats } from "@/lib/pool/scraper";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 const bodySchema = z.object({
   platform: z.enum(["instagram", "tiktok", "both"]).default("both"),
@@ -9,6 +10,14 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const toggles = await getSystemToggles();
+  if (!toggles.poolScrapeEnabled) {
+    return NextResponse.json(
+      { error: "pool_scrape_disabled", message: "Pool scrape is paused by the kill switch." },
+      { status: 503 }
+    );
+  }
+
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
     return NextResponse.json(

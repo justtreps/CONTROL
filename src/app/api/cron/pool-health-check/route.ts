@@ -7,12 +7,18 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getPoolConfig } from "@/lib/pool/config";
 import { initHealthStats } from "@/lib/pool/health-check";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 30;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const toggles = await getSystemToggles();
+  if (!toggles.poolHealthcheckEnabled) {
+    return NextResponse.json({ ok: true, skipped: "kill_switch" });
   }
 
   const cfg = await getPoolConfig();
