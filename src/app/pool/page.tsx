@@ -10,7 +10,6 @@ import { PoolAccountsList } from "./PoolAccountsList";
 import { PoolAdvancedConfig } from "./PoolAdvancedConfig";
 import { SystemKillSwitch } from "./SystemKillSwitch";
 import { PoolToastProvider } from "./PoolToast";
-import { Collapsible } from "./Collapsible";
 
 export const dynamic = "force-dynamic";
 
@@ -47,14 +46,7 @@ export default async function PoolPage() {
         hint="l'état de la réserve en un coup d'œil"
       />
       <Onboarding />
-      <Collapsible
-        banner
-        defaultOpen
-        label="ÉVOLUTION SUR 30 JOURS"
-        hint="graphique historique par statut et plateforme"
-      >
-        <PoolHistoryChart initialData={history} />
-      </Collapsible>
+      <PoolHistoryChart initialData={history} />
 
       {/* === ZONE 2 — ACTIONS === */}
       <ZoneHeader
