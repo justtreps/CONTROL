@@ -7,7 +7,6 @@ import { PoolHistoryChart } from "./PoolHistoryChart";
 import { PoolUnifiedActions } from "./PoolUnifiedActions";
 import { PoolActiveJobs } from "./PoolActiveJobs";
 import { PoolAccountsList } from "./PoolAccountsList";
-import { PoolOverviewCards } from "./PoolOverviewCards";
 import { PoolAdvancedConfig } from "./PoolAdvancedConfig";
 import { SystemKillSwitch } from "./SystemKillSwitch";
 import { PoolToastProvider } from "./PoolToast";
@@ -56,7 +55,6 @@ export default async function PoolPage() {
       >
         <PoolHistoryChart initialData={history} />
       </Collapsible>
-      <PoolOverviewCards initialStats={stats} />
 
       {/* === ZONE 2 — ACTIONS === */}
       <ZoneHeader
