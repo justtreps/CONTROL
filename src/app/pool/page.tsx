@@ -51,7 +51,8 @@ export default async function PoolPage() {
       <PoolOverviewCards initialStats={stats} />
       <Collapsible
         banner
-        label="AFFICHER L'ÉVOLUTION SUR 30 JOURS"
+        defaultOpen
+        label="ÉVOLUTION SUR 30 JOURS"
         hint="graphique historique par statut et plateforme"
       >
         <PoolHistoryChart initialData={history} />
