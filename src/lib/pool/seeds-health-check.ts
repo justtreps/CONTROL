@@ -71,47 +71,58 @@ export async function runSeedsHealthCheck(): Promise<SeedsHealthStats> {
     orderBy: [{ platform: "asc" }, { priority: "desc" }, { id: "asc" }],
   });
 
-  for (const seed of seeds) {
-    if (seed.platform !== "instagram" && seed.platform !== "tiktok") {
-      errors.push(`seed #${seed.id}: unsupported platform ${seed.platform}`);
-      continue;
-    }
-    const platform = seed.platform as "instagram" | "tiktok";
-
-    try {
-      const res = await checkOneSeed(seed);
-      callsUsed += res.callsUsed;
-
-      switch (res.outcome) {
-        case "ok":
-          byPlatform[platform].ok++;
-          byPlatform[platform].checked++;
-          break;
-        case "renamed":
-          byPlatform[platform].renamed++;
-          byPlatform[platform].checked++;
-          break;
-        case "dead": {
-          byPlatform[platform].dead++;
-          byPlatform[platform].checked++;
-          // Attempt replacement from cache
-          const replacement = await pickReplacementFromCache(platform);
-          if (replacement) {
-            byPlatform[platform].replaced++;
-          } else {
-            cacheEmptyHits++;
-          }
-          break;
+  // Process N seeds in parallel. With ~66 enabled seeds and ~1-2s per
+  // RapidAPI call, serial execution blows past the 60s function budget.
+  // Concurrency of 8 keeps us well under the maxDuration while staying
+  // nice to RapidAPI (provider rate limits kick in much higher).
+  const CONCURRENCY = 8;
+  for (let i = 0; i < seeds.length; i += CONCURRENCY) {
+    const batch = seeds.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(async (seed) => {
+        if (seed.platform !== "instagram" && seed.platform !== "tiktok") {
+          errors.push(`seed #${seed.id}: unsupported platform ${seed.platform}`);
+          return;
         }
-        case "error":
-          errors.push(`seed #${seed.id} (@${seed.username}): ${res.message}`);
-          break;
-      }
-    } catch (e) {
-      errors.push(
-        `seed #${seed.id} (@${seed.username}): ${(e as Error).message.slice(0, 200)}`
-      );
-    }
+        const platform = seed.platform as "instagram" | "tiktok";
+
+        try {
+          const res = await checkOneSeed(seed);
+          callsUsed += res.callsUsed;
+
+          switch (res.outcome) {
+            case "ok":
+              byPlatform[platform].ok++;
+              byPlatform[platform].checked++;
+              break;
+            case "renamed":
+              byPlatform[platform].renamed++;
+              byPlatform[platform].checked++;
+              break;
+            case "dead": {
+              byPlatform[platform].dead++;
+              byPlatform[platform].checked++;
+              const replacement = await pickReplacementFromCache(platform);
+              if (replacement) {
+                byPlatform[platform].replaced++;
+              } else {
+                cacheEmptyHits++;
+              }
+              break;
+            }
+            case "error":
+              errors.push(
+                `seed #${seed.id} (@${seed.username}): ${res.message}`
+              );
+              break;
+          }
+        } catch (e) {
+          errors.push(
+            `seed #${seed.id} (@${seed.username}): ${(e as Error).message.slice(0, 200)}`
+          );
+        }
+      })
+    );
   }
 
   const finishedAt = new Date();
@@ -160,11 +171,10 @@ async function checkOneSeed(seed: {
 }): Promise<SeedCheckOutcome> {
   const platform = seed.platform as "instagram" | "tiktok";
 
-  // 1. Resolve userId if missing.
-  let userId = seed.userId;
+  // 1. Resolve userId if missing (both branches return inside the if).
   let callsUsed = 0;
 
-  if (!userId) {
+  if (!seed.userId) {
     if (platform === "instagram") {
       // IG oracle helper accepts either username or id, so one call
       // does both resolution + liveness.
@@ -172,8 +182,9 @@ async function checkOneSeed(seed: {
       callsUsed++;
       return persistOracleResult(seed, oracle, callsUsed);
     } else {
-      // TT needs an explicit username→userId resolution because
-      // fetchTtOracle requires a numeric user_id.
+      // TT: fetchTikTokUserByUsername already returns the full user
+      // info (userId + current unique_id + counts), so it doubles as
+      // the oracle call — no need for a second fetchTtOracle trip.
       try {
         const info = await fetchTikTokUserByUsername(seed.username);
         callsUsed++;
@@ -185,7 +196,20 @@ async function checkOneSeed(seed: {
             reason: "tt: user_by_username not found",
           };
         }
-        userId = info.userId;
+        return persistOracleResult(
+          seed,
+          {
+            ok: true,
+            platform: "tiktok",
+            userId: info.userId,
+            username: info.uniqueId,
+            followerCount: info.followerCount,
+            followingCount: info.followingCount,
+            mediaCount: info.mediaCount,
+            isPrivate: false,
+          },
+          callsUsed
+        );
       } catch (e) {
         const msg = (e as Error).message;
         if (/not\s*found/i.test(msg) || /404/.test(msg)) {
@@ -207,11 +231,11 @@ async function checkOneSeed(seed: {
     }
   }
 
-  // 2. Oracle with userId in hand.
+  // 2. Oracle with userId in hand (one call either way).
   const oracle =
     platform === "instagram"
-      ? await fetchIgOracle(userId!)
-      : await fetchTtOracle(userId!);
+      ? await fetchIgOracle(seed.userId!)
+      : await fetchTtOracle(seed.userId!);
   callsUsed++;
   return persistOracleResult(seed, oracle, callsUsed);
 }

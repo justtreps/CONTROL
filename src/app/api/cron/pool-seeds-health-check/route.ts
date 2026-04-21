@@ -15,7 +15,7 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { runSeedsHealthCheck } from "@/lib/pool/seeds-health-check";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
