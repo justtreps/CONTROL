@@ -73,7 +73,7 @@ export default async function PoolAccountPage({
             href="/pool"
             className="interactive font-mono text-xs text-[#666666] hover:text-white tracking-widest uppercase"
           >
-            ← POOL INDEX
+            ← COMPTES TEST
           </Link>
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-end mt-6 md:mt-8">
             <div className="lg:col-span-8 min-w-0 flex flex-col">

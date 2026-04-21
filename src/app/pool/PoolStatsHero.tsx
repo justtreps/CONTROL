@@ -35,14 +35,14 @@ export function PoolStatsHero({ initialStats }: Props) {
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 md:gap-12 items-end">
         <div className="lg:col-span-7 min-w-0 flex flex-col">
           <div className="font-mono text-xs text-[#666666] tracking-widest mb-6 border border-[#666666]/30 px-3 py-1 w-max max-w-full truncate">
-            [ POOL NODE | TEST ACCOUNT ORCHESTRATOR ]
+            [ NŒUD COMPTES TEST | ORCHESTRATEUR ]
           </div>
           <h1
             className="brand font-display uppercase tracking-tight leading-[0.85] text-white m-0 break-words"
             style={{ fontSize: "clamp(3rem, 7.5vw, 6.5rem)" }}
           >
-            Account<br />
-            <span className="text-[#FF3300]">Pool.</span>
+            Comptes<br />
+            <span className="text-[#FF3300]">Test.</span>
           </h1>
         </div>
 

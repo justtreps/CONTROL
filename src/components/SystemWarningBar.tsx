@@ -26,8 +26,8 @@ const KEYS: Array<keyof Toggles> = [
 ];
 
 const LABELS: Record<keyof Toggles, string> = {
-  poolScrapeEnabled: "POOL SCRAPE",
-  poolHealthcheckEnabled: "POOL HEALTHCHECK",
+  poolScrapeEnabled: "SCRAPE",
+  poolHealthcheckEnabled: "HEALTHCHECK",
   routingApiEnabled: "ROUTING",
   testBotEnabled: "TEST BOT",
   scoringEngineEnabled: "SCORING",

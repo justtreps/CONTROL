@@ -300,32 +300,10 @@ export function ConfigForms({
                 AUCUN COMPTE TEST.
               </p>
             ) : (
-              <ul className="divide-y divide-[#666666]/20 border-t border-[#666666]/20">
-                {testAccounts.map((a) => (
-                  <li
-                    key={a.id}
-                    className="flex items-center justify-between py-3 font-mono text-xs tracking-widest uppercase gap-3"
-                  >
-                    <Link
-                      href={`/pool/${a.id}`}
-                      className="interactive flex-1 min-w-0 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] hover:pl-2 transition-all truncate block"
-                    >
-                      <span className="text-white">{a.platform}</span>
-                      <span className="ml-2 text-[#666666]">@{a.username}</span>
-                      <span className="ml-2 text-[#666666]/60">
-                        ID:{a.userId}
-                      </span>
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => removeAccount(a.id)}
-                      className="interactive flex-shrink-0 text-[#FF3300] hover:text-white transition-colors"
-                    >
-                      [ SUPPRIMER ]
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <PaginatedAccountsList
+                accounts={testAccounts}
+                onRemove={removeAccount}
+              />
             )}
           </div>
 
@@ -510,5 +488,96 @@ function TriggerButton({
         className="relative z-10 group-hover:text-black transition-colors duration-300"
       />
     </button>
+  );
+}
+
+// ── Paginated list for the config test-accounts card ────────────────
+// Client-side slice of the prop-supplied accounts. 6/page by default
+// with a [ 6 / 12 / 25 / 50 ] selector + [ ← ] [ → ] mono controls,
+// matching the /pool list pattern.
+function PaginatedAccountsList({
+  accounts,
+  onRemove,
+}: {
+  accounts: TestAccount[];
+  onRemove: (id: number) => Promise<void> | void;
+}) {
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(6);
+  const totalPages = Math.max(1, Math.ceil(accounts.length / limit));
+  const clamp = Math.min(page, totalPages);
+  const slice = accounts.slice((clamp - 1) * limit, clamp * limit);
+
+  return (
+    <>
+      <ul className="divide-y divide-[#666666]/20 border-t border-[#666666]/20">
+        {slice.map((a) => (
+          <li
+            key={a.id}
+            className="flex items-center justify-between py-3 font-mono text-xs tracking-widest uppercase gap-3"
+          >
+            <Link
+              href={`/pool/${a.id}`}
+              className="interactive flex-1 min-w-0 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] hover:pl-2 transition-all truncate block"
+            >
+              <span className="text-white">{a.platform}</span>
+              <span className="ml-2 text-[#666666]">@{a.username}</span>
+              <span className="ml-2 text-[#666666]/60">ID:{a.userId}</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => onRemove(a.id)}
+              className="interactive flex-shrink-0 text-[#FF3300] hover:text-white transition-colors"
+            >
+              [ SUPPRIMER ]
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-3 mt-3 border-t border-[#666666]/20 font-mono text-xs tracking-widest uppercase">
+        <div className="text-[#666666] tabular-nums flex items-center gap-4 flex-wrap">
+          <span>
+            [ PAGE {String(clamp).padStart(2, "0")} / {String(totalPages).padStart(2, "0")} ]
+          </span>
+          <span className="text-[#666666]/60">
+            {accounts.length} COMPTES
+          </span>
+          <label className="flex items-center gap-2">
+            <span className="text-[#666666]/60">PER PAGE</span>
+            <select
+              value={limit}
+              onChange={(e) => {
+                setLimit(Number(e.target.value));
+                setPage(1);
+              }}
+              className="interactive bg-transparent border border-[#666666]/40 focus:border-[#FF3300] px-2 py-1 font-mono text-xs tracking-widest uppercase text-white outline-none"
+            >
+              <option value={6}>6</option>
+              <option value={12}>12</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+          </label>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={clamp <= 1}
+            onClick={() => setPage(clamp - 1)}
+            className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-4 py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            [ ← ]
+          </button>
+          <button
+            type="button"
+            disabled={clamp >= totalPages}
+            onClick={() => setPage(clamp + 1)}
+            className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-4 py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            [ → ]
+          </button>
+        </div>
+      </div>
+    </>
   );
 }

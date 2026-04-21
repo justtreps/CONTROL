@@ -56,7 +56,7 @@ export function PoolAccountsList() {
   const [sort, setSort] = useState("firstSeenAt");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
-  const [limit] = useState(50);
+  const [limit, setLimit] = useState(6);
 
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -315,22 +315,40 @@ export function PoolAccountsList() {
         </div>
 
         {/* Pagination */}
-        {data && data.totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 md:px-6 py-4 border-t border-[#666666]/20 font-mono text-xs tracking-widest uppercase">
-            <div className="text-[#666666] tabular-nums">
-              [ PAGE {String(page).padStart(2, "0")} / {String(data.totalPages).padStart(2, "0")} ]
-              <span className="ml-4 text-[#666666]/60">
+        {data && (
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-4 border-t border-[#666666]/20 font-mono text-xs tracking-widest uppercase">
+            <div className="text-[#666666] tabular-nums flex items-center gap-4 flex-wrap">
+              <span>
+                [ PAGE {String(page).padStart(2, "0")} / {String(data.totalPages).padStart(2, "0")} ]
+              </span>
+              <span className="text-[#666666]/60">
                 {data.total.toLocaleString("en-US")} COMPTES
               </span>
+              <label className="flex items-center gap-2">
+                <span className="text-[#666666]/60">PER PAGE</span>
+                <select
+                  value={limit}
+                  onChange={(e) => {
+                    setLimit(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  className="interactive bg-transparent border border-[#666666]/40 focus:border-[#FF3300] px-2 py-1 font-mono text-xs tracking-widest uppercase text-white outline-none"
+                >
+                  <option value={6}>6</option>
+                  <option value={12}>12</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
             </div>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <button
                 type="button"
                 disabled={page <= 1}
                 onClick={() => setPage(page - 1)}
                 className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-4 py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                ← PRÉCÉDENT
+                [ ← ]
               </button>
               <button
                 type="button"
@@ -338,7 +356,7 @@ export function PoolAccountsList() {
                 onClick={() => setPage(page + 1)}
                 className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-4 py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                SUIVANT →
+                [ → ]
               </button>
             </div>
           </div>

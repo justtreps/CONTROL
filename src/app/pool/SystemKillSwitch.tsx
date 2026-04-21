@@ -19,8 +19,8 @@ type Row = {
 };
 
 const ROWS: Row[] = [
-  { key: "poolScrapeEnabled", label: "POOL SCRAPE", hint: "/api/pool/scrape + orchestrator" },
-  { key: "poolHealthcheckEnabled", label: "POOL HEALTH CHECK", hint: "daily cron + manual run" },
+  { key: "poolScrapeEnabled", label: "SCRAPE COMPTES TEST", hint: "/api/pool/scrape + orchestrator" },
+  { key: "poolHealthcheckEnabled", label: "HEALTH CHECK", hint: "daily cron + manual run" },
   { key: "routingApiEnabled", label: "ROUTING API", hint: "/api/order (MyBoost)" },
   { key: "testBotEnabled", label: "TEST BOT", hint: "BulkMedya calls → simulated" },
   { key: "scoringEngineEnabled", label: "SCORING ENGINE", hint: "/api/cron/scoring" },
