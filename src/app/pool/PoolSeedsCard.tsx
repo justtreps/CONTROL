@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
+import { Skeleton } from "@/components/Skeleton";
 
 type Seed = {
   id: number;
@@ -18,6 +19,8 @@ type Suggestion = {
   username: string;
 };
 
+type SuggestionSource = "claude" | "fallback" | null;
+
 const INPUT_CLS =
   "interactive bg-transparent border border-[#666666]/40 focus:border-[#FF3300] px-3 py-2 font-mono text-xs tracking-widest uppercase text-white placeholder:text-[#666666]/60 outline-none transition-colors";
 
@@ -28,6 +31,8 @@ export function PoolSeedsCard() {
   const [platform, setPlatform] = useState<"instagram" | "tiktok">("instagram");
   const [seeds, setSeeds] = useState<Seed[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [suggestionSource, setSuggestionSource] = useState<SuggestionSource>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(
     new Set()
   );
@@ -35,21 +40,28 @@ export function PoolSeedsCard() {
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
+    setLoadingSuggestions(true);
     const [seedsRes, sugRes] = await Promise.all([
       fetch(`/api/pool/seeds?platform=${platform}`, { cache: "no-store" }),
-      fetch(`/api/pool/seeds/suggestions?platform=${platform}&count=10`, {
-        cache: "no-store",
-      }),
+      fetch(
+        `/api/pool/seeds/suggestions-dynamic?platform=${platform}&count=10`,
+        { cache: "no-store" }
+      ),
     ]);
     if (seedsRes.ok) {
       const d = (await seedsRes.json()) as { rows: Seed[] };
       setSeeds(d.rows);
     }
     if (sugRes.ok) {
-      const d = (await sugRes.json()) as { rows: Suggestion[] };
+      const d = (await sugRes.json()) as {
+        rows: Suggestion[];
+        source?: SuggestionSource;
+      };
       setSuggestions(d.rows);
+      setSuggestionSource(d.source ?? null);
       setSelectedSuggestions(new Set());
     }
+    setLoadingSuggestions(false);
   }, [platform]);
 
   useEffect(() => {
@@ -280,11 +292,54 @@ export function PoolSeedsCard() {
 
         {/* RIGHT — suggestions */}
         <div className="p-6 md:p-8 bg-[#0D0D0D]">
-          <h3 className="brand font-display text-xl uppercase tracking-tight text-white mb-4">
-            Suggestions
-          </h3>
+          <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
+            <h3 className="brand font-display text-xl uppercase tracking-tight text-white m-0">
+              Suggestions
+            </h3>
+            {suggestionSource && (
+              <span
+                className="font-mono text-[10px] tracking-widest uppercase px-2 py-0.5 border"
+                style={{
+                  color:
+                    suggestionSource === "claude" ? "#FF3300" : "#666666",
+                  borderColor:
+                    suggestionSource === "claude"
+                      ? "rgba(255, 51, 0, 0.6)"
+                      : "rgba(102, 102, 102, 0.4)",
+                }}
+                title={
+                  suggestionSource === "claude"
+                    ? "Suggestions générées en direct par Claude Haiku"
+                    : "Claude API indisponible — suggestions issues du pool interne"
+                }
+              >
+                [ {suggestionSource === "claude" ? "CLAUDE" : "FALLBACK"} ]
+              </span>
+            )}
+          </div>
 
-          {suggestions.length === 0 ? (
+          {loadingSuggestions && suggestions.length === 0 ? (
+            <div
+              className="border border-[#666666]/20"
+              aria-busy="true"
+              aria-label="Génération des suggestions via Claude"
+            >
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-3 py-2 px-3 border-b border-[#666666]/20 last:border-b-0"
+                >
+                  <Skeleton width={14} height={14} />
+                  <Skeleton height={12} className="flex-1 max-w-[12rem]" />
+                  <Skeleton width={22} height={14} />
+                  <Skeleton width={14} height={14} />
+                </div>
+              ))}
+              <div className="px-3 py-2 border-t border-[#FF3300]/30 bg-[#030303] font-mono text-[10px] text-[#FF3300] tracking-widest uppercase text-center">
+                GÉNÉRATION VIA CLAUDE…
+              </div>
+            </div>
+          ) : suggestions.length === 0 ? (
             <div className="font-mono text-xs text-[#666666] tracking-widest uppercase py-8 text-center border border-[#666666]/20">
               PLUS DE SUGGESTIONS — TOUTES INTÉGRÉES OU REJETÉES.
             </div>
@@ -339,10 +394,13 @@ export function PoolSeedsCard() {
             <button
               type="button"
               onClick={refresh}
-              disabled={busy}
+              disabled={busy || loadingSuggestions}
               className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-4 py-2 font-mono text-xs tracking-widest uppercase transition-colors disabled:opacity-60"
+              aria-label="Générer de nouvelles suggestions via Claude"
             >
-              [ ↻ REFRESH ]
+              {loadingSuggestions
+                ? "[ GÉNÉRATION… ]"
+                : "[ ↻ NOUVELLES SUGGESTIONS ]"}
             </button>
           </div>
         </div>
