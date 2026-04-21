@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySessionToken, SESSION_COOKIE_NAME } from "@/lib/auth";
 
-const PUBLIC_PATHS = ["/login", "/api/login", "/api/order", "/api/cron", "/api/healthz"];
+const PUBLIC_PATHS = [
+  "/login",
+  "/api/login",
+  "/api/order",
+  "/api/cron",
+  "/api/healthz",
+  // Public-routed but cron-auth'd (Bearer CRON_SECRET). Lets the
+  // internal fire-and-forget refill trigger from suggestions-dynamic
+  // hit this path, and allows manual priming via curl.
+  "/api/pool/seeds/refill-pool",
+];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
