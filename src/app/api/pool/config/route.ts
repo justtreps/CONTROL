@@ -19,6 +19,7 @@ const patchSchema = z
     maxAttemptsMethodB: z.number().int().min(1).optional(),
     maxPagesPerSeed: z.number().int().min(1).optional(),
     methodARatio: z.number().min(0).max(1).optional(),
+    methodBEnabled: z.boolean().optional(),
     healthCheckEnabled: z.boolean().optional(),
     healthCheckCron: z.string().min(1).max(64).optional(),
     maxFollowerCount: z.number().int().min(0).optional(),

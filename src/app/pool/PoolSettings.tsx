@@ -16,6 +16,7 @@ type Cfg = {
   maxAttemptsMethodB: number;
   maxPagesPerSeed: number;
   methodARatio: number;
+  methodBEnabled: boolean;
   healthCheckEnabled: boolean;
   healthCheckCron: string;
   maxFollowerCount: number;
@@ -244,6 +245,7 @@ function QuotasBody({ initial }: { initial: Cfg }) {
   const [methodBAtt, setMethodBAtt] = useState(initial.maxAttemptsMethodB);
   const [pagesPerSeed, setPagesPerSeed] = useState(initial.maxPagesPerSeed);
   const [ratio, setRatio] = useState(initial.methodARatio);
+  const methodB = initial.methodBEnabled;
 
   return (
     <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
@@ -265,41 +267,51 @@ function QuotasBody({ initial }: { initial: Cfg }) {
         value={healthCalls}
         onChange={(e) => setHealthCalls(Number(e.target.value) || 1)}
       />
-      <div className="grid grid-cols-2 gap-3">
-        <LabelInput
-          label="TENTATIVES MÉTHODE B"
-          help="Nombre de usernames random testés."
-          type="number"
-          value={methodBAtt}
-          onChange={(e) => setMethodBAtt(Number(e.target.value) || 1)}
-        />
+      <div className={`grid ${methodB ? "grid-cols-2" : "grid-cols-1"} gap-3`}>
+        {methodB && (
+          <LabelInput
+            label="TENTATIVES MAX MÉTHODE 2"
+            help="Nombre de usernames random testés avant d'arrêter la Phase B."
+            type="number"
+            value={methodBAtt}
+            onChange={(e) => setMethodBAtt(Number(e.target.value) || 1)}
+          />
+        )}
         <LabelInput
           label="PAGES PAR SEED"
-          help="Nombre de pages de followers lues par seed."
+          help="Nombre de pages de followers lues par seed (Méthode A)."
           type="number"
           value={pagesPerSeed}
           onChange={(e) => setPagesPerSeed(Number(e.target.value) || 1)}
         />
       </div>
-      <LabelInput
-        label={`RATIO MÉTHODE A (0-1) — ACTUEL ${ratio}`}
-        help="Proportion du scrape faite via les seeds (méthode A) vs random (B)."
-        type="number"
-        step="0.05"
-        min="0"
-        max="1"
-        value={ratio}
-        onChange={(e) => setRatio(Number(e.target.value))}
-      />
+      {methodB && (
+        <LabelInput
+          label={`RATIO MÉTHODE A (0-1) — ACTUEL ${ratio}`}
+          help="Proportion du scrape faite via les seeds (méthode A) vs random (B)."
+          type="number"
+          step="0.05"
+          min="0"
+          max="1"
+          value={ratio}
+          onChange={(e) => setRatio(Number(e.target.value))}
+        />
+      )}
+      {!methodB && (
+        <p className="font-mono text-[10px] text-[#666666] normal-case leading-relaxed border-l-2 border-[#666666]/40 pl-3">
+          La Méthode&nbsp;2 étant désactivée, les réglages associés (tentatives
+          max, ratio A/B) sont masqués. Active-la dans la sous-section B pour y
+          accéder.
+        </p>
+      )}
       <SaveButton
         saving={saving}
         onClick={() =>
           patch({
             maxRapidapiCallsPerScrapeRun: scrapeCalls,
             maxRapidapiCallsPerHealthcheck: healthCalls,
-            maxAttemptsMethodB: methodBAtt,
+            ...(methodB ? { maxAttemptsMethodB: methodBAtt, methodARatio: ratio } : {}),
             maxPagesPerSeed: pagesPerSeed,
-            methodARatio: ratio,
           })
         }
       />

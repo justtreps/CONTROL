@@ -59,6 +59,11 @@ export type ScrapeStats = {
   candidatesQualified: number;
   candidatesRejected: RejectionBreakdown;
   errors: string[];
+  // True if Phase B was skipped because the methodBEnabled global
+  // toggle was off at tranche time. Set once and surfaced in the UI so
+  // operators can see "no B accounts because Method B is disabled"
+  // rather than thinking the phase silently failed.
+  phaseBSkipped?: boolean;
   // Phase A checkpoint
   a: {
     doneSeedIds: number[];
@@ -219,8 +224,18 @@ export async function runScrapeTranche({
   // MVP stub. Left noop until a generic user-info-by-username helper
   // exists for method B; Phase A with relaxed thresholds already gives
   // us a working pool.
+  //
+  // Global toggle: if cfg.methodBEnabled is false we skip Phase B
+  // entirely and flag the run so the UI can tell operators why the
+  // phase produced nothing. Note that Phase A ran according to
+  // methodARatio as usual — the toggle is additive, not a full
+  // scraper pause (for that, use SystemToggle.poolScrapeEnabled).
   if (stats.phase === "b") {
-    // noop
+    if (!cfg.methodBEnabled) {
+      stats.phaseBSkipped = true;
+    }
+    // noop body — real Phase B implementation will branch on
+    // cfg.methodBEnabled before doing any work.
   }
 
   const reachedTarget = totalAdded() >= stats.target;

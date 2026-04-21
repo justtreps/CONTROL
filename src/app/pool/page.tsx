@@ -92,6 +92,7 @@ export default async function PoolPage() {
           maxAttemptsMethodB: config.maxAttemptsMethodB,
           maxPagesPerSeed: config.maxPagesPerSeed,
           methodARatio: config.methodARatio,
+          methodBEnabled: config.methodBEnabled,
           healthCheckEnabled: config.healthCheckEnabled,
           healthCheckCron: config.healthCheckCron,
           maxFollowerCount: config.maxFollowerCount,

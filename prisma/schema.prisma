@@ -99,6 +99,11 @@ model PoolConfig {
   // Split between big-account scraping (A) and random-username probing (B)
   methodARatio                     Float    @default(0.7)
 
+  // Global kill switch for Phase B (random-username probing). When
+  // false the scraper skips Phase B entirely even if methodARatio < 1,
+  // and the /pool UI grays out the Method-B configuration surface.
+  methodBEnabled                   Boolean  @default(true)
+
   // Health check schedule (cron expression — read by the orchestrator)
   healthCheckEnabled               Boolean  @default(true)
   healthCheckCron                  String   @default("0 3 * * *")
