@@ -212,7 +212,19 @@ async function checkOneSeed(seed: {
         );
       } catch (e) {
         const msg = (e as Error).message;
-        if (/not\s*found/i.test(msg) || /404/.test(msg)) {
+        // Treat TT provider errors that mean "this username doesn't
+        // resolve to a live account" as ghost. Covers:
+        //   • /404/                       - classic HTTP miss
+        //   • /not found/                 - legacy wording
+        //   • /unique_id is invalid/      - TT returns this for a
+        //                                   deleted / banned handle
+        //   • /userinfo is failed/        - TT's own "not found" variant
+        if (
+          /not\s*found/i.test(msg) ||
+          /404/.test(msg) ||
+          /unique_id\s+is\s+invalid/i.test(msg) ||
+          /userinfo\s+is\s+failed/i.test(msg)
+        ) {
           await markDead(seed, `tt resolve: ${msg.slice(0, 160)}`);
           return { outcome: "dead", callsUsed, reason: msg.slice(0, 200) };
         }
