@@ -38,6 +38,28 @@ export type OracleMiss = {
 
 export type OracleResult = OracleOk | OracleMiss;
 
+// Patterns that unambiguously mean "this IG user_id doesn't resolve
+// to a live account" (deleted, banned, or never existed). Any hit →
+// ghost. Kept broad because RapidAPI has changed its error shapes
+// over time and various upstream/downstream layers rephrase the
+// response (e.g. some proxies wrap a 404 as a 200 with an HTML body).
+const IG_GHOST_RX = [
+  /"detail"\s*:\s*"Not found"/i,     // native RapidAPI error shape
+  /\buser not found\b/i,              // common upstream rewording
+  /\bdoes not exist\b/i,              // alt IG API wording
+  /\baccount (?:has been )?removed\b/i,
+  /\bno user (?:was )?found\b/i,
+  /\b404\b/,                          // raw HTTP 404 leak in msg
+];
+
+function igIsGhost(msg: string): boolean {
+  if (IG_GHOST_RX.some((rx) => rx.test(msg))) return true;
+  // Paired condition: generic "not found" text inside a user_info
+  // error body (avoids false positives on e.g. "followers not found").
+  if (/not found/i.test(msg) && /user_info/i.test(msg)) return true;
+  return false;
+}
+
 export async function fetchIgOracle(userId: string): Promise<OracleResult> {
   try {
     const info = await fetchInstagramUserInfo(userId);
@@ -53,13 +75,27 @@ export async function fetchIgOracle(userId: string): Promise<OracleResult> {
     };
   } catch (e) {
     const msg = (e as Error).message ?? "";
-    // Our helper throws "Unexpected Instagram user_info response: {detail:'Not found'}..."
-    // when RapidAPI says the user_id doesn't exist. Match that signature explicitly.
-    if (/"detail"\s*:\s*"Not found"/i.test(msg) || /not found/i.test(msg) && /user_info/i.test(msg)) {
+    if (igIsGhost(msg)) {
       return { ok: false, reason: "ghost", message: msg.slice(0, 200) };
     }
     return { ok: false, reason: "error", message: msg.slice(0, 200) };
   }
+}
+
+// TT: most ghost signals are already captured upstream (fetchTikTokUser
+// ByUserId returns null on the obvious ones), but the helper can still
+// throw if the provider returns an unexpected shape. Broaden ghost
+// detection on the thrown-message path too for parity with IG.
+const TT_GHOST_RX = [
+  /\bnot found\b/i,
+  /\buserinfo is failed\b/i,
+  /\bunique_id is invalid\b/i,
+  /\buser does not exist\b/i,
+  /\b404\b/,
+];
+
+function ttIsGhost(msg: string): boolean {
+  return TT_GHOST_RX.some((rx) => rx.test(msg));
 }
 
 export async function fetchTtOracle(userId: string): Promise<OracleResult> {
@@ -79,11 +115,11 @@ export async function fetchTtOracle(userId: string): Promise<OracleResult> {
       isPrivate: false, // TT public API doesn't expose is_private for this shape
     };
   } catch (e) {
-    return {
-      ok: false,
-      reason: "error",
-      message: (e as Error).message.slice(0, 200),
-    };
+    const msg = (e as Error).message ?? "";
+    if (ttIsGhost(msg)) {
+      return { ok: false, reason: "ghost", message: msg.slice(0, 200) };
+    }
+    return { ok: false, reason: "error", message: msg.slice(0, 200) };
   }
 }
 
