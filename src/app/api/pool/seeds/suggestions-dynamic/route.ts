@@ -1,26 +1,31 @@
-// Dynamic seed suggestions endpoint — asks Claude Haiku to propose
-// N popular IG/TikTok handles that aren't already known (active seed
-// or previously integrated/rejected via PoolSeedSuggestionAction).
+// GET /api/pool/seeds/suggestions-dynamic?platform=…&count=10
 //
-// GET ?platform=instagram|tiktok&count=10
-//   → { rows: [{ platform, username }], total, source: "claude"|"fallback" }
+// Reads from the PoolSeedSuggestionPool cache in <50ms (typical) and
+// triggers a background refill when the cache runs low. Falls back to
+// an inline Claude call only when the cache is completely empty for the
+// platform (cold-start or after a catastrophic prune). Final fallback
+// is the hardcoded lib/pool/suggested-seeds.ts pool.
 //
-// Replaces /api/pool/seeds/suggestions GET (which served from a
-// hardcoded list). That route still handles POST (integrate/reject)
-// and remains untouched so the decision log keeps working.
-//
-// Fallback: if the Claude call fails (no ANTHROPIC_API_KEY, rate
-// limit, parse error, network timeout), we serve from the old
-// hardcoded pool in lib/pool/suggested-seeds.ts with a daily-rotation
-// shuffle. The UI receives `source: "fallback"` so it can surface a
-// small hint if it wants.
+// Response: {
+//   rows: [{ platform, username }],
+//   count: number,                      // rows length
+//   pool_remaining: number,             // after this read, how many cached rows would still satisfy the exclude set
+//   source: "cache" | "hybrid" | "claude" | "fallback",
+//   refill_triggered: boolean
+// }
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import {
+  fetchCachedSuggestions,
+  getPoolCount,
+  refillSuggestionPool,
+  POOL_REFILL_THRESHOLD,
+  type PlatformId,
+} from "@/lib/pool/suggestion-pool";
 import { suggestedSeedsFor } from "@/lib/pool/suggested-seeds";
 
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const CLAUDE_TIMEOUT_MS = 12_000;
+export const maxDuration = 30;
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -29,190 +34,102 @@ export async function GET(req: Request) {
     20,
     Math.max(1, Number(url.searchParams.get("count") ?? 10) || 10)
   );
-
   if (platform !== "instagram" && platform !== "tiktok") {
     return NextResponse.json(
       { error: "platform must be instagram or tiktok" },
       { status: 400 }
     );
   }
+  const plat = platform as PlatformId;
 
-  // Build the exclusion set from DB: every seed currently known
-  // (active or disabled) + every username ever integrated or rejected.
-  const [activeSeeds, actedOn] = await Promise.all([
+  // Build the exclude set: active seeds + integrated/rejected history.
+  const [activeSeeds, acted] = await Promise.all([
     prisma.poolSeedAccount.findMany({
-      where: { platform },
+      where: { platform: plat },
       select: { username: true },
     }),
     prisma.poolSeedSuggestionAction.findMany({
-      where: { platform },
+      where: { platform: plat },
       select: { username: true },
     }),
   ]);
-
   const excludeSet = new Set<string>([
     ...activeSeeds.map((s) => s.username.toLowerCase()),
-    ...actedOn.map((s) => s.username.toLowerCase()),
+    ...acted.map((s) => s.username.toLowerCase()),
   ]);
 
-  // --- Try Claude first ----------------------------------------------
-  try {
-    const usernames = await fetchClaudeSuggestions({
-      platform,
-      count,
-      exclude: Array.from(excludeSet),
-    });
+  // Read from cache.
+  const { rows, total } = await fetchCachedSuggestions({
+    platform: plat,
+    count,
+    excludeSet,
+  });
 
-    // Post-filter: Claude occasionally ignores the exclude list, and
-    // may return duplicates. Dedupe + re-apply exclude locally so the
-    // UI never shows a handle the user already acted on.
-    const seen = new Set<string>();
-    const filtered: string[] = [];
-    for (const u of usernames) {
-      const key = u.toLowerCase();
-      if (excludeSet.has(key) || seen.has(key)) continue;
-      seen.add(key);
-      filtered.push(u);
+  const poolCount = await getPoolCount(plat);
+  const cacheHasEnough = rows.length >= count;
+
+  // --- Happy path: serve from cache, maybe trigger background refill ---
+  if (rows.length > 0) {
+    let refillTriggered = false;
+    if (poolCount < POOL_REFILL_THRESHOLD) {
+      kickOffRefill(plat);
+      refillTriggered = true;
     }
-
     return NextResponse.json({
-      rows: filtered.slice(0, count).map((username) => ({ platform, username })),
-      total: filtered.length,
-      source: "claude",
+      rows: rows.map((username) => ({ platform: plat, username })),
+      count: rows.length,
+      pool_remaining: Math.max(0, total - rows.length),
+      source: cacheHasEnough ? "cache" : "hybrid",
+      refill_triggered: refillTriggered,
+    });
+  }
+
+  // --- Cold-start path: cache empty, do a synchronous Claude refill ----
+  // This is the "first visit after deploy / after the pool was wiped"
+  // case. We synchronously refill so the user sees suggestions at all.
+  try {
+    const result = await refillSuggestionPool(plat);
+    const again = await fetchCachedSuggestions({
+      platform: plat,
+      count,
+      excludeSet,
+    });
+    return NextResponse.json({
+      rows: again.rows.map((username) => ({ platform: plat, username })),
+      count: again.rows.length,
+      pool_remaining: Math.max(0, again.total - again.rows.length),
+      source: result.source, // "claude" or "fallback"
+      refill_triggered: true,
     });
   } catch (e) {
-    // --- Fallback: hardcoded pool ------------------------------------
+    // --- Ultimate fallback: serve straight from the hardcoded list ---
     console.error(
-      "[suggestions-dynamic] Claude call failed, falling back:",
+      "[suggestions-dynamic] cold-start refill failed:",
       (e as Error).message
     );
-    return NextResponse.json(fallback({ platform, count, excludeSet }));
-  }
-}
-
-// ── Claude call ──────────────────────────────────────────────────────
-async function fetchClaudeSuggestions({
-  platform,
-  count,
-  exclude,
-}: {
-  platform: "instagram" | "tiktok";
-  count: number;
-  exclude: string[];
-}): Promise<string[]> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-
-  // Cap the exclude list in the prompt so we don't bloat tokens.
-  // 80 handles is plenty of anti-duplication signal while staying
-  // well under any practical prompt budget.
-  const excludeSample = exclude.slice(0, 80);
-  const excludeStr =
-    excludeSample.length > 0 ? excludeSample.join(", ") : "(aucun)";
-
-  const platformName = platform === "instagram" ? "Instagram" : "TikTok";
-
-  const prompt =
-    `Donne-moi ${count} comptes ${platformName} réels avec plus de 5M followers, ` +
-    `format JSON array de strings (juste les usernames sans @). ` +
-    `Exclure : [${excludeStr}]. ` +
-    `Répondre uniquement avec le JSON, rien d'autre.`;
-
-  // Abort after CLAUDE_TIMEOUT_MS so a hung provider doesn't pin the
-  // serverless invocation to its max duration.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), CLAUDE_TIMEOUT_MS);
-
-  let res: Response;
-  try {
-    res = await fetch(ANTHROPIC_API_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5",
-        max_tokens: 512,
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: ctrl.signal,
+    const hard = suggestedSeedsFor(plat)
+      .filter((u) => !excludeSet.has(u.toLowerCase()))
+      .slice(0, count);
+    return NextResponse.json({
+      rows: hard.map((username) => ({ platform: plat, username })),
+      count: hard.length,
+      pool_remaining: 0,
+      source: "fallback",
+      refill_triggered: false,
     });
-  } finally {
-    clearTimeout(timer);
   }
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
-  }
-
-  const data = (await res.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
-
-  const text =
-    data.content?.find((c) => c.type === "text")?.text?.trim() ?? "";
-  if (!text) throw new Error("empty Claude response");
-
-  // Pull the first [...] array out of the response. Claude sometimes
-  // wraps it in prose or code fences despite the instruction, so we're
-  // defensive about the shape.
-  const match = text.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error("no JSON array in response");
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(match[0]);
-  } catch {
-    throw new Error("invalid JSON array");
-  }
-
-  if (!Array.isArray(parsed)) throw new Error("response is not an array");
-
-  const out: string[] = [];
-  for (const item of parsed) {
-    if (typeof item !== "string") continue;
-    const cleaned = item.trim().replace(/^@/, "").toLowerCase();
-    // Basic sanity: usernames are 1-30 chars, a-z0-9._ (IG). TikTok
-    // allows underscores and dots too. Reject anything that looks
-    // like a sentence or URL leak.
-    if (!/^[a-z0-9._-]{1,30}$/.test(cleaned)) continue;
-    out.push(cleaned);
-  }
-  return out;
 }
 
-// ── Fallback: hardcoded list w/ daily rotation ──────────────────────
-function fallback({
-  platform,
-  count,
-  excludeSet,
-}: {
-  platform: "instagram" | "tiktok";
-  count: number;
-  excludeSet: Set<string>;
-}) {
-  const all = suggestedSeedsFor(platform);
-  const candidates = all.filter((u) => !excludeSet.has(u.toLowerCase()));
-  const seed = `${platform}-${new Date().toISOString().slice(0, 10)}`;
-  candidates.sort((a, b) => {
-    const ha = simpleHash(`${seed}|${a.toLowerCase()}`);
-    const hb = simpleHash(`${seed}|${b.toLowerCase()}`);
-    return ha - hb;
+// Fire-and-forget refill. We don't await — the user gets their cached
+// rows immediately and Vercel's runtime completes the promise in the
+// background. If the invocation dies before it finishes, the 15-min
+// cron will catch up on the next tick. Either way, the cache stays
+// within acceptable drift of POOL_TARGET.
+function kickOffRefill(platform: PlatformId) {
+  void refillSuggestionPool(platform).catch((e) => {
+    console.error(
+      `[suggestions-dynamic] background refill for ${platform} failed:`,
+      (e as Error).message
+    );
   });
-  return {
-    rows: candidates.slice(0, count).map((username) => ({ platform, username })),
-    total: candidates.length,
-    source: "fallback" as const,
-  };
-}
-
-function simpleHash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h * 31 + s.charCodeAt(i)) | 0;
-  }
-  return h;
 }

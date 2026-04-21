@@ -146,6 +146,21 @@ model PoolUsernamePrefix {
   enabled Boolean @default(true)
 }
 
+// Reserve of pre-generated seed suggestions, topped up by a Claude
+// Haiku refill job (cron + on-demand). Reading from this table makes
+// the /pool seeds "Suggestions" column instant — no user-visible
+// Claude latency. Rows get drained as operators integrate or reject
+// entries; the cron keeps the pool at >=100 per platform.
+model PoolSeedSuggestionPool {
+  id        Int      @id @default(autoincrement())
+  platform  String   // 'instagram' | 'tiktok'
+  username  String
+  createdAt DateTime @default(now())
+
+  @@unique([platform, username])
+  @@index([platform, createdAt])
+}
+
 // Decision log for the suggested-seeds workflow: each row records
 // that a given (platform, username) was either promoted to
 // PoolSeedAccount (action='integrated') or dismissed (action='rejected')
