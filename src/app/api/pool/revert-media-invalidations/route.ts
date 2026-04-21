@@ -24,7 +24,7 @@ export async function POST(req: Request) {
 
   const followerCap = Math.max(
     0,
-    Number(url.searchParams.get("followerCap") ?? cfg.invalidateIfFollowerAbove) || cfg.invalidateIfFollowerAbove
+    Number(url.searchParams.get("followerCap") ?? cfg.maxFollowerCount) || cfg.maxFollowerCount
   );
   const followingCap = Math.max(
     0,

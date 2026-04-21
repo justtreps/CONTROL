@@ -108,19 +108,28 @@ model PoolConfig {
   healthCheckEnabled               Boolean  @default(true)
   healthCheckCron                  String   @default("0 3 * * *")
 
-  // Fresh-account qualification thresholds.
-  // We only care about follower_count + is_private. media_count is
-  // effectively disabled (999999 = "never reject on media") because
-  // a profile with a handful of posts is still usable — what matters
-  // is that the account isn't tracking anyone yet and has near-zero
+  // Fresh-account qualification thresholds. Used BOTH at scrape time
+  // (accept candidate when value <= threshold) AND at health-check
+  // time (invalidate row when value > threshold). Unified into one
+  // config so the two passes can never drift — historically there
+  // were separate `maxFollowerCount` (scrape) and `invalidateIf
+  // FollowerAbove` (health) fields which got out of sync, letting
+  // accounts land in the pool that the next cron would immediately
+  // invalidate. That separate field is dropped in this revision.
+  //
+  // maxMediaCount is effectively disabled (999999) because a profile
+  // with a handful of posts is still usable — what matters is that
+  // the account isn't tracking anyone yet and has near-zero
   // followers.
-  maxFollowerCount                 Int      @default(10)
+  maxFollowerCount                 Int      @default(5)
   maxMediaCount                    Int      @default(999999)
   maxFollowingCount                Int      @default(100)
   requireNotPrivate                Boolean  @default(true)
 
-  // Invalidation rules applied by the health check.
-  invalidateIfFollowerAbove        Int      @default(5)
+  // Stricter health-check guardrail reserved for media_count. Kept
+  // separate from maxMediaCount for now since media_count checks
+  // might evolve independently (we routinely accept posts at scrape
+  // time but could want to flag later growth).
   invalidateIfMediaAbove           Int      @default(999999)
 
   updatedAt                        DateTime @updatedAt

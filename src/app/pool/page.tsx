@@ -98,7 +98,6 @@ export default async function PoolPage() {
           maxFollowerCount: config.maxFollowerCount,
           maxFollowingCount: config.maxFollowingCount,
           requireNotPrivate: config.requireNotPrivate,
-          invalidateIfFollowerAbove: config.invalidateIfFollowerAbove,
         }}
       />
     </PoolToastProvider>

@@ -22,7 +22,6 @@ type Cfg = {
   maxFollowerCount: number;
   maxFollowingCount: number;
   requireNotPrivate: boolean;
-  invalidateIfFollowerAbove: number;
 };
 
 // "Paramètres techniques" — 4 collapsed accordions. Non-dev user
@@ -360,27 +359,25 @@ function QualificationBody({ initial }: { initial: Cfg }) {
   const [maxFollowers, setMaxFollowers] = useState(initial.maxFollowerCount);
   const [maxFollowing, setMaxFollowing] = useState(initial.maxFollowingCount);
   const [requirePublic, setRequirePublic] = useState(initial.requireNotPrivate);
-  const [invalidateAbove, setInvalidateAbove] = useState(
-    initial.invalidateIfFollowerAbove
-  );
 
   return (
     <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
       <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
-        Règles qui définissent ce qu&apos;est un &laquo;&nbsp;bon compte test&nbsp;&raquo;. Un
-        compte qui dépasse ces seuils est ignoré au scrape ou invalidé à la
-        vérification.
+        Règles qui définissent ce qu&apos;est un &laquo;&nbsp;bon compte
+        test&nbsp;&raquo;. Le <span className="text-white">MAX ABONNÉS</span>{" "}
+        sert à la fois au scrape (candidat rejeté s&apos;il dépasse) et à la
+        vérification quotidienne (compte invalidé s&apos;il dépasse).
       </p>
       <LabelInput
-        label="MAX FOLLOWERS (AU SCRAPE)"
-        help="Un candidat au-dessus de ce nombre est rejeté."
+        label="MAX ABONNÉS"
+        help="Scrape : candidat rejeté si > N. Vérif quotidienne : compte invalidé si > N."
         type="number"
         value={maxFollowers}
         onChange={(e) => setMaxFollowers(Number(e.target.value) || 0)}
       />
       <LabelInput
-        label="MAX FOLLOWING (AU SCRAPE)"
-        help="Un candidat qui suit trop de monde est rejeté."
+        label="MAX ABONNEMENTS"
+        help="Un candidat qui suit trop de monde est rejeté au scrape."
         type="number"
         value={maxFollowing}
         onChange={(e) => setMaxFollowing(Number(e.target.value) || 0)}
@@ -389,13 +386,6 @@ function QualificationBody({ initial }: { initial: Cfg }) {
         label="REFUSER COMPTES PRIVÉS"
         value={requirePublic}
         onChange={setRequirePublic}
-      />
-      <LabelInput
-        label="INVALIDER SI FOLLOWERS > (À LA VÉRIF)"
-        help="Un compte test qui a gagné trop de followers n'est plus vierge."
-        type="number"
-        value={invalidateAbove}
-        onChange={(e) => setInvalidateAbove(Number(e.target.value) || 0)}
       />
       <p className="font-mono text-[10px] text-[#666666] normal-case leading-relaxed">
         Note : la restriction sur le nombre de posts a été retirée — un compte
@@ -408,7 +398,6 @@ function QualificationBody({ initial }: { initial: Cfg }) {
             maxFollowerCount: maxFollowers,
             maxFollowingCount: maxFollowing,
             requireNotPrivate: requirePublic,
-            invalidateIfFollowerAbove: invalidateAbove,
           })
         }
       />

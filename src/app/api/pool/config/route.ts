@@ -26,7 +26,6 @@ const patchSchema = z
     maxMediaCount: z.number().int().min(0).optional(),
     maxFollowingCount: z.number().int().min(0).optional(),
     requireNotPrivate: z.boolean().optional(),
-    invalidateIfFollowerAbove: z.number().int().min(0).optional(),
     invalidateIfMediaAbove: z.number().int().min(0).optional(),
   })
   .strict();

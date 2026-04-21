@@ -83,7 +83,7 @@ export async function POST(
     oracle.username.toLowerCase() !== row.username.toLowerCase();
 
   let invalidReason: string | null = null;
-  if (oracle.followerCount > cfg.invalidateIfFollowerAbove)
+  if (oracle.followerCount > cfg.maxFollowerCount)
     invalidReason = "became_active";
   else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
     invalidReason = "became_active";

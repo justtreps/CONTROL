@@ -122,7 +122,7 @@ export async function sweepPool(opts: {
       oracle.username.length > 0 &&
       oracle.username.toLowerCase() !== r.username.toLowerCase();
     const followersTooHigh =
-      oracle.followerCount > cfg.invalidateIfFollowerAbove;
+      oracle.followerCount > cfg.maxFollowerCount;
     const mediaTooHigh = oracle.mediaCount > cfg.invalidateIfMediaAbove;
     const nowPrivate =
       platform === "instagram" && cfg.requireNotPrivate && oracle.isPrivate;
