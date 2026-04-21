@@ -25,14 +25,18 @@ export function CustomCursor() {
       mouseY = e.clientY;
     };
 
+    let precise = false;
     const tick = () => {
       dotX += (mouseX - dotX) * 0.25;
       dotY += (mouseY - dotY) * 0.25;
       if (dotRef.current) {
         dotRef.current.style.transform = `translate3d(${dotX}px, ${dotY}px, 0) translate(-50%, -50%)`;
       }
-      bracketX += (mouseX - bracketX) * 0.12;
-      bracketY += (mouseY - bracketY) * 0.12;
+      // In precise mode (e.g. over a chart) brackets snap to the real
+      // mouse position so visual and data-under-cursor stay aligned.
+      const lerp = precise ? 1 : 0.12;
+      bracketX += (mouseX - bracketX) * lerp;
+      bracketY += (mouseY - bracketY) * lerp;
       if (bracketsRef.current) {
         bracketsRef.current.style.transform = `translate3d(${bracketX}px, ${bracketY}px, 0) translate(-50%, -50%)`;
       }
@@ -46,6 +50,9 @@ export function CustomCursor() {
       }
       if (t?.closest("[data-cursor='invert']")) {
         document.body.classList.add("cursor-on-red");
+      }
+      if (t?.closest("[data-cursor='precise']")) {
+        precise = true;
       }
     };
 
@@ -64,6 +71,12 @@ export function CustomCursor() {
         const goingToInvert = r?.closest?.("[data-cursor='invert']");
         if (!goingToInvert) {
           document.body.classList.remove("cursor-on-red");
+        }
+      }
+      if (t?.closest("[data-cursor='precise']")) {
+        const goingToPrecise = r?.closest?.("[data-cursor='precise']");
+        if (!goingToPrecise) {
+          precise = false;
         }
       }
     };

@@ -87,7 +87,10 @@ export function PoolHistoryChart({ initialData }: Props) {
 
   return (
     <section className="px-4 md:px-8 pb-12 md:pb-16">
-      <div className="max-w-7xl mx-auto relative border border-[#666666]/30 p-5 md:p-8 pb-20 md:pb-24">
+      <div
+        data-cursor="precise"
+        className="max-w-7xl mx-auto relative border border-[#666666]/30 p-5 md:p-8 pb-20 md:pb-24"
+      >
         <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none z-10">
           <span className="font-mono text-xs text-[#FF3300] tracking-widest">
             [ ASSET: POOL-EVOLUTION ]
