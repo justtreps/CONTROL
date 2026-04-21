@@ -115,6 +115,7 @@ async function processOneAccount({
   stats: HealthStats;
   cfg: {
     maxFollowerCount: number;
+    maxFollowingCount: number;
     invalidateIfMediaAbove: number;
     requireNotPrivate: boolean;
   };
@@ -156,6 +157,11 @@ async function processOneAccount({
   if (oracle.followerCount > cfg.maxFollowerCount)
     invalidReason = "became_active";
   else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
+    invalidReason = "became_active";
+  else if (oracle.followingCount > cfg.maxFollowingCount)
+    // Parity with the scrape-time filter: if the account starts
+    // following far more people than we admit at scrape, it's drifted
+    // away from the "virgin" profile we want to test on.
     invalidReason = "became_active";
   else if (row.platform === "instagram" && oracle.isPrivate)
     invalidReason = "became_private";

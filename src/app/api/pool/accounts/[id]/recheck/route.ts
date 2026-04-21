@@ -87,6 +87,8 @@ export async function POST(
     invalidReason = "became_active";
   else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
     invalidReason = "became_active";
+  else if (oracle.followingCount > cfg.maxFollowingCount)
+    invalidReason = "became_active";
   else if (row.platform === "instagram" && oracle.isPrivate)
     invalidReason = "became_private";
 

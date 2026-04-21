@@ -124,10 +124,12 @@ export async function sweepPool(opts: {
     const followersTooHigh =
       oracle.followerCount > cfg.maxFollowerCount;
     const mediaTooHigh = oracle.mediaCount > cfg.invalidateIfMediaAbove;
+    const followingTooHigh =
+      oracle.followingCount > cfg.maxFollowingCount;
     const nowPrivate =
       platform === "instagram" && cfg.requireNotPrivate && oracle.isPrivate;
 
-    if (followersTooHigh || mediaTooHigh) {
+    if (followersTooHigh || mediaTooHigh || followingTooHigh) {
       await prisma.testAccount.update({
         where: { id: r.id },
         data: {
