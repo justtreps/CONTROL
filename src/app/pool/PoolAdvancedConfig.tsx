@@ -6,6 +6,7 @@ import { Collapsible } from "./Collapsible";
 import { PoolSeedsCard } from "./PoolSeedsCard";
 import { PoolPrefixesCard } from "./PoolPrefixesCard";
 import { PoolSettings } from "./PoolSettings";
+import { PoolJobsHistory } from "./PoolJobsHistory";
 import { usePoolToast } from "./PoolToast";
 
 type Cfg = React.ComponentProps<typeof PoolSettings>["initialConfig"];
@@ -48,6 +49,19 @@ export function PoolAdvancedConfig({ initialConfig }: { initialConfig: Cfg }) {
           </span>
         </div>
         <PoolSettings initialConfig={initialConfig} />
+      </div>
+
+      {/* Sub-section D — Jobs history */}
+      <div className="w-full">
+        <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-3 border-b border-[#666666]/20 bg-[#030303] flex items-center gap-3 flex-wrap">
+          <span className="text-[#FF3300]">D.</span>
+          <span className="text-white">HISTORIQUE DES JOBS</span>
+          <span className="normal-case text-[#666666]/70 text-[10px]">
+            (tous les scrapes, vérifications et nettoyages passés — click une
+            ligne pour voir le détail)
+          </span>
+        </div>
+        <PoolJobsHistory />
       </div>
     </Collapsible>
   );
