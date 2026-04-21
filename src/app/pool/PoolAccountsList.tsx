@@ -285,23 +285,23 @@ export function PoolAccountsList() {
                   <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
                     {r.lastFollowerCount !== null ? r.lastFollowerCount : "—"}
                   </td>
-                  <td className="px-3 py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
+                  <td className="px-3 py-3 text-right whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-3">
                       <button
                         type="button"
                         onClick={() => quickRecheck(r.id)}
                         disabled={Boolean(actioning[r.id])}
-                        className="interactive font-mono text-xs text-[#FF3300] hover:text-white transition-colors disabled:opacity-50"
+                        className="interactive font-mono text-xs text-[#FF3300] hover:text-white transition-colors disabled:opacity-50 whitespace-nowrap"
                       >
-                        [ RECHECK ]
+                        [&nbsp;RECHECK&nbsp;]
                       </button>
                       <button
                         type="button"
                         onClick={() => quickInvalidate(r.id)}
                         disabled={Boolean(actioning[r.id])}
-                        className="interactive font-mono text-xs text-[#666666] hover:text-[#FF3300] transition-colors disabled:opacity-50"
+                        className="interactive font-mono text-xs text-[#666666] hover:text-[#FF3300] transition-colors disabled:opacity-50 whitespace-nowrap"
                       >
-                        [ INVALIDATE ]
+                        [&nbsp;INVALIDATE&nbsp;]
                       </button>
                     </div>
                   </td>
