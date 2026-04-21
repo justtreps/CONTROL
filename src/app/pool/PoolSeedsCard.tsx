@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
 import { Skeleton } from "@/components/Skeleton";
+import { Collapsible } from "./Collapsible";
+import { PoolSeedsHealthLog } from "./PoolSeedsHealthLog";
 
 type Seed = {
   id: number;
@@ -40,6 +42,8 @@ export function PoolSeedsCard() {
   );
   const [addUsername, setAddUsername] = useState("");
   const [busy, setBusy] = useState(false);
+  const [healthCheckRunning, setHealthCheckRunning] = useState(false);
+  const [healthLogKey, setHealthLogKey] = useState(0);
 
   const refresh = useCallback(async () => {
     setLoadingSuggestions(true);
@@ -203,6 +207,48 @@ export function PoolSeedsCard() {
     await integrateUsernames(usernames);
   }
 
+  // Manually trigger the daily seeds health check now. Normally runs
+  // at 03:00 UTC via cron — this button is for operators who just
+  // added seeds or suspect something's stale.
+  async function runHealthCheckNow() {
+    if (healthCheckRunning) return;
+    setHealthCheckRunning(true);
+    try {
+      const res = await fetch("/api/pool/seeds-health-check-manual", {
+        method: "POST",
+      });
+      if (res.ok) {
+        const d = (await res.json()) as {
+          stats: {
+            totalChecked: number;
+            totalDead: number;
+            totalReplaced: number;
+            totalRenamed: number;
+            totalOk: number;
+            callsUsed: number;
+            errors: string[];
+          };
+        };
+        const s = d.stats;
+        toast.push(
+          s.errors.length > 0 ? "err" : "ok",
+          `VÉRIFIÉ ${s.totalChecked} · ${s.totalDead} MORTS (${s.totalReplaced} REMPLACÉS) · ${s.totalRenamed} RENOMMÉS · ${s.callsUsed} CALLS`
+        );
+        // Bump the log key so the collapsible re-fetches the fresh
+        // entries, and refresh the seeds list to reflect rename/replace.
+        setHealthLogKey((k) => k + 1);
+        await refresh();
+        router.refresh();
+      } else {
+        toast.push("err", "ÉCHEC VÉRIFICATION");
+      }
+    } catch {
+      toast.push("err", "ERREUR RÉSEAU");
+    } finally {
+      setHealthCheckRunning(false);
+    }
+  }
+
   async function rejectUsernames(usernames: string[]) {
     if (usernames.length === 0) return;
     setBusy(true);
@@ -256,6 +302,26 @@ export function PoolSeedsCard() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Health-check info banner — explains the automation so operators
+          don't worry about stale seeds. */}
+      <div className="px-4 md:px-8 py-3 border-b border-[#666666]/20 bg-[#030303] flex items-start gap-3 flex-wrap">
+        <span
+          className="font-mono text-[10px] text-[#FF3300] tracking-widest uppercase border border-[#FF3300]/60 px-2 py-0.5 flex-shrink-0"
+          aria-hidden="true"
+        >
+          [ ℹ ]
+        </span>
+        <p className="font-mono text-[11px] text-[#CCCCCC] tracking-wide normal-case leading-relaxed flex-1 min-w-[240px]">
+          Les seeds sont vérifiés automatiquement tous les jours à{" "}
+          <span className="text-white">3h UTC</span>.
+          <span className="text-[#666666]">
+            {" "}
+            Seeds morts → supprimés et remplacés par une suggestion du cache.
+            Seeds renommés → username mis à jour automatiquement.
+          </span>
+        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 w-full border-b border-[#666666]/20">
@@ -467,6 +533,36 @@ export function PoolSeedsCard() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Manual health-check trigger + collapsible history log */}
+      <div className="border-b border-[#666666]/20 bg-[#030303]">
+        <div className="px-4 md:px-8 py-4 flex items-center justify-between gap-3 flex-wrap">
+          <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed max-w-xl">
+            Besoin de vérifier les seeds maintenant (au lieu d&apos;attendre 3h
+            UTC) ? Ce bouton lance immédiatement la même vérification que le
+            cron quotidien.
+          </p>
+          <button
+            type="button"
+            onClick={runHealthCheckNow}
+            disabled={healthCheckRunning}
+            className="interactive border border-white bg-transparent text-white hover:bg-white hover:text-black transition-colors px-4 py-2 font-mono text-xs tracking-widest uppercase disabled:opacity-60"
+            aria-label="Lancer la vérification des seeds maintenant"
+          >
+            {healthCheckRunning
+              ? "[ VÉRIFICATION EN COURS… ]"
+              : "[ ⚡ LANCER VÉRIFICATION MAINTENANT ]"}
+          </button>
+        </div>
+
+        <Collapsible
+          label="HISTORIQUE VÉRIFICATIONS SEEDS"
+          hint="20 dernières actions (suppressions, remplacements, renames, erreurs)"
+          compact
+        >
+          <PoolSeedsHealthLog refreshKey={healthLogKey} />
+        </Collapsible>
       </div>
     </section>
   );

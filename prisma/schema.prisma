@@ -128,15 +128,44 @@ model PoolConfig {
 
 // Big accounts whose followers list we paginate (scrape method A).
 model PoolSeedAccount {
-  id        Int      @id @default(autoincrement())
-  platform  String
-  username  String
-  enabled   Boolean  @default(true)
-  priority  Int      @default(0)
-  addedAt   DateTime @default(now())
+  id             Int       @id @default(autoincrement())
+  platform       String
+  username       String
+
+  // Stable platform-side identifier resolved on the first health check.
+  // Lets us survive username renames (which would otherwise break the
+  // @@unique([platform, username]) lookup and make the seed unreachable).
+  userId         String?
+
+  enabled        Boolean   @default(true)
+  priority       Int       @default(0)
+  addedAt        DateTime  @default(now())
+
+  // Last time the daily seeds health check verified this seed exists
+  // and is still public. Null for never-checked (freshly added) seeds.
+  lastCheckedAt  DateTime?
 
   @@unique([platform, username])
   @@index([platform, enabled, priority])
+}
+
+// Audit log for the daily seeds health check. One row per decision
+// (seed deleted + replaced, seed renamed, ok) so operators can scroll
+// recent days' actions when they suspect a seed issue.
+model PoolSeedHealthLog {
+  id            Int      @id @default(autoincrement())
+  platform      String
+  // 'ok' | 'renamed' | 'deleted_mort'
+  //   | 'replaced_from_cache' | 'cache_empty_refill_triggered'
+  //   | 'error' | 'manual_trigger'
+  action        String
+  seedUsername  String   // username at the time of the check
+  newUsername   String?  // rename target, or replacement handle
+  reason        String?  // oracle message / transient error detail
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([platform, createdAt])
 }
 
 // Username prefixes for the random-probe scraper (method B).
