@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
+import { Collapsible } from "./Collapsible";
 
 type Cfg = {
   autoRefillEnabled: boolean;
@@ -23,53 +24,42 @@ type Cfg = {
   invalidateIfFollowerAbove: number;
 };
 
+// "Paramètres techniques" — 4 collapsed accordions. Non-dev user
+// doesn't open these day-to-day, but everything they might need to
+// tweak is still reachable.
 export function PoolSettings({ initialConfig }: { initialConfig: Cfg }) {
   return (
-    <section id="pool-settings" className="w-full scroll-mt-20">
-      <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D]">
-        [ PARAMÈTRES ]
+    <div id="pool-settings" className="w-full scroll-mt-20">
+      <div className="flex flex-col">
+        <Collapsible
+          label="AUTO-REFILL · SEUILS & CIBLES"
+          hint="quand déclencher un scrape automatique"
+          compact
+        >
+          <RefillBody initial={initialConfig} />
+        </Collapsible>
+        <Collapsible
+          label="QUOTAS D'APPELS API"
+          hint="plafonds RapidAPI par job"
+          compact
+        >
+          <QuotasBody initial={initialConfig} />
+        </Collapsible>
+        <Collapsible
+          label="VÉRIFICATION AUTOMATIQUE (CRON)"
+          hint="planning du health-check quotidien"
+          compact
+        >
+          <HealthCheckBody initial={initialConfig} />
+        </Collapsible>
+        <Collapsible
+          label="CRITÈRES DE QUALITÉ DES COMPTES"
+          hint="filtres au scrape + règles d'invalidation"
+          compact
+        >
+          <QualificationBody initial={initialConfig} />
+        </Collapsible>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 w-full border-b border-[#666666]/20">
-        <RefillCard initial={initialConfig} />
-        <QuotasCard initial={initialConfig} />
-        <HealthCheckCard initial={initialConfig} />
-        <QualificationCard initial={initialConfig} />
-      </div>
-    </section>
-  );
-}
-
-// ── Shared card shell ────────────────────────────────────────────────
-function CardShell({
-  num,
-  title,
-  children,
-  bg = "bg-[#030303]",
-  borderRight = false,
-  borderBottom = false,
-}: {
-  num: string;
-  title: string;
-  children: React.ReactNode;
-  bg?: string;
-  borderRight?: boolean;
-  borderBottom?: boolean;
-}) {
-  return (
-    <div
-      className={`relative p-6 md:p-8 ${bg} ${
-        borderRight ? "md:border-r border-[#666666]/20" : ""
-      } ${borderBottom ? "border-b border-[#666666]/20" : ""}`}
-    >
-      <div className="flex items-center justify-between mb-4">
-        <span className="font-mono text-xs text-[#FF3300] tracking-widest">
-          {num}
-        </span>
-      </div>
-      <h3 className="brand font-display text-xl md:text-2xl uppercase tracking-tight text-white mb-6">
-        {title}
-      </h3>
-      {children}
     </div>
   );
 }
@@ -88,7 +78,7 @@ function SaveButton({
       disabled={saving}
       className="interactive mt-4 border border-white bg-white text-black py-2 px-6 font-mono text-xs tracking-widest uppercase hover:bg-[#FF3300] hover:border-[#FF3300] transition-colors disabled:opacity-60"
     >
-      {saving ? "[ SAUVEGARDE... ]" : "[ SAVE ]"}
+      {saving ? "[ SAUVEGARDE... ]" : "[ SAUVEGARDER ]"}
     </button>
   );
 }
@@ -98,14 +88,23 @@ const INPUT_CLS =
 
 function LabelInput({
   label,
+  help,
   ...rest
-}: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+}: {
+  label: string;
+  help?: string;
+} & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <label className="flex flex-col gap-1">
       <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
         {label}
       </span>
       <input {...rest} className={INPUT_CLS} />
+      {help && (
+        <span className="font-mono text-[10px] text-[#666666] normal-case leading-snug">
+          {help}
+        </span>
+      )}
     </label>
   );
 }
@@ -130,7 +129,7 @@ function ToggleRow({
       }`}
     >
       <span>{label}</span>
-      <span>{value ? "[ ENABLED ]" : "[ DISABLED ]"}</span>
+      <span>{value ? "[ ACTIVÉ ]" : "[ DÉSACTIVÉ ]"}</span>
     </button>
   );
 }
@@ -151,11 +150,11 @@ function usePatchConfig() {
         body: JSON.stringify(patchBody),
       });
       if (res.ok) {
-        toast.push("ok", "CONFIG UPDATED");
+        toast.push("ok", "PARAMÈTRES SAUVEGARDÉS");
         router.refresh();
         return true;
       }
-      toast.push("err", "SAVE FAILED");
+      toast.push("err", "ÉCHEC SAUVEGARDE");
       return false;
     } catch {
       toast.push("err", "ERREUR RÉSEAU");
@@ -167,8 +166,8 @@ function usePatchConfig() {
   return { patch, saving };
 }
 
-// ── Card 01 — REFILL ────────────────────────────────────────────────
-function RefillCard({ initial }: { initial: Cfg }) {
+// ── Accordion 01 — REFILL ────────────────────────────────────────────
+function RefillBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
   const [autoRefill, setAutoRefill] = useState(initial.autoRefillEnabled);
   const [thrIg, setThrIg] = useState(initial.refillThresholdInstagram);
@@ -177,153 +176,174 @@ function RefillCard({ initial }: { initial: Cfg }) {
   const [tgtTt, setTgtTt] = useState(initial.refillTargetTiktok);
 
   return (
-    <CardShell num="01" title="Refill" bg="bg-[#030303]" borderRight borderBottom>
-      <div className="flex flex-col gap-4">
-        <ToggleRow
-          label="AUTO-REFILL"
-          value={autoRefill}
-          onChange={setAutoRefill}
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Quand le nombre de comptes DISPO (par plateforme) passe sous le seuil,
+        un scrape automatique se lance jusqu&apos;&agrave; atteindre la cible.
+      </p>
+      <ToggleRow
+        label="AUTO-REFILL"
+        value={autoRefill}
+        onChange={setAutoRefill}
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <LabelInput
+          label="SEUIL IG"
+          help="Déclenche un scrape si DISPO < seuil."
+          type="number"
+          value={thrIg}
+          onChange={(e) => setThrIg(Number(e.target.value) || 0)}
         />
-        <div className="grid grid-cols-2 gap-3">
-          <LabelInput
-            label="IG THRESHOLD"
-            type="number"
-            value={thrIg}
-            onChange={(e) => setThrIg(Number(e.target.value) || 0)}
-          />
-          <LabelInput
-            label="IG TARGET"
-            type="number"
-            value={tgtIg}
-            onChange={(e) => setTgtIg(Number(e.target.value) || 0)}
-          />
-          <LabelInput
-            label="TT THRESHOLD"
-            type="number"
-            value={thrTt}
-            onChange={(e) => setThrTt(Number(e.target.value) || 0)}
-          />
-          <LabelInput
-            label="TT TARGET"
-            type="number"
-            value={tgtTt}
-            onChange={(e) => setTgtTt(Number(e.target.value) || 0)}
-          />
-        </div>
-        <SaveButton
-          saving={saving}
-          onClick={() =>
-            patch({
-              autoRefillEnabled: autoRefill,
-              refillThresholdInstagram: thrIg,
-              refillTargetInstagram: tgtIg,
-              refillThresholdTiktok: thrTt,
-              refillTargetTiktok: tgtTt,
-            })
-          }
+        <LabelInput
+          label="CIBLE IG"
+          help="Stock DISPO à atteindre."
+          type="number"
+          value={tgtIg}
+          onChange={(e) => setTgtIg(Number(e.target.value) || 0)}
+        />
+        <LabelInput
+          label="SEUIL TT"
+          help="Déclenche un scrape si DISPO < seuil."
+          type="number"
+          value={thrTt}
+          onChange={(e) => setThrTt(Number(e.target.value) || 0)}
+        />
+        <LabelInput
+          label="CIBLE TT"
+          help="Stock DISPO à atteindre."
+          type="number"
+          value={tgtTt}
+          onChange={(e) => setTgtTt(Number(e.target.value) || 0)}
         />
       </div>
-    </CardShell>
+      <SaveButton
+        saving={saving}
+        onClick={() =>
+          patch({
+            autoRefillEnabled: autoRefill,
+            refillThresholdInstagram: thrIg,
+            refillTargetInstagram: tgtIg,
+            refillThresholdTiktok: thrTt,
+            refillTargetTiktok: tgtTt,
+          })
+        }
+      />
+    </div>
   );
 }
 
-// ── Card 02 — QUOTAS ────────────────────────────────────────────────
-function QuotasCard({ initial }: { initial: Cfg }) {
+// ── Accordion 02 — QUOTAS ───────────────────────────────────────────
+function QuotasBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
-  const [scrapeCalls, setScrapeCalls] = useState(initial.maxRapidapiCallsPerScrapeRun);
-  const [healthCalls, setHealthCalls] = useState(initial.maxRapidapiCallsPerHealthcheck);
+  const [scrapeCalls, setScrapeCalls] = useState(
+    initial.maxRapidapiCallsPerScrapeRun
+  );
+  const [healthCalls, setHealthCalls] = useState(
+    initial.maxRapidapiCallsPerHealthcheck
+  );
   const [methodBAtt, setMethodBAtt] = useState(initial.maxAttemptsMethodB);
   const [pagesPerSeed, setPagesPerSeed] = useState(initial.maxPagesPerSeed);
   const [ratio, setRatio] = useState(initial.methodARatio);
 
   return (
-    <CardShell num="02" title="Quotas" bg="bg-[#0D0D0D]" borderBottom>
-      <div className="flex flex-col gap-4">
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Plafonds pour limiter la facture RapidAPI. Baisse ces chiffres si tu
+        vois la facture grimper.
+      </p>
+      <LabelInput
+        label="MAX APPELS PAR SCRAPE"
+        help="Nombre max. de requêtes RapidAPI par job de scrape."
+        type="number"
+        value={scrapeCalls}
+        onChange={(e) => setScrapeCalls(Number(e.target.value) || 1)}
+      />
+      <LabelInput
+        label="MAX APPELS PAR VÉRIFICATION"
+        help="Nombre max. de requêtes RapidAPI par health-check."
+        type="number"
+        value={healthCalls}
+        onChange={(e) => setHealthCalls(Number(e.target.value) || 1)}
+      />
+      <div className="grid grid-cols-2 gap-3">
         <LabelInput
-          label="MAX CALLS / SCRAPE RUN"
+          label="TENTATIVES MÉTHODE B"
+          help="Nombre de usernames random testés."
           type="number"
-          value={scrapeCalls}
-          onChange={(e) => setScrapeCalls(Number(e.target.value) || 1)}
+          value={methodBAtt}
+          onChange={(e) => setMethodBAtt(Number(e.target.value) || 1)}
         />
         <LabelInput
-          label="MAX CALLS / HEALTHCHECK"
+          label="PAGES PAR SEED"
+          help="Nombre de pages de followers lues par seed."
           type="number"
-          value={healthCalls}
-          onChange={(e) => setHealthCalls(Number(e.target.value) || 1)}
-        />
-        <div className="grid grid-cols-2 gap-3">
-          <LabelInput
-            label="METHOD B ATTEMPTS"
-            type="number"
-            value={methodBAtt}
-            onChange={(e) => setMethodBAtt(Number(e.target.value) || 1)}
-          />
-          <LabelInput
-            label="PAGES / SEED"
-            type="number"
-            value={pagesPerSeed}
-            onChange={(e) => setPagesPerSeed(Number(e.target.value) || 1)}
-          />
-        </div>
-        <LabelInput
-          label={`METHOD A RATIO (0-1) — CURRENT ${ratio}`}
-          type="number"
-          step="0.05"
-          min="0"
-          max="1"
-          value={ratio}
-          onChange={(e) => setRatio(Number(e.target.value))}
-        />
-        <SaveButton
-          saving={saving}
-          onClick={() =>
-            patch({
-              maxRapidapiCallsPerScrapeRun: scrapeCalls,
-              maxRapidapiCallsPerHealthcheck: healthCalls,
-              maxAttemptsMethodB: methodBAtt,
-              maxPagesPerSeed: pagesPerSeed,
-              methodARatio: ratio,
-            })
-          }
+          value={pagesPerSeed}
+          onChange={(e) => setPagesPerSeed(Number(e.target.value) || 1)}
         />
       </div>
-    </CardShell>
+      <LabelInput
+        label={`RATIO MÉTHODE A (0-1) — ACTUEL ${ratio}`}
+        help="Proportion du scrape faite via les seeds (méthode A) vs random (B)."
+        type="number"
+        step="0.05"
+        min="0"
+        max="1"
+        value={ratio}
+        onChange={(e) => setRatio(Number(e.target.value))}
+      />
+      <SaveButton
+        saving={saving}
+        onClick={() =>
+          patch({
+            maxRapidapiCallsPerScrapeRun: scrapeCalls,
+            maxRapidapiCallsPerHealthcheck: healthCalls,
+            maxAttemptsMethodB: methodBAtt,
+            maxPagesPerSeed: pagesPerSeed,
+            methodARatio: ratio,
+          })
+        }
+      />
+    </div>
   );
 }
 
-// ── Card 03 — HEALTH CHECK ──────────────────────────────────────────
-function HealthCheckCard({ initial }: { initial: Cfg }) {
+// ── Accordion 03 — HEALTH CHECK ─────────────────────────────────────
+function HealthCheckBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
   const [enabled, setEnabled] = useState(initial.healthCheckEnabled);
   const [cron, setCron] = useState(initial.healthCheckCron);
 
   return (
-    <CardShell num="03" title="Health Check" bg="bg-[#0D0D0D]" borderRight>
-      <div className="flex flex-col gap-4">
-        <ToggleRow label="HEALTH CHECK" value={enabled} onChange={setEnabled} />
-        <LabelInput
-          label="CRON EXPRESSION"
-          type="text"
-          value={cron}
-          onChange={(e) => setCron(e.target.value)}
-          placeholder="0 3 * * *"
-        />
-        <p className="font-mono text-[10px] text-[#666666] tracking-widest uppercase leading-relaxed">
-          DEFAULT: 03:00 UTC DAILY. FORMAT MIN HOUR DAY MONTH DOW.
-        </p>
-        <SaveButton
-          saving={saving}
-          onClick={() =>
-            patch({ healthCheckEnabled: enabled, healthCheckCron: cron })
-          }
-        />
-      </div>
-    </CardShell>
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Le cron vérifie chaque jour que les comptes DISPO sont toujours
+        vierges. Laisse activé en prod.
+      </p>
+      <ToggleRow
+        label="VÉRIFICATION AUTO"
+        value={enabled}
+        onChange={setEnabled}
+      />
+      <LabelInput
+        label="PLANNING (CRON)"
+        help="Format min hour day month dow. Par défaut 03:00 UTC."
+        type="text"
+        value={cron}
+        onChange={(e) => setCron(e.target.value)}
+        placeholder="0 3 * * *"
+      />
+      <SaveButton
+        saving={saving}
+        onClick={() =>
+          patch({ healthCheckEnabled: enabled, healthCheckCron: cron })
+        }
+      />
+    </div>
   );
 }
 
-// ── Card 04 — QUALIFICATION & INVALIDATION ──────────────────────────
-function QualificationCard({ initial }: { initial: Cfg }) {
+// ── Accordion 04 — QUALIFICATION ────────────────────────────────────
+function QualificationBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
   const [maxFollowers, setMaxFollowers] = useState(initial.maxFollowerCount);
   const [maxFollowing, setMaxFollowing] = useState(initial.maxFollowingCount);
@@ -333,46 +353,53 @@ function QualificationCard({ initial }: { initial: Cfg }) {
   );
 
   return (
-    <CardShell num="04" title="Qualification" bg="bg-[#030303]">
-      <div className="flex flex-col gap-4">
-        <LabelInput
-          label="MAX FOLLOWER COUNT (SCRAPE)"
-          type="number"
-          value={maxFollowers}
-          onChange={(e) => setMaxFollowers(Number(e.target.value) || 0)}
-        />
-        <LabelInput
-          label="MAX FOLLOWING COUNT (SCRAPE)"
-          type="number"
-          value={maxFollowing}
-          onChange={(e) => setMaxFollowing(Number(e.target.value) || 0)}
-        />
-        <ToggleRow
-          label="REQUIRE PUBLIC"
-          value={requirePublic}
-          onChange={setRequirePublic}
-        />
-        <LabelInput
-          label="INVALIDATE IF FOLLOWERS > (HEALTH)"
-          type="number"
-          value={invalidateAbove}
-          onChange={(e) => setInvalidateAbove(Number(e.target.value) || 0)}
-        />
-        <p className="font-mono text-[10px] text-[#666666] tracking-widest uppercase leading-relaxed">
-          MEDIA COUNT RESTRICTION REMOVED — POSTS ALLOWED.
-        </p>
-        <SaveButton
-          saving={saving}
-          onClick={() =>
-            patch({
-              maxFollowerCount: maxFollowers,
-              maxFollowingCount: maxFollowing,
-              requireNotPrivate: requirePublic,
-              invalidateIfFollowerAbove: invalidateAbove,
-            })
-          }
-        />
-      </div>
-    </CardShell>
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Règles qui définissent ce qu&apos;est un &laquo;&nbsp;bon compte test&nbsp;&raquo;. Un
+        compte qui dépasse ces seuils est ignoré au scrape ou invalidé à la
+        vérification.
+      </p>
+      <LabelInput
+        label="MAX FOLLOWERS (AU SCRAPE)"
+        help="Un candidat au-dessus de ce nombre est rejeté."
+        type="number"
+        value={maxFollowers}
+        onChange={(e) => setMaxFollowers(Number(e.target.value) || 0)}
+      />
+      <LabelInput
+        label="MAX FOLLOWING (AU SCRAPE)"
+        help="Un candidat qui suit trop de monde est rejeté."
+        type="number"
+        value={maxFollowing}
+        onChange={(e) => setMaxFollowing(Number(e.target.value) || 0)}
+      />
+      <ToggleRow
+        label="REFUSER COMPTES PRIVÉS"
+        value={requirePublic}
+        onChange={setRequirePublic}
+      />
+      <LabelInput
+        label="INVALIDER SI FOLLOWERS > (À LA VÉRIF)"
+        help="Un compte test qui a gagné trop de followers n'est plus vierge."
+        type="number"
+        value={invalidateAbove}
+        onChange={(e) => setInvalidateAbove(Number(e.target.value) || 0)}
+      />
+      <p className="font-mono text-[10px] text-[#666666] normal-case leading-relaxed">
+        Note : la restriction sur le nombre de posts a été retirée — un compte
+        peut avoir publié des posts et rester éligible.
+      </p>
+      <SaveButton
+        saving={saving}
+        onClick={() =>
+          patch({
+            maxFollowerCount: maxFollowers,
+            maxFollowingCount: maxFollowing,
+            requireNotPrivate: requirePublic,
+            invalidateIfFollowerAbove: invalidateAbove,
+          })
+        }
+      />
+    </div>
   );
 }

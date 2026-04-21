@@ -4,14 +4,14 @@ import { getPoolConfig } from "@/lib/pool/config";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { PoolStatsHero } from "./PoolStatsHero";
 import { PoolHistoryChart } from "./PoolHistoryChart";
-import { PoolControls } from "./PoolControls";
+import { PoolUnifiedActions } from "./PoolUnifiedActions";
 import { PoolActiveJobs } from "./PoolActiveJobs";
 import { PoolAccountsList } from "./PoolAccountsList";
-import { PoolSettings } from "./PoolSettings";
-import { PoolSeedsCard } from "./PoolSeedsCard";
-import { PoolPrefixesCard } from "./PoolPrefixesCard";
+import { PoolOverviewCards } from "./PoolOverviewCards";
+import { PoolAdvancedConfig } from "./PoolAdvancedConfig";
 import { SystemKillSwitch } from "./SystemKillSwitch";
 import { PoolToastProvider } from "./PoolToast";
+import { Collapsible } from "./Collapsible";
 
 export const dynamic = "force-dynamic";
 
@@ -27,10 +27,10 @@ export default async function PoolPage() {
     <PoolToastProvider>
       <DashboardHeader />
 
-      {/* === Section 1 — Hero (Pattern B) === */}
+      {/* === Hero — headline + live IG/TT breakdown === */}
       <PoolStatsHero initialStats={stats} />
 
-      {/* === Section 1.5 — Kill Switch === */}
+      {/* === Kill Switch (system control) === */}
       <SystemKillSwitch
         initialToggles={{
           poolScrapeEnabled: toggles.poolScrapeEnabled,
@@ -41,11 +41,29 @@ export default async function PoolPage() {
         }}
       />
 
-      {/* === Section 2 — Graph (Pattern E) === */}
-      <PoolHistoryChart initialData={history} />
+      {/* === ZONE 1 — VUE D'ENSEMBLE === */}
+      <ZoneHeader
+        step="ZONE 1"
+        title="VUE D'ENSEMBLE"
+        hint="l'état de la réserve en un coup d'œil"
+      />
+      <Onboarding />
+      <PoolOverviewCards initialStats={stats} />
+      <Collapsible
+        banner
+        label="AFFICHER L'ÉVOLUTION SUR 30 JOURS"
+        hint="graphique historique par statut et plateforme"
+      >
+        <PoolHistoryChart initialData={history} />
+      </Collapsible>
 
-      {/* === Section 3 — Manual controls (Pattern D) === */}
-      <PoolControls
+      {/* === ZONE 2 — ACTIONS === */}
+      <ZoneHeader
+        step="ZONE 2"
+        title="ACTIONS"
+        hint="ce que tu peux lancer manuellement"
+      />
+      <PoolUnifiedActions
         initialConfig={{
           autoRefillEnabled: config.autoRefillEnabled,
           refillThresholdInstagram: config.refillThresholdInstagram,
@@ -54,15 +72,24 @@ export default async function PoolPage() {
           refillTargetTiktok: config.refillTargetTiktok,
         }}
       />
-
-      {/* === Section 4 — Active jobs (5s polling, conditional render) === */}
+      {/* Only renders when at least one job is pending/running */}
       <PoolActiveJobs />
 
-      {/* === Section 5 — Accounts list === */}
+      {/* === ZONE 3 — COMPTES === */}
+      <ZoneHeader
+        step="ZONE 3"
+        title="COMPTES"
+        hint="recherche, filtre, inspection compte par compte"
+      />
       <PoolAccountsList />
 
-      {/* === Section 7 — Settings (Pattern D, 4 sub-cards) === */}
-      <PoolSettings
+      {/* === ZONE 4 — CONFIGURATION AVANCÉE (collapsible) === */}
+      <ZoneHeader
+        step="ZONE 4"
+        title="CONFIGURATION AVANCÉE"
+        hint="à laisser fermé en usage normal"
+      />
+      <PoolAdvancedConfig
         initialConfig={{
           autoRefillEnabled: config.autoRefillEnabled,
           refillThresholdInstagram: config.refillThresholdInstagram,
@@ -82,12 +109,55 @@ export default async function PoolPage() {
           invalidateIfFollowerAbove: config.invalidateIfFollowerAbove,
         }}
       />
-
-      {/* === Section 8a — Seeds (2 cols: active + suggestions) === */}
-      <PoolSeedsCard />
-
-      {/* === Section 8b — Prefixes (chips) === */}
-      <PoolPrefixesCard />
     </PoolToastProvider>
+  );
+}
+
+function ZoneHeader({
+  step,
+  title,
+  hint,
+}: {
+  step: string;
+  title: string;
+  hint: string;
+}) {
+  return (
+    <div className="w-full px-4 md:px-8 pt-12 md:pt-16 pb-4">
+      <div className="max-w-7xl mx-auto flex items-end gap-4 flex-wrap border-b border-[#FF3300]/60 pb-3">
+        <span className="font-mono text-[11px] text-[#FF3300] tracking-widest">
+          [ {step} ]
+        </span>
+        <h2 className="brand font-display text-3xl md:text-4xl uppercase tracking-tight text-white m-0 leading-none">
+          {title}.
+        </h2>
+        <span className="ml-auto font-mono text-[10px] text-[#666666] tracking-wide normal-case">
+          {hint}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function Onboarding() {
+  return (
+    <div className="w-full px-4 md:px-8 pb-6">
+      <div className="max-w-7xl mx-auto border-l-2 border-[#FF3300] pl-4 md:pl-5 py-2">
+        <p className="font-mono text-[12px] md:text-[13px] text-[#CCCCCC] tracking-wide normal-case leading-relaxed">
+          &gt; Les <span className="text-white">comptes test</span> sont de faux
+          comptes vierges (0 follower, 0 post) qu&apos;on utilise pour valider la
+          qualité des services BulkMedya avant de les proposer aux clients. On
+          envoie quelques followers/likes sur un compte test, on mesure ce qui
+          arrive réellement, on en déduit un score.
+        </p>
+        <p className="font-mono text-[11px] text-[#666666] tracking-wide normal-case leading-relaxed mt-2">
+          Cette page gère la réserve : combien de comptes test on a en stock, on
+          en scrape de nouveaux, on vérifie que les anciens sont toujours
+          vierges. En usage normal tu n&apos;as qu&apos;à regarder la{" "}
+          <span className="text-[#FF3300]">ZONE 1</span> et lancer des actions
+          depuis la <span className="text-[#FF3300]">ZONE 2</span>.
+        </p>
+      </div>
+    </div>
   );
 }

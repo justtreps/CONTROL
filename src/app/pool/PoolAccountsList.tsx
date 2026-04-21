@@ -146,7 +146,14 @@ export function PoolAccountsList() {
   }
 
   return (
-    <section className="px-4 md:px-8 py-12 md:py-16">
+    <section className="w-full">
+      <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D] flex items-center gap-3 flex-wrap">
+        <span>[ LISTE DES COMPTES ]</span>
+        <span className="normal-case text-[#666666]/70 text-[10px]">
+          tous les comptes test de la réserve · cherche par username / ID, filtre par statut
+        </span>
+      </div>
+      <div className="px-4 md:px-8 py-8 md:py-10">
       <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-20 md:pb-24">
         {/* Filters */}
         <div className="flex flex-wrap gap-3 px-4 md:px-6 py-4 border-b border-[#666666]/20 bg-[#0D0D0D]">
@@ -361,6 +368,7 @@ export function PoolAccountsList() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </section>
   );
