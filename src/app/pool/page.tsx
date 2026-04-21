@@ -48,7 +48,6 @@ export default async function PoolPage() {
         hint="l'état de la réserve en un coup d'œil"
       />
       <Onboarding />
-      <PoolOverviewCards initialStats={stats} />
       <Collapsible
         banner
         defaultOpen
@@ -57,6 +56,7 @@ export default async function PoolPage() {
       >
         <PoolHistoryChart initialData={history} />
       </Collapsible>
+      <PoolOverviewCards initialStats={stats} />
 
       {/* === ZONE 2 — ACTIONS === */}
       <ZoneHeader
