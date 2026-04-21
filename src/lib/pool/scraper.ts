@@ -70,12 +70,30 @@ export type ScrapeStats = {
     currentSeedId: number | null;
     seedPlatform: string | null;
     pagesDone: number;
+    // Per-seed error streak WITHIN this job. Prevents the bug where a
+    // seed that throws every attempt (e.g. a private account locked
+    // against the follower API) gets re-picked forever because
+    // pagesDone never increments. After MAX_ERRORS_PER_SEED_RUN we
+    // force-close the seed for this run regardless of pagesDone.
+    seedErrorCount?: Record<number, number>;
   };
   // Phase B checkpoint
   b: {
     attempts: number;
   };
 };
+
+// If a single seed errors this many times within one job, we force-
+// close it (doneSeedIds.push + move on). Independent of the cross-run
+// PoolSeedAccount.consecutiveErrors tracker — this is just the safety
+// net so a single bad seed can't burn an entire run.
+const MAX_ERRORS_PER_SEED_RUN = 5;
+
+// If PoolSeedAccount.consecutiveErrors reaches this across runs AND
+// the latest error looks like a "Private account" message, we flip
+// enabled=false so the seed is ignored until an operator re-enables
+// it. Three strikes rules out the rare transient mislabel.
+const AUTO_DISABLE_PRIVATE_THRESHOLD = 3;
 
 export function initScrapeStats(
   platform: "instagram" | "tiktok" | "both",
@@ -98,6 +116,7 @@ export function initScrapeStats(
       currentSeedId: null,
       seedPlatform: null,
       pagesDone: 0,
+      seedErrorCount: {},
     },
     b: { attempts: 0 },
   };
@@ -116,7 +135,19 @@ function ensureStatsShape(s: ScrapeStats): ScrapeStats {
       if (typeof r[k] !== "number") r[k] = 0;
     }
   }
+  if (!s.a.seedErrorCount) s.a.seedErrorCount = {};
   return s;
+}
+
+// Regex matching the various wordings providers use when a seed's
+// follower list is inaccessible because the account went private /
+// locked / restricted. Conservative — we only auto-disable on these
+// unambiguous signals.
+const PRIVATE_ACCOUNT_RX =
+  /private\s+account|account\s+is\s+private|this\s+account\s+is\s+private|is_private/i;
+
+function isPrivateLikeError(msg: string): boolean {
+  return PRIVATE_ACCOUNT_RX.test(msg);
 }
 
 async function pickNextSeed(
@@ -196,25 +227,97 @@ export async function runScrapeTranche({
         continue;
       }
 
+      let seedErrored = false;
+      let autoDisabled = false;
       try {
         if (seed.platform === "instagram") {
           await processInstagramSeed({ seed, stats, cfg });
         } else if (seed.platform === "tiktok") {
           await processTikTokSeed({ seed, stats, cfg });
         }
+        // Success path — reset the cross-run error streak if non-zero.
+        if ((seed.consecutiveErrors ?? 0) > 0) {
+          await prisma.poolSeedAccount.update({
+            where: { id: seed.id },
+            data: { consecutiveErrors: 0, lastErrorReason: null },
+          });
+        }
       } catch (e) {
+        seedErrored = true;
+        const msg = (e as Error).message;
         stats.errors.push(
-          `seed ${seed.username}/${seed.platform}: ${(e as Error).message.slice(0, 160)}`
+          `seed ${seed.username}/${seed.platform}: ${msg.slice(0, 160)}`
         );
+
+        // Bump in-job counter (prevents infinite retry within this run).
+        if (!stats.a.seedErrorCount) stats.a.seedErrorCount = {};
+        stats.a.seedErrorCount[seed.id] =
+          (stats.a.seedErrorCount[seed.id] ?? 0) + 1;
+
+        // Bump cross-run counter and, if this is the N-th consecutive
+        // "Private account" signal, auto-disable the seed.
+        const newStreak = (seed.consecutiveErrors ?? 0) + 1;
+        const privateSignal = isPrivateLikeError(msg);
+        if (
+          privateSignal &&
+          newStreak >= AUTO_DISABLE_PRIVATE_THRESHOLD
+        ) {
+          await prisma.poolSeedAccount.update({
+            where: { id: seed.id },
+            data: {
+              enabled: false,
+              consecutiveErrors: newStreak,
+              lastErrorReason: msg.slice(0, 200),
+            },
+          });
+          await prisma.poolSeedHealthLog.create({
+            data: {
+              platform: seed.platform,
+              action: "auto_disabled_private",
+              seedUsername: seed.username,
+              reason: `${newStreak} consecutive private errors · last: ${msg.slice(0, 150)}`,
+            },
+          });
+          console.error(
+            `[SCRAPER] Auto-disabled seed @${seed.username} (${seed.platform}) after ${newStreak} consecutive private errors`
+          );
+          autoDisabled = true;
+        } else {
+          await prisma.poolSeedAccount.update({
+            where: { id: seed.id },
+            data: {
+              consecutiveErrors: newStreak,
+              lastErrorReason: msg.slice(0, 200),
+            },
+          });
+        }
       }
 
-      // Close this seed (one page per run for now; multi-page needs a
-      // cursor we don't have yet).
-      if (stats.a.pagesDone >= cfg.maxPagesPerSeed || stats.a.pagesDone >= 1) {
+      // Close the seed when:
+      //  • it completed a page (happy path), OR
+      //  • it got auto-disabled, OR
+      //  • it errored too many times within this run (safety net).
+      const runtimeErrors =
+        stats.a.seedErrorCount?.[stats.a.currentSeedId!] ?? 0;
+      const forceClose =
+        autoDisabled || runtimeErrors >= MAX_ERRORS_PER_SEED_RUN;
+
+      if (
+        forceClose ||
+        stats.a.pagesDone >= cfg.maxPagesPerSeed ||
+        stats.a.pagesDone >= 1
+      ) {
         stats.a.doneSeedIds.push(stats.a.currentSeedId!);
         stats.seedsProcessed++;
         stats.a.currentSeedId = null;
         stats.a.seedPlatform = null;
+        if (forceClose && !seedErrored) {
+          // safety net hit on a seed that never errored — defensive,
+          // shouldn't happen but log if it does so we can investigate.
+          console.warn(
+            `[SCRAPER] Force-closed seed #${seed.id} without explicit error`
+          );
+        }
       }
     }
     stats.phase = "b";

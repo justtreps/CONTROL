@@ -26,6 +26,11 @@ const ACTION_LABEL: Record<string, { label: string; color: string }> = {
   ok: { label: "OK", color: "#666666" },
   renamed: { label: "RENOMMÉ", color: "#FFCC00" },
   deleted_mort: { label: "SUPPRIMÉ", color: "#FF3300" },
+  became_private: { label: "DEVENU PRIVÉ", color: "#FF3300" },
+  auto_disabled_private: {
+    label: "AUTO-DÉSACTIVÉ (PRIVÉ)",
+    color: "#FF3300",
+  },
   replaced_from_cache: { label: "REMPLACÉ (CACHE)", color: "#10B981" },
   cache_empty_refill_triggered: {
     label: "CACHE VIDE → REFILL",

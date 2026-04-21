@@ -145,6 +145,17 @@ model PoolSeedAccount {
   // and is still public. Null for never-checked (freshly added) seeds.
   lastCheckedAt  DateTime?
 
+  // Cross-run error streak. The scraper increments this whenever it
+  // hits a processing error on the seed (e.g. RapidAPI "Private
+  // account"); it resets to 0 on a successful page. When the streak
+  // crosses AUTO_DISABLE_PRIVATE_THRESHOLD AND the last reason looks
+  // like a private/locked error, the scraper flips enabled=false
+  // and logs action='auto_disabled_private' so operators can see
+  // why. lastErrorReason records the most recent failure verbatim
+  // so the log surfaces the actual provider message.
+  consecutiveErrors  Int      @default(0)
+  lastErrorReason    String?
+
   @@unique([platform, username])
   @@index([platform, enabled, priority])
 }

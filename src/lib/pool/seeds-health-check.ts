@@ -278,6 +278,18 @@ async function persistOracleResult(
     };
   }
 
+  // Treat IG private accounts as broken seeds. Their follower list
+  // isn't scrapable, so keeping them enabled just burns RapidAPI calls.
+  // Delete + replace from cache (same flow as ghost/404).
+  if (oracle.isPrivate && seed.platform === "instagram") {
+    await markBroken(seed, "became_private", "account is now private");
+    return {
+      outcome: "dead",
+      callsUsed,
+      reason: "became_private",
+    };
+  }
+
   const oracleUsername = oracle.username || seed.username;
   const renamed =
     oracleUsername.length > 0 &&
@@ -337,19 +349,34 @@ async function persistOracleResult(
   return { outcome: "ok", callsUsed };
 }
 
-// ── Dead seed handling ──────────────────────────────────────────────
+// ── Dead/broken seed handling ────────────────────────────────────────
+// Generalized "the seed is no longer usable" path: delete the seed
+// row and log one audit entry. Action differentiates why:
+//   • 'deleted_mort'    → ghost / 404 / not-found style errors
+//   • 'became_private'  → oracle returned is_private=true (IG)
+// Caller decides the action; replacement-from-cache happens in the
+// outer loop once the outcome is "dead".
+async function markBroken(
+  seed: { id: number; platform: string; username: string },
+  action: "deleted_mort" | "became_private",
+  reason: string
+): Promise<void> {
+  await prisma.poolSeedAccount.delete({ where: { id: seed.id } });
+  await logEntry({
+    platform: seed.platform,
+    action,
+    seedUsername: seed.username,
+    reason: reason.slice(0, 200),
+  });
+}
+
+// Legacy name kept so existing call sites stay tidy — new code should
+// use markBroken directly with the explicit action.
 async function markDead(
   seed: { id: number; platform: string; username: string },
   reason: string
 ): Promise<void> {
-  const platform = seed.platform;
-  await prisma.poolSeedAccount.delete({ where: { id: seed.id } });
-  await logEntry({
-    platform,
-    action: "deleted_mort",
-    seedUsername: seed.username,
-    reason: reason.slice(0, 200),
-  });
+  return markBroken(seed, "deleted_mort", reason);
 }
 
 async function pickReplacementFromCache(
