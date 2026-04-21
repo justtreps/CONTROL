@@ -58,3 +58,57 @@ export async function invalidateAccount(
     },
   });
 }
+
+// Flip assigned accounts to 'consumed' once the test has progressed.
+// Two signals count as "test is done":
+//   1. TestOrder has ≥1 measurement past T+0 (actual data collected)
+//   2. assignedAt older than 48h (safety net — measurement bot may
+//      have failed, but the account is stuck; we don't want it to
+//      stay assigned forever)
+//
+// Idempotent — accounts already consumed are filtered out by the
+// initial `status='assigned'` query. Called from the scoring cron
+// (every 10 min) and from the weekly cleanup cron as a backup.
+export async function consumeCompletedAssignments(): Promise<{
+  byMeasurement: number;
+  byTimeout: number;
+}> {
+  const stuckDeadline = new Date(Date.now() - 48 * 3600 * 1000);
+
+  const assigned = await prisma.testAccount.findMany({
+    where: {
+      status: "assigned",
+      assignedTestOrderId: { not: null },
+    },
+    select: {
+      id: true,
+      assignedTestOrderId: true,
+      assignedAt: true,
+    },
+  });
+
+  let byMeasurement = 0;
+  let byTimeout = 0;
+
+  for (const a of assigned) {
+    // Primary signal: the test has real data beyond the baseline.
+    const postBaselineCount = await prisma.measurement.count({
+      where: {
+        testOrderId: a.assignedTestOrderId!,
+        checkpoint: { not: "T+0" },
+      },
+    });
+    if (postBaselineCount > 0) {
+      await consumeAccount(a.id);
+      byMeasurement++;
+      continue;
+    }
+    // Fallback: stuck for 48h+ with nothing but the placement baseline.
+    if (a.assignedAt && a.assignedAt < stuckDeadline) {
+      await consumeAccount(a.id);
+      byTimeout++;
+    }
+  }
+
+  return { byMeasurement, byTimeout };
+}

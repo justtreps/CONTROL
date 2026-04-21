@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { consumeCompletedAssignments } from "@/lib/pool/assign";
 import type { Measurement, TestOrder } from "@prisma/client";
 
 type OrderWithMeasurements = TestOrder & { measurements: Measurement[] };
@@ -87,6 +88,8 @@ export type ScoringResult = {
   servicesScored: number;
   servicesSkipped: number;
   rowsWritten: number;
+  accountsConsumedByMeasurement: number;
+  accountsConsumedByTimeout: number;
 };
 
 const MOVING_AVG_WINDOW = 30;
@@ -96,7 +99,17 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     servicesScored: 0,
     servicesSkipped: 0,
     rowsWritten: 0,
+    accountsConsumedByMeasurement: 0,
+    accountsConsumedByTimeout: 0,
   };
+
+  // Pre-pass: flip assigned → consumed for any account whose test
+  // has progressed past the T+0 baseline (or been stuck for 48h+).
+  // Runs here instead of dedicated cron because scoring is the
+  // natural "end-of-test" signal, and it fires every 10 min anyway.
+  const consumed = await consumeCompletedAssignments();
+  result.accountsConsumedByMeasurement = consumed.byMeasurement;
+  result.accountsConsumedByTimeout = consumed.byTimeout;
 
   const services = await prisma.service.findMany({
     where: { active: true },

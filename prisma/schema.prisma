@@ -77,6 +77,10 @@ model TestAccount {
   @@index([status, assignedAt])
   @@index([platform, status, firstSeenAt])
   @@index([platform, userId])
+  // Supports the daily health-check's orderBy: {lastCheckedAt: "asc"}
+  // filtered by status='available'. Without it the 6-hourly cron
+  // sorts in-memory, which doesn't scale past a few thousand rows.
+  @@index([status, lastCheckedAt])
 }
 
 // Single-row config for the pool system (id=1). Editable from the /pool UI.
@@ -92,7 +96,7 @@ model PoolConfig {
 
   // RapidAPI budget caps per run
   maxRapidapiCallsPerScrapeRun     Int      @default(10000)
-  maxRapidapiCallsPerHealthcheck   Int      @default(1000)
+  maxRapidapiCallsPerHealthcheck   Int      @default(3000)
   maxAttemptsMethodB               Int      @default(5000)
   maxPagesPerSeed                  Int      @default(50)
 

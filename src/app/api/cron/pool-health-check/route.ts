@@ -9,7 +9,10 @@ import { getPoolConfig } from "@/lib/pool/config";
 import { initHealthStats } from "@/lib/pool/health-check";
 import { getSystemToggles } from "@/lib/system/toggles";
 
-export const maxDuration = 30;
+// Bumped from 30s → 300s so the orchestrator can finish a full
+// health-check run in one invocation (with concurrency 8 + pool
+// of ~700 rows, a clean sweep takes ~3-5 min).
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {

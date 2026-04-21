@@ -25,7 +25,11 @@ export type HealthStats = {
   invalidated: number;
   errors: string[];
   callsUsed: number;
-  // Checkpoint: last processed account id (we iterate id ASC within a batch).
+  // Retained for retro-compat with in-flight jobs' stats JSON; the
+  // new runner (orderBy lastCheckedAt ASC) doesn't use it because
+  // every processed row's lastCheckedAt gets bumped to NOW, so the
+  // next findMany naturally returns the oldest-next set without any
+  // explicit cursor.
   lastProcessedId: number;
   batchSize: number;
   queuedRefills: string[]; // platforms that auto-refill fired for
@@ -41,10 +45,18 @@ export function initHealthStats(
     errors: [],
     callsUsed: 0,
     lastProcessedId: 0,
-    batchSize: 500,
+    // Bumped from 500 → 2000 to let a single cron run (6h cycle)
+    // realistically sweep the entire available pool without multi-day
+    // staleness.
+    batchSize: 2000,
     queuedRefills: [],
   };
 }
+
+// Number of oracle calls fired concurrently per Promise.all wave.
+// Matches seeds-health-check's pattern — safe under RapidAPI's
+// per-second limits, ~4-5× throughput vs serial.
+const CONCURRENCY = 8;
 
 export async function runHealthCheckTranche({
   stats,
@@ -67,89 +79,110 @@ export async function runHealthCheckTranche({
       return { done: true, stats };
     if (stats.checked >= stats.batchSize) return { done: true, stats };
 
+    // Pull a wave that's 4× the concurrency so each findMany round
+    // feeds multiple parallel batches before we hit the DB again.
     const rows = await prisma.testAccount.findMany({
       where: {
         platform: { in: platforms },
         status: "available",
-        id: { gt: stats.lastProcessedId },
       },
-      orderBy: { id: "asc" },
-      take: 10,
+      orderBy: { lastCheckedAt: "asc" }, // oldest check first
+      take: CONCURRENCY * 4,
     });
     if (rows.length === 0) return { done: true, stats };
 
-    for (const r of rows) {
+    for (let i = 0; i < rows.length; i += CONCURRENCY) {
       if (Date.now() > deadline) break;
-
-      const oracle = await fetchOracleFor(r.platform, r.userId);
-      stats.callsUsed++;
-      stats.checked++;
-      stats.lastProcessedId = r.id;
-
-      if (!oracle.ok) {
-        if (oracle.reason === "ghost") {
-          await prisma.testAccount.update({
-            where: { id: r.id },
-            data: {
-              status: "invalid",
-              invalidReason: "deleted",
-              invalidatedAt: new Date(),
-              lastCheckedAt: new Date(),
-              active: false,
-            },
-          });
-          stats.invalidated++;
-        } else {
-          stats.errors.push(`#${r.id}: ${oracle.message.slice(0, 100)}`);
-          await prisma.testAccount.update({
-            where: { id: r.id },
-            data: { lastCheckedAt: new Date() },
-          });
-        }
-        continue;
-      }
-
-      // Track username drift so the row stays addressable by the CURRENT
-      // handle (needed for BulkMedya link construction).
-      const renamed =
-        oracle.username.length > 0 &&
-        oracle.username.toLowerCase() !== r.username.toLowerCase();
-
-      let invalidReason: string | null = null;
-      if (oracle.followerCount > cfg.maxFollowerCount)
-        invalidReason = "became_active";
-      else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
-        invalidReason = "became_active";
-      else if (r.platform === "instagram" && oracle.isPrivate)
-        invalidReason = "became_private";
-
-      await prisma.testAccount.update({
-        where: { id: r.id },
-        data: invalidReason
-          ? {
-              status: "invalid",
-              invalidReason,
-              invalidatedAt: new Date(),
-              lastCheckedAt: new Date(),
-              lastFollowerCount: oracle.followerCount,
-              lastMediaCount: oracle.mediaCount,
-              lastFollowingCount: oracle.followingCount,
-              active: false,
-              ...(renamed ? { username: oracle.username } : {}),
-            }
-          : {
-              lastCheckedAt: new Date(),
-              lastFollowerCount: oracle.followerCount,
-              lastMediaCount: oracle.mediaCount,
-              lastFollowingCount: oracle.followingCount,
-              ...(renamed ? { username: oracle.username } : {}),
-            },
-      });
-      if (invalidReason) stats.invalidated++;
+      if (await stopRequested()) return { done: false, stats };
+      const batch = rows.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map((r) => processOneAccount({ row: r, stats, cfg }))
+      );
     }
   }
 
   return { done: false, stats };
+}
+
+// Single-row health check: oracle call + DB write + stats increment.
+// Extracted so the main loop can dispatch N of these in parallel.
+async function processOneAccount({
+  row,
+  stats,
+  cfg,
+}: {
+  row: { id: number; platform: string; userId: string; username: string };
+  stats: HealthStats;
+  cfg: {
+    maxFollowerCount: number;
+    invalidateIfMediaAbove: number;
+    requireNotPrivate: boolean;
+  };
+}): Promise<void> {
+  const oracle = await fetchOracleFor(row.platform, row.userId);
+  // Increments on a plain JS object are atomic between awaits — no
+  // lock needed despite Promise.all concurrency.
+  stats.callsUsed++;
+  stats.checked++;
+
+  if (!oracle.ok) {
+    if (oracle.reason === "ghost") {
+      await prisma.testAccount.update({
+        where: { id: row.id },
+        data: {
+          status: "invalid",
+          invalidReason: "deleted",
+          invalidatedAt: new Date(),
+          lastCheckedAt: new Date(),
+          active: false,
+        },
+      });
+      stats.invalidated++;
+    } else {
+      stats.errors.push(`#${row.id}: ${oracle.message.slice(0, 100)}`);
+      await prisma.testAccount.update({
+        where: { id: row.id },
+        data: { lastCheckedAt: new Date() },
+      });
+    }
+    return;
+  }
+
+  const renamed =
+    oracle.username.length > 0 &&
+    oracle.username.toLowerCase() !== row.username.toLowerCase();
+
+  let invalidReason: string | null = null;
+  if (oracle.followerCount > cfg.maxFollowerCount)
+    invalidReason = "became_active";
+  else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
+    invalidReason = "became_active";
+  else if (row.platform === "instagram" && oracle.isPrivate)
+    invalidReason = "became_private";
+
+  await prisma.testAccount.update({
+    where: { id: row.id },
+    data: invalidReason
+      ? {
+          status: "invalid",
+          invalidReason,
+          invalidatedAt: new Date(),
+          lastCheckedAt: new Date(),
+          lastFollowerCount: oracle.followerCount,
+          lastMediaCount: oracle.mediaCount,
+          lastFollowingCount: oracle.followingCount,
+          active: false,
+          ...(renamed ? { username: oracle.username } : {}),
+        }
+      : {
+          lastCheckedAt: new Date(),
+          lastFollowerCount: oracle.followerCount,
+          lastMediaCount: oracle.mediaCount,
+          lastFollowingCount: oracle.followingCount,
+          ...(renamed ? { username: oracle.username } : {}),
+        },
+  });
+  if (invalidReason) stats.invalidated++;
 }
 
 // Post-batch: if any platform's available pool fell under its threshold,
