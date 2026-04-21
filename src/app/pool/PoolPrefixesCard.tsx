@@ -104,8 +104,8 @@ export function PoolPrefixesCard() {
               <button
                 type="button"
                 onClick={() => remove(p)}
-                className="interactive opacity-0 group-hover:opacity-100 text-[#FF3300] hover:text-white transition-opacity"
-                aria-label="Supprimer"
+                className="interactive opacity-0 group-hover:opacity-100 focus:opacity-100 text-[#FF3300] hover:text-white transition-opacity"
+                aria-label={`Supprimer le préfixe ${p.prefix}`}
               >
                 ×
               </button>

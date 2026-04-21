@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
+import { SkeletonRow } from "@/components/Skeleton";
 
 type Account = {
   id: number;
@@ -227,17 +228,34 @@ export function PoolAccountsList() {
             <thead className="bg-[#0D0D0D] text-[#666666] font-mono text-xs uppercase tracking-widest">
               <tr className="border-b border-[#666666]/20">
                 <th className="text-left px-4 py-3 font-normal">Username</th>
-                <th className="text-left px-3 py-3 font-normal">User ID</th>
-                <th className="text-left px-3 py-3 font-normal">Plat.</th>
+                <th className="text-left px-3 py-3 font-normal hidden lg:table-cell">
+                  User ID
+                </th>
+                <th className="text-left px-3 py-3 font-normal hidden sm:table-cell">
+                  Plat.
+                </th>
                 <th className="text-left px-3 py-3 font-normal">Status</th>
-                <th className="text-left px-3 py-3 font-normal">Source</th>
-                <th className="text-left px-3 py-3 font-normal">First Seen</th>
-                <th className="text-left px-3 py-3 font-normal">Last Check</th>
+                <th className="text-left px-3 py-3 font-normal hidden xl:table-cell">
+                  Source
+                </th>
+                <th className="text-left px-3 py-3 font-normal hidden lg:table-cell">
+                  First Seen
+                </th>
+                <th className="text-left px-3 py-3 font-normal hidden md:table-cell">
+                  Last Check
+                </th>
                 <th className="text-right px-3 py-3 font-normal">Followers</th>
                 <th className="text-right px-3 py-3 font-normal">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody aria-busy={loading} aria-live="polite">
+              {loading && !data && (
+                <>
+                  {Array.from({ length: Math.min(limit, 6) }).map((_, i) => (
+                    <SkeletonRow key={`sk-${i}`} cols={9} />
+                  ))}
+                </>
+              )}
               {data?.rows.map((r) => (
                 <tr
                   key={r.id}
@@ -252,10 +270,10 @@ export function PoolAccountsList() {
                       @{r.username}
                     </Link>
                   </td>
-                  <td className="px-3 py-3 font-mono text-xs text-[#666666] truncate max-w-[8rem]">
+                  <td className="px-3 py-3 font-mono text-xs text-[#666666] truncate max-w-[8rem] hidden lg:table-cell">
                     {r.userId}
                   </td>
-                  <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
+                  <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest hidden sm:table-cell">
                     {r.platform}
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap">
@@ -273,13 +291,13 @@ export function PoolAccountsList() {
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase">
+                  <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase hidden xl:table-cell">
                     {r.scrapeSource ?? "—"}
                   </td>
-                  <td className="px-3 py-3 font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap">
+                  <td className="px-3 py-3 font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap hidden lg:table-cell">
                     {short(r.firstSeenAt)}
                   </td>
-                  <td className="px-3 py-3 font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap">
+                  <td className="px-3 py-3 font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap hidden md:table-cell">
                     {short(r.lastCheckedAt)}
                   </td>
                   <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
@@ -312,11 +330,6 @@ export function PoolAccountsList() {
           {!loading && data?.rows.length === 0 && (
             <div className="px-4 py-16 text-center font-mono text-xs text-[#666666] tracking-widest uppercase">
               AUCUN COMPTE NE CORRESPOND À CES FILTRES.
-            </div>
-          )}
-          {loading && (
-            <div className="px-4 py-16 text-center font-mono text-xs text-[#666666] tracking-widest uppercase">
-              CHARGEMENT...
             </div>
           )}
         </div>

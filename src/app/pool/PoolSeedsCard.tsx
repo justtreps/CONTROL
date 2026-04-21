@@ -248,6 +248,7 @@ export function PoolSeedsCard() {
                       type="button"
                       onClick={() => changePriority(s, -1)}
                       className="interactive text-[#666666] hover:text-white px-1"
+                      aria-label={`Baisser la priorité de @${s.username}`}
                     >
                       −
                     </button>
@@ -258,6 +259,7 @@ export function PoolSeedsCard() {
                       type="button"
                       onClick={() => changePriority(s, +1)}
                       className="interactive text-[#666666] hover:text-white px-1"
+                      aria-label={`Monter la priorité de @${s.username}`}
                     >
                       +
                     </button>
@@ -266,7 +268,7 @@ export function PoolSeedsCard() {
                     type="button"
                     onClick={() => deleteSeed(s)}
                     className="interactive text-[#FF3300] hover:text-white px-1"
-                    aria-label="Supprimer"
+                    aria-label={`Supprimer le seed @${s.username}`}
                   >
                     ×
                   </button>
@@ -307,6 +309,7 @@ export function PoolSeedsCard() {
                     onClick={() => integrateUsernames([s.username])}
                     disabled={busy}
                     className="interactive text-[#FF3300] hover:text-white disabled:opacity-50"
+                    aria-label={`Intégrer la suggestion @${s.username}`}
                   >
                     [ + ]
                   </button>
@@ -315,7 +318,7 @@ export function PoolSeedsCard() {
                     onClick={() => rejectUsernames([s.username])}
                     disabled={busy}
                     className="interactive text-[#666666] hover:text-white disabled:opacity-50"
-                    aria-label="Rejeter"
+                    aria-label={`Rejeter la suggestion @${s.username}`}
                   >
                     ×
                   </button>

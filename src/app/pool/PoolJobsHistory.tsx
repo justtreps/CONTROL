@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Skeleton, SkeletonRow } from "@/components/Skeleton";
 
 // Sub-section D of Configuration avancée — past + present scrape /
 // health-check / cleanup jobs, filtered and paginated, with a detail
@@ -70,22 +71,27 @@ export function PoolJobsHistory() {
     [data, limit]
   );
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (type !== "all") params.set("type", type);
-      if (status !== "all") params.set("status", status);
-      if (platform !== "all") params.set("platform", platform);
-      params.set("limit", String(limit));
-      params.set("offset", String(offset));
-      const res = await fetch(`/api/pool/jobs?${params}`, { cache: "no-store" });
-      if (!res.ok) return;
-      setData((await res.json()) as ListResponse);
-    } finally {
-      setLoading(false);
-    }
-  }, [type, status, platform, limit, offset]);
+  // silent=true skips the loading state (used by the 15s poller so
+  // the table doesn't flash to skeletons every tick).
+  const refresh = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (type !== "all") params.set("type", type);
+        if (status !== "all") params.set("status", status);
+        if (platform !== "all") params.set("platform", platform);
+        params.set("limit", String(limit));
+        params.set("offset", String(offset));
+        const res = await fetch(`/api/pool/jobs?${params}`, { cache: "no-store" });
+        if (!res.ok) return;
+        setData((await res.json()) as ListResponse);
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [type, status, platform, limit, offset]
+  );
 
   useEffect(() => {
     refresh();
@@ -95,6 +101,20 @@ export function PoolJobsHistory() {
   useEffect(() => {
     setPage(1);
   }, [type, status, platform, limit]);
+
+  // Background auto-refresh every 15s while mounted. Uses silent mode
+  // so the existing rows stay visible; only the data gets swapped.
+  // Pauses while the tab is in the background to avoid wasted queries.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        refreshRef.current(true);
+      }
+    }, 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="w-full bg-[#030303]">
@@ -136,9 +156,10 @@ export function PoolJobsHistory() {
         </select>
         <button
           type="button"
-          onClick={refresh}
+          onClick={() => refresh()}
           disabled={loading}
           className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-3 py-2 font-mono text-xs tracking-widest uppercase transition-colors disabled:opacity-60 ml-auto"
+          aria-label="Rafraîchir l'historique"
         >
           [ ↻ RAFRAÎCHIR ]
         </button>
@@ -151,21 +172,47 @@ export function PoolJobsHistory() {
             <tr className="border-b border-[#666666]/20">
               <th className="text-left px-4 py-3 font-normal">Job</th>
               <th className="text-left px-3 py-3 font-normal">Type</th>
-              <th className="text-left px-3 py-3 font-normal">Plat.</th>
-              <th className="text-left px-3 py-3 font-normal">Trigger</th>
+              <th className="text-left px-3 py-3 font-normal hidden md:table-cell">
+                Plat.
+              </th>
+              <th className="text-left px-3 py-3 font-normal hidden lg:table-cell">
+                Trigger
+              </th>
               <th className="text-left px-3 py-3 font-normal">Statut</th>
-              <th className="text-left px-3 py-3 font-normal">Lancé</th>
-              <th className="text-right px-3 py-3 font-normal">Durée</th>
-              <th className="text-left px-3 py-3 font-normal">Résumé</th>
+              <th className="text-left px-3 py-3 font-normal hidden sm:table-cell">
+                Lancé
+              </th>
+              <th className="text-right px-3 py-3 font-normal hidden md:table-cell">
+                Durée
+              </th>
+              <th className="text-left px-3 py-3 font-normal hidden xl:table-cell">
+                Résumé
+              </th>
               <th className="text-right px-3 py-3 font-normal">—</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody aria-busy={loading} aria-live="polite">
+            {loading && !data && (
+              <>
+                {Array.from({ length: Math.min(limit, 8) }).map((_, i) => (
+                  <SkeletonRow key={`sk-${i}`} cols={9} compact />
+                ))}
+              </>
+            )}
             {data?.rows.map((r) => (
               <tr
                 key={r.id}
                 onClick={() => setOpenId(r.id)}
-                className="interactive border-b border-[#666666]/20 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] transition-all duration-200 cursor-pointer"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setOpenId(r.id);
+                  }
+                }}
+                tabIndex={0}
+                role="button"
+                aria-label={`Ouvrir le détail du job ${String(r.id).padStart(4, "0")}`}
+                className="interactive border-b border-[#666666]/20 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#FF3300] focus-visible:outline-offset-[-2px] transition-all duration-200 cursor-pointer"
               >
                 <td className="px-4 py-3 font-mono text-xs text-white tabular-nums whitespace-nowrap">
                   #{String(r.id).padStart(4, "0")}
@@ -173,10 +220,10 @@ export function PoolJobsHistory() {
                 <td className="px-3 py-3 font-mono text-xs text-[#FF3300] tracking-widest uppercase whitespace-nowrap">
                   {TYPE_LABEL_FR[r.jobType] ?? r.jobType.toUpperCase()}
                 </td>
-                <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase">
+                <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase hidden md:table-cell">
                   {r.platform ? shortPlatform(r.platform) : "—"}
                 </td>
-                <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase">
+                <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase hidden lg:table-cell">
                   {triggerLabel(r.trigger)}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap">
@@ -192,13 +239,13 @@ export function PoolJobsHistory() {
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-3 font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap">
+                <td className="px-3 py-3 font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap hidden sm:table-cell">
                   {short(r.startedAt)}
                 </td>
-                <td className="px-3 py-3 text-right font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap">
+                <td className="px-3 py-3 text-right font-mono text-xs text-[#666666] tabular-nums whitespace-nowrap hidden md:table-cell">
                   {duration(r.startedAt, r.endedAt)}
                 </td>
-                <td className="px-3 py-3 font-mono text-xs text-[#666666] truncate max-w-xs">
+                <td className="px-3 py-3 font-mono text-xs text-[#666666] truncate max-w-xs hidden xl:table-cell">
                   {summary(r)}
                 </td>
                 <td className="px-3 py-3 text-right whitespace-nowrap">
@@ -213,11 +260,6 @@ export function PoolJobsHistory() {
         {!loading && data?.rows.length === 0 && (
           <div className="px-4 py-16 text-center font-mono text-xs text-[#666666] tracking-widest uppercase">
             AUCUN JOB NE CORRESPOND À CES FILTRES.
-          </div>
-        )}
-        {loading && (
-          <div className="px-4 py-16 text-center font-mono text-xs text-[#666666] tracking-widest uppercase">
-            CHARGEMENT...
           </div>
         )}
       </div>
@@ -288,6 +330,8 @@ function JobDetailModal({
   const [job, setJob] = useState<JobRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const prevActiveRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -309,6 +353,17 @@ function JobDetailModal({
       cancelled = true;
     };
   }, [id]);
+
+  // Capture focus: remember what was focused, move focus to the close
+  // button, restore on unmount. Keeps the modal operable for keyboard
+  // + screen reader users and puts focus back where they were.
+  useEffect(() => {
+    prevActiveRef.current = document.activeElement as HTMLElement | null;
+    closeBtnRef.current?.focus();
+    return () => {
+      prevActiveRef.current?.focus?.();
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -351,21 +406,39 @@ function JobDetailModal({
             </h3>
           </div>
           <button
+            ref={closeBtnRef}
             type="button"
             onClick={onClose}
-            className="interactive border border-[#666666]/40 hover:border-white hover:text-white text-[#666666] px-3 py-2 font-mono text-xs tracking-widest uppercase transition-colors"
+            className="interactive border border-[#666666]/40 hover:border-white hover:text-white text-[#666666] px-3 py-2 font-mono text-xs tracking-widest uppercase transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#FF3300]"
             aria-label="Fermer le détail"
           >
             [&nbsp;FERMER&nbsp;]
           </button>
         </div>
 
-        <div className="flex-1 px-5 py-5 flex flex-col gap-5 font-mono text-xs tracking-widest uppercase">
+        <div
+          className="flex-1 px-5 py-5 flex flex-col gap-5 font-mono text-xs tracking-widest uppercase"
+          aria-busy={loading}
+        >
           {loading && (
-            <div className="text-[#666666] py-10 text-center">CHARGEMENT…</div>
+            <div className="flex flex-col gap-5" aria-hidden="true">
+              <Skeleton height={14} className="w-28" />
+              <div className="flex flex-col gap-2">
+                <Skeleton height={12} className="w-full" />
+                <Skeleton height={12} className="w-5/6" />
+                <Skeleton height={12} className="w-2/3" />
+              </div>
+              <Skeleton height={14} className="w-24" />
+              <div className="flex flex-col gap-2">
+                <Skeleton height={12} className="w-full" />
+                <Skeleton height={12} className="w-3/4" />
+              </div>
+              <Skeleton height={14} className="w-32" />
+              <Skeleton height={180} className="w-full" />
+            </div>
           )}
           {error && (
-            <div className="text-[#FF3300] py-10 text-center">
+            <div className="text-[#FF3300] py-10 text-center" role="alert">
               ERREUR DE CHARGEMENT · {error}
             </div>
           )}
