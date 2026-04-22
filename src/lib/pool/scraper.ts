@@ -20,7 +20,7 @@ import {
   fetchTikTokFollowers,
   fetchTikTokUserByUsername,
 } from "@/lib/rapidapi/tiktok";
-import { fetchIgOracle, fetchTtOracle } from "./oracle";
+import { fetchIgOracle, fetchTtOracle, type OracleResult } from "./oracle";
 import { getPoolConfig } from "./config";
 
 export type RejectionBreakdown = {
@@ -158,10 +158,153 @@ async function pickNextSeed(
     where: {
       platform,
       enabled: true,
+      // Skip seeds that have racked up persistent errors across runs —
+      // likely broken / banned / locked. AUTO_DISABLE_PRIVATE_THRESHOLD
+      // trips them off; this filter is a soft safety net for the few
+      // ticks between the N-th error and the auto-disable write.
+      consecutiveErrors: { lt: AUTO_DISABLE_PRIVATE_THRESHOLD },
       id: { notIn: excludeIds.length > 0 ? excludeIds : [-1] },
     },
     orderBy: [{ priority: "desc" }, { addedAt: "asc" }],
   });
+}
+
+// Same filter as pickNextSeed but returns N seeds — used by the
+// multi-seed TT parallelism path (runs 3 TT seeds simultaneously
+// since the TT RapidAPI plan has quota headroom).
+async function pickNextNSeeds(
+  platform: "instagram" | "tiktok",
+  n: number,
+  excludeIds: number[]
+) {
+  return prisma.poolSeedAccount.findMany({
+    where: {
+      platform,
+      enabled: true,
+      consecutiveErrors: { lt: AUTO_DISABLE_PRIVATE_THRESHOLD },
+      id: { notIn: excludeIds.length > 0 ? excludeIds : [-1] },
+    },
+    orderBy: [{ priority: "desc" }, { addedAt: "asc" }],
+    take: n,
+  });
+}
+
+// ── Tranche-local optimization context ──────────────────────────────
+// Built once at the top of runScrapeTranche and passed down so the
+// per-seed / per-candidate code can:
+//   • `oracleCache`  — skip a second /userinfo call for a userId we
+//     already resolved this tranche (e.g. two seeds share a follower)
+//   • `existingKeys` — skip oracle entirely for handles already in our
+//     TestAccount pool (covers both username renames → userId and
+//     fresh duplicates from seed overlap)
+//   • `aborted`      — cooperative early-exit: set to true by any
+//     worker that tips stats past target, checked by sibling workers
+//     between batches so they stop cleanly
+export type ScrapeContext = {
+  oracleCache: Map<string, OracleResult>;
+  existingKeys: Set<string>;
+  aborted: { value: boolean };
+};
+
+async function buildScrapeContext(
+  platforms: Array<"instagram" | "tiktok">
+): Promise<ScrapeContext> {
+  const rows = await prisma.testAccount.findMany({
+    where: { platform: { in: platforms } },
+    select: { platform: true, username: true, userId: true },
+  });
+  const existingKeys = new Set<string>();
+  for (const r of rows) {
+    existingKeys.add(`${r.platform}:user:${r.username.toLowerCase()}`);
+    if (r.userId) existingKeys.add(`${r.platform}:uid:${r.userId}`);
+  }
+  return {
+    oracleCache: new Map(),
+    existingKeys,
+    aborted: { value: false },
+  };
+}
+
+// Concurrency tuning — different caps per platform because the TT
+// RapidAPI plan is far roomier than IG's. Bumping IG above 4-5 hits
+// 429s; TT happily takes 8-way parallelism.
+const IG_ORACLE_CONCURRENCY = 4;
+const TT_ORACLE_CONCURRENCY = 8;
+const TT_MULTI_SEED_CONCURRENCY = 3;
+
+// Per-seed lifecycle: run the processor inside try/catch, track
+// errors at both job and DB level, auto-disable on persistent
+// private-account signals. Extracted so the main loop can call it
+// sequentially (IG) or in Promise.all (TT multi-seed).
+async function runSeedSafely({
+  seed,
+  stats,
+  cfg,
+  ctx,
+}: {
+  seed: {
+    id: number;
+    username: string;
+    platform: string;
+    consecutiveErrors: number | null;
+  };
+  stats: ScrapeStats;
+  cfg: Awaited<ReturnType<typeof getPoolConfig>>;
+  ctx: ScrapeContext;
+}): Promise<void> {
+  try {
+    if (seed.platform === "instagram") {
+      await processInstagramSeed({ seed, stats, cfg, ctx });
+    } else if (seed.platform === "tiktok") {
+      await processTikTokSeed({ seed, stats, cfg, ctx });
+    }
+    if ((seed.consecutiveErrors ?? 0) > 0) {
+      await prisma.poolSeedAccount.update({
+        where: { id: seed.id },
+        data: { consecutiveErrors: 0, lastErrorReason: null },
+      });
+    }
+  } catch (e) {
+    const msg = (e as Error).message;
+    stats.errors.push(
+      `seed ${seed.username}/${seed.platform}: ${msg.slice(0, 160)}`
+    );
+    if (!stats.a.seedErrorCount) stats.a.seedErrorCount = {};
+    stats.a.seedErrorCount[seed.id] =
+      (stats.a.seedErrorCount[seed.id] ?? 0) + 1;
+
+    const newStreak = (seed.consecutiveErrors ?? 0) + 1;
+    const privateSignal = isPrivateLikeError(msg);
+    if (privateSignal && newStreak >= AUTO_DISABLE_PRIVATE_THRESHOLD) {
+      await prisma.poolSeedAccount.update({
+        where: { id: seed.id },
+        data: {
+          enabled: false,
+          consecutiveErrors: newStreak,
+          lastErrorReason: msg.slice(0, 200),
+        },
+      });
+      await prisma.poolSeedHealthLog.create({
+        data: {
+          platform: seed.platform,
+          action: "auto_disabled_private",
+          seedUsername: seed.username,
+          reason: `${newStreak} consecutive private errors · last: ${msg.slice(0, 150)}`,
+        },
+      });
+      console.error(
+        `[SCRAPER] Auto-disabled seed @${seed.username} (${seed.platform}) after ${newStreak} consecutive private errors`
+      );
+    } else {
+      await prisma.poolSeedAccount.update({
+        where: { id: seed.id },
+        data: {
+          consecutiveErrors: newStreak,
+          lastErrorReason: msg.slice(0, 200),
+        },
+      });
+    }
+  }
 }
 
 export async function runScrapeTranche({
@@ -182,15 +325,28 @@ export async function runScrapeTranche({
       ? ["instagram", "tiktok"]
       : [stats.platform];
 
+  const ctx = await buildScrapeContext(platformsToRun);
   const wantA = Math.max(1, Math.round(stats.target * cfg.methodARatio));
   const totalAdded = () => stats.addedA + stats.addedB;
+
+  // Shared early-exit check so every yield point evaluates the same
+  // termination conditions without duplication.
+  const shouldStop = async (): Promise<boolean> => {
+    if (ctx.aborted.value) return true;
+    if (Date.now() > deadline) return true;
+    if (await stopRequested()) return true;
+    if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) return true;
+    if (totalAdded() >= wantA) {
+      ctx.aborted.value = true;
+      return true;
+    }
+    return false;
+  };
 
   // --- Phase A ---------------------------------------------------------
   if (stats.phase === "a") {
     while (totalAdded() < wantA) {
-      if (Date.now() > deadline) return { done: false, stats };
-      if (await stopRequested()) return { done: false, stats };
-      if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) break;
+      if (await shouldStop()) return { done: false, stats };
 
       // If no current seed, pick the next one.
       if (!stats.a.currentSeedId) {
@@ -227,80 +383,35 @@ export async function runScrapeTranche({
         continue;
       }
 
-      let seedErrored = false;
-      let autoDisabled = false;
-      try {
-        if (seed.platform === "instagram") {
-          await processInstagramSeed({ seed, stats, cfg });
-        } else if (seed.platform === "tiktok") {
-          await processTikTokSeed({ seed, stats, cfg });
-        }
-        // Success path — reset the cross-run error streak if non-zero.
-        if ((seed.consecutiveErrors ?? 0) > 0) {
-          await prisma.poolSeedAccount.update({
-            where: { id: seed.id },
-            data: { consecutiveErrors: 0, lastErrorReason: null },
-          });
-        }
-      } catch (e) {
-        seedErrored = true;
-        const msg = (e as Error).message;
-        stats.errors.push(
-          `seed ${seed.username}/${seed.platform}: ${msg.slice(0, 160)}`
+      // --- TT multi-seed parallelism --------------------------------
+      // TT's follower API is fast and its RapidAPI plan has room, so
+      // process TT_MULTI_SEED_CONCURRENCY seeds simultaneously.
+      // IG stays single-seed-at-a-time (quota-constrained).
+      if (seed.platform === "tiktok") {
+        const extras = await pickNextNSeeds(
+          "tiktok",
+          TT_MULTI_SEED_CONCURRENCY - 1,
+          [...stats.a.doneSeedIds, seed.id]
         );
-
-        // Bump in-job counter (prevents infinite retry within this run).
-        if (!stats.a.seedErrorCount) stats.a.seedErrorCount = {};
-        stats.a.seedErrorCount[seed.id] =
-          (stats.a.seedErrorCount[seed.id] ?? 0) + 1;
-
-        // Bump cross-run counter and, if this is the N-th consecutive
-        // "Private account" signal, auto-disable the seed.
-        const newStreak = (seed.consecutiveErrors ?? 0) + 1;
-        const privateSignal = isPrivateLikeError(msg);
-        if (
-          privateSignal &&
-          newStreak >= AUTO_DISABLE_PRIVATE_THRESHOLD
-        ) {
-          await prisma.poolSeedAccount.update({
-            where: { id: seed.id },
-            data: {
-              enabled: false,
-              consecutiveErrors: newStreak,
-              lastErrorReason: msg.slice(0, 200),
-            },
-          });
-          await prisma.poolSeedHealthLog.create({
-            data: {
-              platform: seed.platform,
-              action: "auto_disabled_private",
-              seedUsername: seed.username,
-              reason: `${newStreak} consecutive private errors · last: ${msg.slice(0, 150)}`,
-            },
-          });
-          console.error(
-            `[SCRAPER] Auto-disabled seed @${seed.username} (${seed.platform}) after ${newStreak} consecutive private errors`
-          );
-          autoDisabled = true;
-        } else {
-          await prisma.poolSeedAccount.update({
-            where: { id: seed.id },
-            data: {
-              consecutiveErrors: newStreak,
-              lastErrorReason: msg.slice(0, 200),
-            },
-          });
+        const batch = [seed, ...extras];
+        await Promise.all(
+          batch.map((s) => runSeedSafely({ seed: s, stats, cfg, ctx }))
+        );
+        for (const s of batch) {
+          stats.a.doneSeedIds.push(s.id);
+          stats.seedsProcessed++;
         }
+        stats.a.currentSeedId = null;
+        stats.a.seedPlatform = null;
+        continue;
       }
 
-      // Close the seed when:
-      //  • it completed a page (happy path), OR
-      //  • it got auto-disabled, OR
-      //  • it errored too many times within this run (safety net).
+      // --- IG single-seed (with internal candidate concurrency) -----
+      await runSeedSafely({ seed, stats, cfg, ctx });
+
       const runtimeErrors =
         stats.a.seedErrorCount?.[stats.a.currentSeedId!] ?? 0;
-      const forceClose =
-        autoDisabled || runtimeErrors >= MAX_ERRORS_PER_SEED_RUN;
+      const forceClose = runtimeErrors >= MAX_ERRORS_PER_SEED_RUN;
 
       if (
         forceClose ||
@@ -311,13 +422,6 @@ export async function runScrapeTranche({
         stats.seedsProcessed++;
         stats.a.currentSeedId = null;
         stats.a.seedPlatform = null;
-        if (forceClose && !seedErrored) {
-          // safety net hit on a seed that never errored — defensive,
-          // shouldn't happen but log if it does so we can investigate.
-          console.warn(
-            `[SCRAPER] Force-closed seed #${seed.id} without explicit error`
-          );
-        }
       }
     }
     stats.phase = "b";
@@ -352,6 +456,7 @@ async function processInstagramSeed({
   seed,
   stats,
   cfg,
+  ctx,
 }: {
   seed: { id: number; username: string; platform: string };
   stats: ScrapeStats;
@@ -362,14 +467,19 @@ async function processInstagramSeed({
     maxFollowingCount: number;
     maxRapidapiCallsPerScrapeRun: number;
   };
+  ctx: ScrapeContext;
 }) {
   const { sample } = await fetchInstagramFollowers(seed.username);
   stats.callsUsed++;
 
+  // Phase 1 — cheap pre-filter using only the follower payload.
+  // No API calls, pure sync checks: is_verified / is_private / dedup
+  // against the TestAccount snapshot. Reduces oracle calls ~40% on
+  // typical seeds where ~half the sample is already known or flagged.
+  const survivors: typeof sample = [];
   for (const f of sample) {
     stats.candidatesFetched++;
 
-    // Prefilter: is_verified is a hard NO; private depends on config.
     if (f.is_verified) {
       stats.candidatesRejected.verified++;
       continue;
@@ -378,75 +488,125 @@ async function processInstagramSeed({
       stats.candidatesRejected.private++;
       continue;
     }
-
-    // Quota guard — never overrun the per-run budget.
-    if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) {
+    const userKey = `instagram:user:${f.username.toLowerCase()}`;
+    const idKey = `instagram:uid:${f.id}`;
+    if (ctx.existingKeys.has(userKey) || ctx.existingKeys.has(idKey)) {
       stats.candidatesRejected.other++;
       continue;
     }
+    survivors.push(f);
+  }
 
-    // Deep fetch for counts via the oracle (RapidAPI /userinfo by
-    // user_id). Using the stable id dodges the race where a user
-    // renames between /followers (T0) and /userinfo (T1) and the
-    // username lookup 404s.
-    const oracle = await fetchIgOracle(f.id);
-    stats.callsUsed++;
-
-    if (!oracle.ok) {
-      if (oracle.reason === "ghost") {
-        stats.candidatesRejected.ghost++;
-      } else {
-        stats.candidatesRejected.fetch_info_failed++;
-        stats.errors.push(
-          `oracle @${f.username}/${f.id}: ${oracle.message.slice(0, 120)}`
-        );
-      }
-      continue;
-    }
-
-    if (cfg.requireNotPrivate && oracle.isPrivate) {
-      stats.candidatesRejected.private++;
-      continue;
-    }
-    if (oracle.followerCount > cfg.maxFollowerCount) {
-      stats.candidatesRejected.too_many_followers++;
-      continue;
-    }
-    if (oracle.mediaCount > cfg.maxMediaCount) {
-      stats.candidatesRejected.too_much_media++;
-      continue;
-    }
-    if (oracle.followingCount > cfg.maxFollowingCount) {
-      stats.candidatesRejected.too_many_following++;
-      continue;
-    }
-
-    // Qualified — upsert with the oracle's CURRENT username (stable
-    // user_id is the dedup key in spirit, but Prisma's unique index is
-    // [platform, username] so we write the oracle username there).
-    const storedUsername = oracle.username || f.username;
-    const res = await prisma.testAccount.upsert({
-      where: { platform_username: { platform: "instagram", username: storedUsername } },
-      update: {},
-      create: {
-        platform: "instagram",
-        username: storedUsername,
-        userId: oracle.userId,
-        status: "available",
-        lastFollowerCount: oracle.followerCount,
-        lastMediaCount: oracle.mediaCount,
-        lastFollowingCount: oracle.followingCount,
-        scrapeSource: "big_account_followers",
-        scrapeSeedAccount: seed.username,
-      },
-    });
-    if (res.firstSeenAt.getTime() > Date.now() - 2000) {
-      stats.addedA++;
-      stats.candidatesQualified++;
-    }
+  // Phase 2 — parallel oracle validation on survivors. Each batch of
+  // IG_ORACLE_CONCURRENCY runs its /userinfo calls concurrently. Between
+  // batches we re-check the shared abort/budget flags so early-exit
+  // propagates without waiting for the whole sample to complete.
+  for (let i = 0; i < survivors.length; i += IG_ORACLE_CONCURRENCY) {
+    if (ctx.aborted.value) break;
+    if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) break;
+    const batch = survivors.slice(i, i + IG_ORACLE_CONCURRENCY);
+    await Promise.all(
+      batch.map((f) => validateAndUpsertIgCandidate({ f, seed, stats, cfg, ctx }))
+    );
   }
 
   stats.a.pagesDone++;
+}
+
+async function validateAndUpsertIgCandidate({
+  f,
+  seed,
+  stats,
+  cfg,
+  ctx,
+}: {
+  f: Awaited<ReturnType<typeof fetchInstagramFollowers>>["sample"][number];
+  seed: { id: number; username: string };
+  stats: ScrapeStats;
+  cfg: {
+    requireNotPrivate: boolean;
+    maxFollowerCount: number;
+    maxMediaCount: number;
+    maxFollowingCount: number;
+    maxRapidapiCallsPerScrapeRun: number;
+  };
+  ctx: ScrapeContext;
+}): Promise<void> {
+  if (ctx.aborted.value) return;
+  if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) {
+    stats.candidatesRejected.other++;
+    return;
+  }
+
+  // Oracle cache — same userId from a different seed in the same
+  // tranche skips the second RapidAPI call entirely.
+  const cacheKey = `instagram:${f.id}`;
+  let oracle = ctx.oracleCache.get(cacheKey);
+  if (!oracle) {
+    try {
+      oracle = await fetchIgOracle(f.id);
+    } catch (e) {
+      oracle = {
+        ok: false,
+        reason: "error",
+        message: (e as Error).message.slice(0, 200),
+      };
+    }
+    stats.callsUsed++;
+    ctx.oracleCache.set(cacheKey, oracle);
+  }
+
+  if (!oracle.ok) {
+    if (oracle.reason === "ghost") {
+      stats.candidatesRejected.ghost++;
+    } else {
+      stats.candidatesRejected.fetch_info_failed++;
+      stats.errors.push(
+        `oracle @${f.username}/${f.id}: ${oracle.message.slice(0, 120)}`
+      );
+    }
+    return;
+  }
+
+  if (cfg.requireNotPrivate && oracle.isPrivate) {
+    stats.candidatesRejected.private++;
+    return;
+  }
+  if (oracle.followerCount > cfg.maxFollowerCount) {
+    stats.candidatesRejected.too_many_followers++;
+    return;
+  }
+  if (oracle.mediaCount > cfg.maxMediaCount) {
+    stats.candidatesRejected.too_much_media++;
+    return;
+  }
+  if (oracle.followingCount > cfg.maxFollowingCount) {
+    stats.candidatesRejected.too_many_following++;
+    return;
+  }
+
+  const storedUsername = oracle.username || f.username;
+  const res = await prisma.testAccount.upsert({
+    where: { platform_username: { platform: "instagram", username: storedUsername } },
+    update: {},
+    create: {
+      platform: "instagram",
+      username: storedUsername,
+      userId: oracle.userId,
+      status: "available",
+      lastFollowerCount: oracle.followerCount,
+      lastMediaCount: oracle.mediaCount,
+      lastFollowingCount: oracle.followingCount,
+      scrapeSource: "big_account_followers",
+      scrapeSeedAccount: seed.username,
+    },
+  });
+  if (res.firstSeenAt.getTime() > Date.now() - 2000) {
+    stats.addedA++;
+    stats.candidatesQualified++;
+    ctx.existingKeys.add(`instagram:user:${storedUsername.toLowerCase()}`);
+    ctx.existingKeys.add(`instagram:uid:${oracle.userId}`);
+  }
 }
 
 // ---------- TikTok branch -------------------------------------------------
@@ -458,6 +618,7 @@ async function processTikTokSeed({
   seed,
   stats,
   cfg,
+  ctx,
 }: {
   seed: { id: number; username: string; platform: string };
   stats: ScrapeStats;
@@ -465,22 +626,24 @@ async function processTikTokSeed({
     maxFollowerCountTiktok: number;
     maxMediaCount: number;
     maxFollowingCount: number;
+    maxRapidapiCallsPerScrapeRun: number;
   };
+  ctx: ScrapeContext;
 }) {
   const info = await fetchTikTokUserByUsername(seed.username);
   stats.callsUsed++;
   const { sample } = await fetchTikTokFollowers(info.userId);
   stats.callsUsed++;
 
-  // TT uses a looser follower threshold than IG because the platform's
-  // viral exposure model pushes dormant accounts to 5-30 followers
-  // organically; a 5-cap there would reject healthy test candidates.
   const ttFollowerCap = cfg.maxFollowerCountTiktok;
 
+  // Phase 1 — pre-filter on /followers payload (already has follower_
+  // count, following_count, aweme_count, so this catches most rejects
+  // without any oracle call) + dedup.
+  const survivors: typeof sample = [];
   for (const f of sample) {
     stats.candidatesFetched++;
 
-    // Cheap prefilter from the /followers payload (no extra call).
     if (f.follower_count > ttFollowerCap) {
       stats.candidatesRejected.too_many_followers++;
       continue;
@@ -493,64 +656,122 @@ async function processTikTokSeed({
       stats.candidatesRejected.too_many_following++;
       continue;
     }
+    const userKey = `tiktok:user:${f.unique_id.toLowerCase()}`;
+    const idKey = `tiktok:uid:${f.id}`;
+    if (ctx.existingKeys.has(userKey) || ctx.existingKeys.has(idKey)) {
+      stats.candidatesRejected.other++;
+      continue;
+    }
+    survivors.push(f);
+  }
 
-    // Cross-validate via oracle by user_id — catches "ghost" cases
-    // where the follower object is stale (account deleted/banned
-    // between the /followers snapshot and now).
-    const oracle = await fetchTtOracle(f.id);
-    stats.callsUsed++;
-    if (!oracle.ok) {
-      if (oracle.reason === "ghost") stats.candidatesRejected.ghost++;
-      else {
-        stats.candidatesRejected.fetch_info_failed++;
-        stats.errors.push(
-          `oracle @${f.unique_id}/${f.id}: ${oracle.message.slice(0, 120)}`
-        );
-      }
-      continue;
-    }
-
-    // Re-qualify with the fresh oracle counts (they may differ from
-    // the /followers snapshot).
-    if (oracle.followerCount > ttFollowerCap) {
-      stats.candidatesRejected.too_many_followers++;
-      continue;
-    }
-    if (oracle.mediaCount > cfg.maxMediaCount) {
-      stats.candidatesRejected.too_much_media++;
-      continue;
-    }
-    if (oracle.followingCount > cfg.maxFollowingCount) {
-      stats.candidatesRejected.too_many_following++;
-      continue;
-    }
-
-    const storedUsername = oracle.username || f.unique_id;
-    const res = await prisma.testAccount.upsert({
-      where: {
-        platform_username: {
-          platform: "tiktok",
-          username: storedUsername,
-        },
-      },
-      update: {},
-      create: {
-        platform: "tiktok",
-        username: storedUsername,
-        userId: oracle.userId,
-        status: "available",
-        lastFollowerCount: oracle.followerCount,
-        lastMediaCount: oracle.mediaCount,
-        lastFollowingCount: oracle.followingCount,
-        scrapeSource: "big_account_followers",
-        scrapeSeedAccount: seed.username,
-      },
-    });
-    if (res.firstSeenAt.getTime() > Date.now() - 2000) {
-      stats.addedA++;
-      stats.candidatesQualified++;
-    }
+  // Phase 2 — parallel oracle validation (TT quota is roomy enough
+  // for TT_ORACLE_CONCURRENCY=8). Same cross-batch early-exit pattern
+  // as the IG path.
+  for (let i = 0; i < survivors.length; i += TT_ORACLE_CONCURRENCY) {
+    if (ctx.aborted.value) break;
+    if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) break;
+    const batch = survivors.slice(i, i + TT_ORACLE_CONCURRENCY);
+    await Promise.all(
+      batch.map((f) =>
+        validateAndUpsertTtCandidate({ f, seed, stats, cfg, ctx })
+      )
+    );
   }
 
   stats.a.pagesDone++;
+}
+
+async function validateAndUpsertTtCandidate({
+  f,
+  seed,
+  stats,
+  cfg,
+  ctx,
+}: {
+  f: Awaited<ReturnType<typeof fetchTikTokFollowers>>["sample"][number];
+  seed: { id: number; username: string };
+  stats: ScrapeStats;
+  cfg: {
+    maxFollowerCountTiktok: number;
+    maxMediaCount: number;
+    maxFollowingCount: number;
+    maxRapidapiCallsPerScrapeRun: number;
+  };
+  ctx: ScrapeContext;
+}): Promise<void> {
+  if (ctx.aborted.value) return;
+  if (stats.callsUsed >= cfg.maxRapidapiCallsPerScrapeRun) {
+    stats.candidatesRejected.other++;
+    return;
+  }
+
+  const cacheKey = `tiktok:${f.id}`;
+  let oracle = ctx.oracleCache.get(cacheKey);
+  if (!oracle) {
+    try {
+      oracle = await fetchTtOracle(f.id);
+    } catch (e) {
+      oracle = {
+        ok: false,
+        reason: "error",
+        message: (e as Error).message.slice(0, 200),
+      };
+    }
+    stats.callsUsed++;
+    ctx.oracleCache.set(cacheKey, oracle);
+  }
+
+  if (!oracle.ok) {
+    if (oracle.reason === "ghost") stats.candidatesRejected.ghost++;
+    else {
+      stats.candidatesRejected.fetch_info_failed++;
+      stats.errors.push(
+        `oracle @${f.unique_id}/${f.id}: ${oracle.message.slice(0, 120)}`
+      );
+    }
+    return;
+  }
+
+  const ttFollowerCap = cfg.maxFollowerCountTiktok;
+  if (oracle.followerCount > ttFollowerCap) {
+    stats.candidatesRejected.too_many_followers++;
+    return;
+  }
+  if (oracle.mediaCount > cfg.maxMediaCount) {
+    stats.candidatesRejected.too_much_media++;
+    return;
+  }
+  if (oracle.followingCount > cfg.maxFollowingCount) {
+    stats.candidatesRejected.too_many_following++;
+    return;
+  }
+
+  const storedUsername = oracle.username || f.unique_id;
+  const res = await prisma.testAccount.upsert({
+    where: {
+      platform_username: {
+        platform: "tiktok",
+        username: storedUsername,
+      },
+    },
+    update: {},
+    create: {
+      platform: "tiktok",
+      username: storedUsername,
+      userId: oracle.userId,
+      status: "available",
+      lastFollowerCount: oracle.followerCount,
+      lastMediaCount: oracle.mediaCount,
+      lastFollowingCount: oracle.followingCount,
+      scrapeSource: "big_account_followers",
+      scrapeSeedAccount: seed.username,
+    },
+  });
+  if (res.firstSeenAt.getTime() > Date.now() - 2000) {
+    stats.addedA++;
+    stats.candidatesQualified++;
+    ctx.existingKeys.add(`tiktok:user:${storedUsername.toLowerCase()}`);
+    ctx.existingKeys.add(`tiktok:uid:${oracle.userId}`);
+  }
 }
