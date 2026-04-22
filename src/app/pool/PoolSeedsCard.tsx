@@ -44,6 +44,11 @@ export function PoolSeedsCard() {
   const [busy, setBusy] = useState(false);
   const [healthCheckRunning, setHealthCheckRunning] = useState(false);
   const [healthLogKey, setHealthLogKey] = useState(0);
+  // Active-seeds pagination. 200+ seeds per platform made the column
+  // unusably long; slice client-side since the full list is already
+  // loaded in `seeds` via /api/pool/seeds.
+  const [seedsPage, setSeedsPage] = useState(1);
+  const [seedsLimit, setSeedsLimit] = useState(10);
 
   const refresh = useCallback(async () => {
     setLoadingSuggestions(true);
@@ -280,6 +285,23 @@ export function PoolSeedsCard() {
 
   const enabledCount = seeds.filter((s) => s.enabled).length;
 
+  // Pagination math for the active-seeds list. Resets to page 1 when
+  // the platform flips or a seed gets added/removed would push us
+  // past the last page (useEffect below).
+  const seedsTotalPages = Math.max(
+    1,
+    Math.ceil(seeds.length / seedsLimit)
+  );
+  const seedsPageSafe = Math.min(seedsPage, seedsTotalPages);
+  const seedsStart = (seedsPageSafe - 1) * seedsLimit;
+  const seedsPaged = seeds.slice(seedsStart, seedsStart + seedsLimit);
+
+  // Reset to page 1 when switching platform, so we don't land on an
+  // empty page for a small platform after a big-platform session.
+  useEffect(() => {
+    setSeedsPage(1);
+  }, [platform]);
+
   return (
     <section className="w-full">
       <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D] flex items-center justify-between flex-wrap gap-2">
@@ -354,58 +376,112 @@ export function PoolSeedsCard() {
               AUCUN SEED POUR CETTE PLATEFORME.
             </div>
           ) : (
-            <div className="border-t border-[#666666]/20">
-              {seeds.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center gap-2 py-2 border-b border-[#666666]/20 font-mono text-xs tracking-widest uppercase hover:bg-[#0D0D0D]"
-                >
-                  <button
-                    type="button"
-                    onClick={() => toggleSeed(s)}
-                    className={`interactive flex-shrink-0 border px-2 py-1 text-[10px] transition-colors ${
-                      s.enabled
-                        ? "border-[#FF3300] text-[#FF3300]"
-                        : "border-[#666666]/40 text-[#666666]"
-                    }`}
+            <>
+              <div className="border-t border-[#666666]/20">
+                {seedsPaged.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-2 py-2 border-b border-[#666666]/20 font-mono text-xs tracking-widest uppercase hover:bg-[#0D0D0D]"
                   >
-                    {s.enabled ? "ON" : "OFF"}
-                  </button>
-                  <span className="flex-1 text-white truncate">
-                    @{s.username}
-                  </span>
-                  <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={() => changePriority(s, -1)}
-                      className="interactive text-[#666666] hover:text-white px-1"
-                      aria-label={`Baisser la priorité de @${s.username}`}
+                      onClick={() => toggleSeed(s)}
+                      className={`interactive flex-shrink-0 border px-2 py-1 text-[10px] transition-colors ${
+                        s.enabled
+                          ? "border-[#FF3300] text-[#FF3300]"
+                          : "border-[#666666]/40 text-[#666666]"
+                      }`}
                     >
-                      −
+                      {s.enabled ? "ON" : "OFF"}
                     </button>
-                    <span className="text-[#666666] w-6 text-center tabular-nums">
-                      {s.priority}
+                    <span className="flex-1 text-white truncate">
+                      @{s.username}
                     </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => changePriority(s, -1)}
+                        className="interactive text-[#666666] hover:text-white px-1"
+                        aria-label={`Baisser la priorité de @${s.username}`}
+                      >
+                        −
+                      </button>
+                      <span className="text-[#666666] w-6 text-center tabular-nums">
+                        {s.priority}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => changePriority(s, +1)}
+                        className="interactive text-[#666666] hover:text-white px-1"
+                        aria-label={`Monter la priorité de @${s.username}`}
+                      >
+                        +
+                      </button>
+                    </div>
                     <button
                       type="button"
-                      onClick={() => changePriority(s, +1)}
-                      className="interactive text-[#666666] hover:text-white px-1"
-                      aria-label={`Monter la priorité de @${s.username}`}
+                      onClick={() => deleteSeed(s)}
+                      className="interactive text-[#FF3300] hover:text-white px-1"
+                      aria-label={`Supprimer le seed @${s.username}`}
                     >
-                      +
+                      ×
                     </button>
                   </div>
+                ))}
+              </div>
+
+              {/* Pagination footer — same brutalist pattern as
+                  PoolAccountsList so the UI feels consistent. */}
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-[#666666]/20 font-mono text-[10px] tracking-widest uppercase">
+                <div className="text-[#666666] tabular-nums flex items-center gap-3 flex-wrap">
+                  <span>
+                    [ PAGE {String(seedsPageSafe).padStart(2, "0")} /{" "}
+                    {String(seedsTotalPages).padStart(2, "0")} ]
+                  </span>
+                  <span className="text-[#666666]/60">
+                    {seeds.length} SEEDS
+                  </span>
+                  <label className="flex items-center gap-2">
+                    <span className="text-[#666666]/60">PAR PAGE</span>
+                    <select
+                      value={seedsLimit}
+                      onChange={(e) => {
+                        setSeedsLimit(Number(e.target.value));
+                        setSeedsPage(1);
+                      }}
+                      className="interactive bg-transparent border border-[#666666]/40 focus:border-[#FF3300] px-2 py-1 font-mono text-[10px] tracking-widest uppercase text-white outline-none"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => deleteSeed(s)}
-                    className="interactive text-[#FF3300] hover:text-white px-1"
-                    aria-label={`Supprimer le seed @${s.username}`}
+                    disabled={seedsPageSafe <= 1}
+                    onClick={() => setSeedsPage((p) => Math.max(1, p - 1))}
+                    className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-3 py-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label="Page précédente"
                   >
-                    ×
+                    [&nbsp;←&nbsp;]
+                  </button>
+                  <button
+                    type="button"
+                    disabled={seedsPageSafe >= seedsTotalPages}
+                    onClick={() =>
+                      setSeedsPage((p) => Math.min(seedsTotalPages, p + 1))
+                    }
+                    className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white px-3 py-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    aria-label="Page suivante"
+                  >
+                    [&nbsp;→&nbsp;]
                   </button>
                 </div>
-              ))}
-            </div>
+              </div>
+            </>
           )}
         </div>
 
