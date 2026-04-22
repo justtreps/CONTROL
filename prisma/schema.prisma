@@ -210,20 +210,19 @@ model PoolConfig {
   invalidateIfMediaAbove           Int      @default(999999)
 
   // ── Engagement pool ──────────────────────────────────────────────
-  // When enabled, accounts scraped with mediaCount in [engagement
-  // PostsMin, engagementPostsMax] are classified as 'engagement_test'
-  // candidates and their recent posts are sampled. Those posts feed
-  // tests for like / view / share services. Disabled by default so
-  // the original follower_test-only pool behaviour is preserved until
-  // the operator opts in.
+  // When enabled, accounts scraped with mediaCount >= engagementPostsMin
+  // are classified as 'engagement_test' candidates and their recent
+  // posts are sampled. Those posts feed tests for like / view / share
+  // services. Disabled by default so the original follower_test-only
+  // pool behaviour is preserved until the operator opts in. Country
+  // routing is handled at MyBoost→CONTROL time, not here; TestAccount.
+  // detectedCountry is kept for that downstream use.
   engagementPoolEnabled            Boolean  @default(false)
   engagementPoolTargetInstagram    Int      @default(500)
   engagementPoolTargetTiktok       Int      @default(500)
   engagementPostsMin               Int      @default(1)
-  engagementPostsMax               Int      @default(10)
   engagementLikesMaxPerPost        Int      @default(20)
-  engagementFreshnessMaxDays       Int      @default(90)
-  countryDetectionMinConfidence    String   @default("medium") // 'high' | 'medium' | 'low' | 'unknown'
+  engagementFreshnessMaxDays       Int      @default(30)
 
   updatedAt                        DateTime @updatedAt
 }

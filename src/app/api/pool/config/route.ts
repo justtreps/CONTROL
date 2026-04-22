@@ -32,12 +32,8 @@ const patchSchema = z
     engagementPoolTargetInstagram: z.number().int().min(0).optional(),
     engagementPoolTargetTiktok: z.number().int().min(0).optional(),
     engagementPostsMin: z.number().int().min(0).optional(),
-    engagementPostsMax: z.number().int().min(0).optional(),
     engagementLikesMaxPerPost: z.number().int().min(0).optional(),
     engagementFreshnessMaxDays: z.number().int().min(0).optional(),
-    countryDetectionMinConfidence: z
-      .enum(["high", "medium", "low", "unknown"])
-      .optional(),
   })
   .strict();
 

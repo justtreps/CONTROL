@@ -3,10 +3,10 @@
 // fullName, biography (IG only — TT sample doesn't expose it),
 // username.
 //
-// Returns ISO-3166 alpha-2 code + a confidence label. The testbot
-// filters by `countryConfidence >= config.countryDetectionMinConfidence`
-// so low-signal matches don't get routed to geo-targeted services
-// unless the operator explicitly loosens the threshold.
+// Returns ISO-3166 alpha-2 code + a confidence label. Stored on
+// TestAccount.detectedCountry / countryConfidence for downstream
+// MyBoost→CONTROL routing (geo-targeted dispatch decides there,
+// not inside the testbot).
 
 export type CountryConfidence = "high" | "medium" | "low" | "unknown";
 

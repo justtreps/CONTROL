@@ -103,11 +103,8 @@ export default async function PoolPage() {
           engagementPoolTargetInstagram: config.engagementPoolTargetInstagram,
           engagementPoolTargetTiktok: config.engagementPoolTargetTiktok,
           engagementPostsMin: config.engagementPostsMin,
-          engagementPostsMax: config.engagementPostsMax,
           engagementLikesMaxPerPost: config.engagementLikesMaxPerPost,
           engagementFreshnessMaxDays: config.engagementFreshnessMaxDays,
-          countryDetectionMinConfidence:
-            config.countryDetectionMinConfidence,
         }}
       />
     </PoolToastProvider>

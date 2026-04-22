@@ -8,7 +8,6 @@ import {
 } from "@/lib/pool/assign";
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
-import { getPoolConfig } from "@/lib/pool/config";
 import type { Service, TestAccount } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -221,21 +220,17 @@ async function attemptPlaceOrder({
       serviceRouting.poolType === "engagement_test"
         ? serviceRouting.poolType
         : undefined;
-    const cfg = await getPoolConfig().catch(() => null);
-    const minConf = (cfg as unknown as { countryDetectionMinConfidence?: string })
-      ?.countryDetectionMinConfidence as
-      | "high"
-      | "medium"
-      | "low"
-      | "unknown"
-      | undefined;
 
+    // Country gating intentionally not passed here — assign.ts falls
+    // back to its own default ('medium'). The real country routing
+    // happens at MyBoost→CONTROL dispatch time, not inside the
+    // testbot; internal quality tests just use whatever account the
+    // pool offers.
     poolPick = await pickAndAssignAccount({
       platform: service.platform,
       testOrderId: -1,
       accountType: routingType,
       targetCountry: serviceRouting.targetCountry ?? null,
-      minCountryConfidence: minConf,
     });
 
     if (poolPick) {

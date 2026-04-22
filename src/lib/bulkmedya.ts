@@ -1,6 +1,6 @@
 import { getBulkmedyaKey } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
-import { isMvpPair } from "@/lib/scope";
+import { SCOPE } from "@/lib/scope";
 
 const BULKMEDYA_URL = process.env.BULKMEDYA_API_URL ?? "https://bulkmedya.org/api/v2";
 
@@ -115,10 +115,15 @@ export async function syncServices(): Promise<SyncResult> {
     throw new Error(`Unexpected services response: ${JSON.stringify(raw).slice(0, 200)}`);
   }
 
-  // MVP: we only ingest services that are in the currently-active scope
-  // (see src/lib/scope.ts — Instagram + TikTok followers only). Anything
-  // else is tracked as "skipped" for debug but never written to DB, so
-  // scoring / routing / test-bot never see them.
+  // Platform scope — we only keep services from platforms flagged
+  // enabled=true in SCOPE (IG + TT for now). We no longer gate per
+  // (platform, serviceType) pair: likes / views / shares / saves
+  // are all ingested so the full engagement catalog is available
+  // once BulkMedya data is live. Per-type visibility in the UI is
+  // still driven by the mvp flag in ServicesNav.
+  const enabledPlatforms = new Set<string>(
+    SCOPE.platforms.filter((p) => p.enabled).map((p) => p.id)
+  );
   const keptIds = new Set<number>();
   let created = 0;
   let updated = 0;
@@ -130,7 +135,7 @@ export async function syncServices(): Promise<SyncResult> {
 
     const { platform, serviceType } = classify(r.name, r.category ?? "");
 
-    if (!isMvpPair(platform, serviceType)) {
+    if (!enabledPlatforms.has(platform)) {
       skippedOutOfScope++;
       continue;
     }
@@ -220,6 +225,13 @@ export async function reparseServiceTypes(): Promise<ReparseResult> {
     },
   });
 
+  // Mirror syncServices: scope by platform only (enabled=true) so a
+  // reparse run doesn't undo the broader catalog we're now ingesting
+  // (engagement-type rows stay active on IG+TT).
+  const enabledPlatforms = new Set<string>(
+    SCOPE.platforms.filter((p) => p.enabled).map((p) => p.id)
+  );
+
   const corrections: ReparseResult["corrections"] = [];
   let corrected = 0;
   let deactivatedOutOfScope = 0;
@@ -227,7 +239,7 @@ export async function reparseServiceTypes(): Promise<ReparseResult> {
 
   for (const r of rows) {
     const newType = classifyServiceType(r.name, r.category);
-    const inScope = isMvpPair(r.platform, newType);
+    const inScope = enabledPlatforms.has(r.platform);
     const shouldBeActive = inScope;
 
     const typeChanged = newType !== r.serviceType;

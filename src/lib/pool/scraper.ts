@@ -672,23 +672,21 @@ async function validateAndUpsertIgCandidate({
   // Account-type routing. When engagementPoolEnabled=false (default),
   // behaviour is identical to before: everything becomes follower_test.
   // When the operator flips the toggle on:
-  //   mediaCount == 0                            → follower_test
-  //   mediaCount in [min, max]                   → engagement_test
-  //   mediaCount > engagementPostsMax            → reject
+  //   mediaCount == 0                → follower_test
+  //   mediaCount >= engagementPostsMin → engagement_test
+  //   mediaCount in [1, min-1]        → follower_test (falls through)
+  // We no longer cap with a "max posts" rule — what matters for
+  // engagement quality is freshness + low natural likes, not the
+  // absolute post count. Those checks run later in fetchValidEngagementPosts.
   const engagementCfg = cfg as unknown as {
     engagementPoolEnabled?: boolean;
     engagementPostsMin?: number;
-    engagementPostsMax?: number;
   };
   let accountType: "follower_test" | "engagement_test" = "follower_test";
   if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
     const minP = engagementCfg.engagementPostsMin ?? 1;
-    const maxP = engagementCfg.engagementPostsMax ?? 10;
-    if (oracle.mediaCount >= minP && oracle.mediaCount <= maxP) {
+    if (oracle.mediaCount >= minP) {
       accountType = "engagement_test";
-    } else if (oracle.mediaCount > maxP) {
-      stats.candidatesRejected.too_much_media++;
-      return;
     }
     // else (mediaCount in [1, minP-1]) falls through as follower_test
   }
@@ -913,17 +911,12 @@ async function validateAndUpsertTtCandidate({
   const engagementCfg = cfg as unknown as {
     engagementPoolEnabled?: boolean;
     engagementPostsMin?: number;
-    engagementPostsMax?: number;
   };
   let accountType: "follower_test" | "engagement_test" = "follower_test";
   if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
     const minP = engagementCfg.engagementPostsMin ?? 1;
-    const maxP = engagementCfg.engagementPostsMax ?? 10;
-    if (oracle.mediaCount >= minP && oracle.mediaCount <= maxP) {
+    if (oracle.mediaCount >= minP) {
       accountType = "engagement_test";
-    } else if (oracle.mediaCount > maxP) {
-      stats.candidatesRejected.too_much_media++;
-      return;
     }
   }
 
