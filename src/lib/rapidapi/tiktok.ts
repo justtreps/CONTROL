@@ -139,6 +139,7 @@ type RawUserVideos = {
     videos?: Array<{
       id?: string | number;
       aweme_id?: string | number;
+      video_id?: string | number;
       author?: { unique_id?: string; uniqueId?: string };
       unique_id?: string;
       digg_count?: number;
@@ -161,7 +162,16 @@ export async function fetchTikTokUserVideos(
   const rawItems = json?.data?.videos ?? [];
   const videos: TikTokVideo[] = [];
   for (const raw of rawItems) {
-    const mediaId = String(raw.aweme_id ?? raw.id ?? "");
+    // tiktok-scraper7 quirk: the field named `aweme_id` is actually
+    // the CDN-internal video hash (looks like "v1c044g50000d7j..."),
+    // while `video_id` is the real 19-digit numeric aweme_id that
+    // TikTok uses in public URLs
+    // (https://www.tiktok.com/@{user}/video/{numeric}). Picking
+    // aweme_id first — as the name intuitively suggests — produced
+    // permalinks that 404 on tiktok.com; the `video_id` field is the
+    // correct value. aweme_id + id are kept as fallbacks in case the
+    // upstream ever swaps the field naming back.
+    const mediaId = String(raw.video_id ?? raw.aweme_id ?? raw.id ?? "");
     const authorUniqueId = String(
       raw.author?.unique_id ?? raw.author?.uniqueId ?? raw.unique_id ?? ""
     );
