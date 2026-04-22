@@ -14,7 +14,10 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { classifyService } from "@/lib/services/classifier";
 
-export const maxDuration = 60;
+// Now ~5k Service rows after the MVP scope opening; the per-row
+// update loop crosses 60s under the pooler. Keep at 300s so the
+// one-shot always completes in one call.
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
