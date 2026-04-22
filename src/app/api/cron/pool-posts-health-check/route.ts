@@ -1,14 +1,9 @@
-// Every 6h: re-verify each TestAccountMedia row with status='active'
-// is still reachable. Drops posts that 404 (deleted) and marks posts
-// 'stale' when their owner account has been invalidated.
+// Every 6h: re-verify each TestPost row with status='available' is
+// still reachable. Flips 404 rows to invalid('deleted') and also
+// sweeps posts whose parent account is now invalid into invalid
+// ('parent_invalid') in bulk.
 //
-// When an engagement_test account is left with zero active posts,
-// flip the parent account to invalid(no_active_posts). The testbot's
-// pickAndAssignAccount won't pick status=invalid rows.
-//
-// Same direct-run pattern as pool-health-check: maxDuration 300s,
-// budget 280s, concurrency 8, stopRequested polling for the UI kill
-// switch.
+// Direct-run pattern: maxDuration 300s, budget 280s, concurrency 8.
 
 import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
@@ -34,8 +29,7 @@ type RunStats = {
   checkedAccounts: number;
   checkedPosts: number;
   postsDeleted: number;
-  postsStale: number;
-  accountsInvalidated: number;
+  postsCascaded: number;
   errors: string[];
 };
 
@@ -52,25 +46,39 @@ export async function POST(req: Request) {
   const startedAt = new Date();
   const deadline = Date.now() + BUDGET_MS;
 
-  // Group active post rows by account so we can do one /userposts
-  // call per account instead of one per post. Freshness window: rows
-  // whose lastCheckedAt is older than the start of this job (no
-  // duplicate checks — same pattern we use in the daily account
-  // health check).
+  // Pre-sweep: any available post whose parent account is no longer
+  // usable gets flipped to invalid(parent_invalid) in one statement —
+  // far cheaper than re-fetching each provider side.
+  const cascaded = await prisma.testPost.updateMany({
+    where: {
+      status: "available",
+      testAccount: {
+        status: { notIn: ["available", "assigned"] },
+      },
+    },
+    data: {
+      status: "invalid",
+      invalidReason: "parent_invalid",
+      invalidatedAt: startedAt,
+      active: false,
+    },
+  });
+
+  // Group remaining available posts by parent account so we do 1
+  // provider call per account (each /userposts returns up to 20) and
+  // compare the live mediaId set against our stored rows.
   const accounts = await prisma.testAccount.findMany({
     where: {
       accountType: "engagement_test",
-      media: {
+      status: { in: ["available", "assigned"] },
+      posts: {
         some: {
-          status: "active",
+          status: "available",
           lastCheckedAt: { lt: startedAt },
         },
       },
     },
-    select: { id: true, platform: true, userId: true, username: true, status: true },
-    orderBy: {
-      media: { _count: "desc" }, // prioritize accounts with most active posts
-    } as unknown as { id: "asc" },
+    select: { id: true, platform: true, userId: true, username: true },
     take: 1000,
   });
 
@@ -80,17 +88,14 @@ export async function POST(req: Request) {
     checkedAccounts: 0,
     checkedPosts: 0,
     postsDeleted: 0,
-    postsStale: 0,
-    accountsInvalidated: 0,
+    postsCascaded: cascaded.count,
     errors: [],
   };
 
   for (let i = 0; i < accounts.length; i += CONCURRENCY) {
     if (Date.now() > deadline) break;
     const batch = accounts.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map((a) => checkOneAccount(a, startedAt, stats))
-    );
+    await Promise.all(batch.map((a) => checkOneAccount(a, startedAt, stats)));
   }
 
   stats.finishedAt = new Date().toISOString();
@@ -103,28 +108,11 @@ async function checkOneAccount(
     platform: string;
     userId: string;
     username: string;
-    status: string;
   },
   startedAt: Date,
   stats: RunStats
 ): Promise<void> {
-  // If the parent account is already invalid/consumed/archived, mark
-  // its posts 'stale' in bulk without any provider call.
-  if (account.status !== "available" && account.status !== "assigned") {
-    const res = await prisma.testAccountMedia.updateMany({
-      where: {
-        testAccountId: account.id,
-        status: "active",
-      },
-      data: { status: "stale", lastCheckedAt: new Date() },
-    });
-    stats.postsStale += res.count;
-    stats.checkedAccounts++;
-    return;
-  }
-
-  // Fetch fresh post list from the provider. We compare against the
-  // stored mediaIds to decide which rows are still live.
+  // Fetch fresh post list from the provider.
   let livePostIds = new Set<string>();
   try {
     if (account.platform === "instagram") {
@@ -141,10 +129,10 @@ async function checkOneAccount(
     return;
   }
 
-  const existing = await prisma.testAccountMedia.findMany({
+  const existing = await prisma.testPost.findMany({
     where: {
       testAccountId: account.id,
-      status: "active",
+      status: "available",
       lastCheckedAt: { lt: startedAt },
     },
     select: { id: true, mediaId: true },
@@ -153,42 +141,30 @@ async function checkOneAccount(
   for (const row of existing) {
     stats.checkedPosts++;
     if (!livePostIds.has(row.mediaId)) {
-      await prisma.testAccountMedia.update({
+      await prisma.testPost.update({
         where: { id: row.id },
-        data: { status: "deleted", lastCheckedAt: new Date() },
+        data: {
+          status: "invalid",
+          invalidReason: "deleted",
+          invalidatedAt: new Date(),
+          active: false,
+          lastCheckedAt: new Date(),
+        },
       });
       stats.postsDeleted++;
     } else {
-      await prisma.testAccountMedia.update({
+      await prisma.testPost.update({
         where: { id: row.id },
         data: { lastCheckedAt: new Date() },
       });
     }
   }
 
-  // If zero posts remain active, the engagement account is unusable —
-  // flip the parent to invalid so the testbot stops picking it.
-  const remaining = await prisma.testAccountMedia.count({
-    where: { testAccountId: account.id, status: "active" },
-  });
-  if (remaining === 0) {
-    await prisma.testAccount.update({
-      where: { id: account.id },
-      data: {
-        status: "invalid",
-        invalidReason: "no_active_posts",
-        invalidatedAt: new Date(),
-        active: false,
-      },
-    });
-    stats.accountsInvalidated++;
-  }
-
   stats.checkedAccounts++;
 }
 
 export const GET = POST;
-// Silences the unused helper import (used at file top for URL
-// building clarity — keeps the grep hits alongside the fetcher).
+// Silences the unused helper imports (URL builders documented here
+// for future extensions — same pattern as the scraper).
 void instagramPostUrl;
 void tiktokVideoUrl;

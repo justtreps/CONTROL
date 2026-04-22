@@ -3,12 +3,13 @@ import { placeOrder } from "@/lib/bulkmedya";
 import { fetchFollowerSnapshot, type Platform } from "@/lib/rapidapi";
 import {
   pickAndAssignAccount,
-  pickRandomActivePost,
+  pickAndAssignPost,
   invalidateAccount,
+  releasePost,
 } from "@/lib/pool/assign";
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
-import type { Service, TestAccount } from "@prisma/client";
+import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
 const SERVICE_COOLDOWN_HOURS = 24;
@@ -194,6 +195,12 @@ export async function runTestBot(
 // Single attempt at placing a test order for `service`. Returns an
 // AttemptOutcome that the caller uses to decide whether to retry
 // (private-account case) or escalate.
+//
+// Two routing modes:
+//   • Follower services → pick + assign a TestAccount (profile URL)
+//   • Engagement services → pick + assign a TestPost (post URL) and
+//     keep a parallel reference to its parent TestAccount for the
+//     oracle re-check + TestOrder.testAccountId lineage.
 async function attemptPlaceOrder({
   service,
   simulated,
@@ -202,91 +209,64 @@ async function attemptPlaceOrder({
   simulated: boolean;
 }): Promise<AttemptOutcome> {
   let assignedAccountId: number | null = null;
+  let assignedPostId: number | null = null;
   let poolPick: TestAccount | null = null;
+  let postPick: TestPost | null = null;
 
   try {
-    // ─── Resolve account ────────────────────────────────────────────
-    let account: TestAccount | null = null;
-
-    // Route by service classification (falls back to "any account"
-    // when the service hasn't been classified yet — backward-compat
-    // with the old pre-classification rows).
     const serviceRouting = service as Service & {
       poolType?: string;
       targetCountry?: string | null;
     };
-    const routingType =
-      serviceRouting.poolType === "follower_test" ||
-      serviceRouting.poolType === "engagement_test"
-        ? serviceRouting.poolType
-        : undefined;
+    const isEngagement = serviceRouting.poolType === "engagement_test";
 
-    // Country gating intentionally not passed here — assign.ts falls
-    // back to its own default ('medium'). The real country routing
-    // happens at MyBoost→CONTROL dispatch time, not inside the
-    // testbot; internal quality tests just use whatever account the
-    // pool offers.
-    poolPick = await pickAndAssignAccount({
-      platform: service.platform,
-      testOrderId: -1,
-      accountType: routingType,
-      targetCountry: serviceRouting.targetCountry ?? null,
-    });
-
-    if (poolPick) {
-      account = poolPick;
-      assignedAccountId = poolPick.id;
-    } else {
-      account = await pickLegacyAccountForService(service);
-    }
-
-    if (!account) {
-      return { kind: "no_account", reason: "no_available_account" };
-    }
-
-    // If the service targets engagement_test, pick a random active
-    // post for this account so we can send BulkMedya to a post URL
-    // (not the profile). Follower_test still uses the profile URL.
+    // ─── Resolve account (follower) OR post (engagement) ────────────
+    let account: TestAccount | null = null;
     let postUrlOverride: string | null = null;
-    if (serviceRouting.poolType === "engagement_test") {
-      const post = await pickRandomActivePost(account.id);
-      if (!post) {
-        // No active post → release the account and skip this service
-        // (engagement_test account with zero posts shouldn't happen
-        // once the engagement scraper path is live; safety net).
-        if (poolPick) {
-          await prisma.testAccount.update({
-            where: { id: poolPick.id },
-            data: {
-              status: "available",
-              assignedAt: null,
-              assignedTestOrderId: null,
-              active: true,
-            },
-          });
-        }
-        return {
-          kind: "skip",
-          reason: `engagement_account_has_no_active_posts_${account.id}`,
-        };
+
+    if (isEngagement) {
+      const pick = await pickAndAssignPost({
+        platform: service.platform,
+        testOrderId: -1,
+        targetCountry: serviceRouting.targetCountry ?? null,
+      });
+      if (!pick) {
+        return { kind: "no_account", reason: "no_available_post" };
       }
-      postUrlOverride = post.mediaUrl;
+      postPick = pick.post;
+      assignedPostId = pick.post.id;
+      account = pick.account;
+      postUrlOverride = pick.post.mediaUrl;
+    } else {
+      // Follower or unclassified service: pick an account from the
+      // follower pool (accountType='follower_test' forces the filter
+      // away from engagement parent rows that are purely metadata).
+      const routingType: "follower_test" | undefined =
+        serviceRouting.poolType === "follower_test" ? "follower_test" : "follower_test";
+
+      poolPick = await pickAndAssignAccount({
+        platform: service.platform,
+        testOrderId: -1,
+        accountType: routingType,
+        targetCountry: serviceRouting.targetCountry ?? null,
+      });
+      if (poolPick) {
+        account = poolPick;
+        assignedAccountId = poolPick.id;
+      } else {
+        account = await pickLegacyAccountForService(service);
+      }
+      if (!account) {
+        return { kind: "no_account", reason: "no_available_account" };
+      }
     }
 
-    // ─── Baseline-at-placement ──────────────────────────────────────
-    // Re-read the account via the oracle by stable user_id. Gives us:
-    //  1. The CURRENT username (survives renames)
-    //  2. A fresh follower_count used as the TestOrder baseline
-    //  3. A chance to abort cleanly if the account is now a ghost /
-    //     became private / drifted past invalidate thresholds
-    const oracle = await fetchOracleFor(service.platform, account.userId);
-
-    if (!oracle.ok) {
-      if (oracle.reason === "ghost" && poolPick) {
-        await invalidateAccount(poolPick.id, "deleted");
+    // Helper — release the held pool entity back to 'available' on
+    // transient failures (oracle error, BulkMedya rejection).
+    const releaseHeld = async (): Promise<void> => {
+      if (postPick) {
+        await releasePost(postPick.id);
       } else if (poolPick) {
-        // Transient oracle error — release the account so another
-        // run / another service can retry it later.
         await prisma.testAccount.update({
           where: { id: poolPick.id },
           data: {
@@ -297,6 +277,26 @@ async function attemptPlaceOrder({
           },
         });
       }
+    };
+
+    // ─── Baseline-at-placement ──────────────────────────────────────
+    // Re-read the parent account via the oracle by stable user_id.
+    // Gives us:
+    //  1. The CURRENT username (survives renames)
+    //  2. A fresh follower_count used as the TestOrder baseline
+    //  3. A chance to abort cleanly if the account is now a ghost /
+    //     became private / drifted past invalidate thresholds
+    const oracle = await fetchOracleFor(service.platform, account.userId);
+
+    if (!oracle.ok) {
+      if (oracle.reason === "ghost") {
+        // Parent deleted — invalidateAccount cascades the account's
+        // remaining posts to invalid(parent_invalid) so we don't
+        // re-serve them. Works for both follower and engagement paths.
+        await invalidateAccount(account.id, "deleted");
+      } else {
+        await releaseHeld();
+      }
       return {
         kind: "skip",
         reason:
@@ -306,41 +306,20 @@ async function attemptPlaceOrder({
       };
     }
 
-    // ─── NEW: isPrivate guard ───────────────────────────────────────
-    // Between scrape time and now, the account may have flipped
-    // private. BulkMedya can't deliver followers to a private IG
-    // account so placing an order would waste budget + generate a
-    // refund. Invalidate the row (it can never be a valid test
-    // account again while private) and tell the caller to retry the
-    // service with a different account.
+    // ─── isPrivate guard ────────────────────────────────────────────
+    // IG private flip: invalidate the parent account (cascades any
+    // remaining posts to invalid) and tell the caller to retry the
+    // service with a different pool entity.
     if (service.platform === "instagram" && oracle.isPrivate) {
-      if (poolPick) {
-        await prisma.testAccount.update({
-          where: { id: poolPick.id },
-          data: {
-            status: "invalid",
-            invalidReason: "became_private",
-            invalidatedAt: new Date(),
-            active: false,
-            assignedAt: null,
-            assignedTestOrderId: null,
-            lastFollowerCount: oracle.followerCount,
-            lastMediaCount: oracle.mediaCount,
-            lastFollowingCount: oracle.followingCount,
-          },
-        });
-      } else {
-        // Legacy account: flip invalid too.
-        await prisma.testAccount.update({
-          where: { id: account.id },
-          data: {
-            status: "invalid",
-            invalidReason: "became_private",
-            invalidatedAt: new Date(),
-            active: false,
-          },
-        });
-      }
+      await invalidateAccount(account.id, "became_private");
+      await prisma.testAccount.update({
+        where: { id: account.id },
+        data: {
+          lastFollowerCount: oracle.followerCount,
+          lastMediaCount: oracle.mediaCount,
+          lastFollowingCount: oracle.followingCount,
+        },
+      });
       return {
         kind: "retry_private",
         reason: `@${account.username} flipped private`,
@@ -371,9 +350,8 @@ async function attemptPlaceOrder({
       realismData: sample.realismData,
     };
 
-    // Route BulkMedya at the right URL: profile for follower_test,
-    // specific post URL for engagement_test (set above when the
-    // service is engagement-flavored).
+    // Route BulkMedya at the right URL: specific post URL for
+    // engagement tests, profile URL for follower tests.
     const bulkmedyaLink =
       postUrlOverride ?? targetUrlFor(service.platform, currentUsername);
     const order = simulated
@@ -385,19 +363,7 @@ async function attemptPlaceOrder({
         });
 
     if ("error" in order) {
-      // BulkMedya rejected the order — release the pool account so
-      // it's not burned on an upstream error.
-      if (poolPick) {
-        await prisma.testAccount.update({
-          where: { id: poolPick.id },
-          data: {
-            status: "available",
-            assignedAt: null,
-            assignedTestOrderId: null,
-            active: true,
-          },
-        });
-      }
+      await releaseHeld();
       return { kind: "skip", reason: `bulkmedya: ${order.error}` };
     }
 
@@ -411,7 +377,12 @@ async function attemptPlaceOrder({
       },
     });
 
-    if (poolPick) {
+    if (postPick) {
+      await prisma.testPost.update({
+        where: { id: postPick.id },
+        data: { assignedTestOrderId: testOrder.id },
+      });
+    } else if (poolPick) {
       await prisma.testAccount.update({
         where: { id: poolPick.id },
         data: { assignedTestOrderId: testOrder.id },
@@ -428,7 +399,7 @@ async function attemptPlaceOrder({
       },
     });
 
-    if (!poolPick) {
+    if (!poolPick && !postPick) {
       await prisma.testAccount.update({
         where: { id: account.id },
         data: { lastTestedAt: new Date() },
@@ -437,9 +408,11 @@ async function attemptPlaceOrder({
 
     return { kind: "placed" };
   } catch (e) {
-    // Unexpected error — rollback any pool assignment so the account
+    // Unexpected error — rollback any assignment so the pool entity
     // isn't stuck. Skip this service; don't retry on unknown errors.
-    if (assignedAccountId) {
+    if (assignedPostId) {
+      await releasePost(assignedPostId).catch(() => null);
+    } else if (assignedAccountId) {
       await prisma.testAccount
         .update({
           where: { id: assignedAccountId },

@@ -105,7 +105,7 @@ model TestAccount {
   notes                  String?
 
   testOrders             TestOrder[]
-  media                  TestAccountMedia[]
+  posts                  TestPost[]
 
   @@unique([platform, username])
   @@index([platform, active])
@@ -122,27 +122,51 @@ model TestAccount {
   @@index([platform, status, accountType, detectedCountry])
 }
 
-// Posts / reels / videos attached to engagement_test accounts. The
-// testbot points BulkMedya at a random row's mediaUrl instead of the
-// profile URL so likes / views / shares land on a real piece of
-// content, not a bare profile.
-model TestAccountMedia {
-  id              Int       @id @default(autoincrement())
-  testAccount     TestAccount @relation(fields: [testAccountId], references: [id], onDelete: Cascade)
-  testAccountId   Int
-  mediaId         String    // platform-native id (IG pk, TT aweme_id)
-  mediaUrl        String    // the permalink we hand to BulkMedya
-  mediaType       String    // 'post' | 'reel' | 'video'
-  postedAt        DateTime?
-  lastCheckedAt   DateTime  @default(now())
-  naturalLikesCount Int     @default(0)
-  // 'active' — currently usable for an engagement test
-  // 'deleted' — provider returned 404 on recheck
-  // 'stale'   — owner account went private / deleted
-  status          String    @default("active")
+// A single post / reel / video that lives in the engagement pool.
+//
+// The engagement pool is a pool of POSTS — not accounts. When a likes /
+// views / shares / saves service is tested we pick one TestPost at a
+// time (not its parent account), hand its URL to BulkMedya, and flip
+// it available → assigned → consumed. A single parent TestAccount can
+// contribute N posts if they all pass the freshness + natural-likes
+// filters, so one scraped account can fuel several tests instead of
+// exactly one.
+//
+// The parent TestAccount FK is kept for traceability (detectedCountry
+// routing, health-check cascades) but does NOT carry the engagement
+// lifecycle anymore — that lives on this row.
+model TestPost {
+  id                Int       @id @default(autoincrement())
+  testAccount       TestAccount @relation(fields: [testAccountId], references: [id], onDelete: Cascade)
+  testAccountId     Int
+  platform          String    // denormalized from parent for fast filtering
+  mediaId           String    // platform-native id (IG pk, TT aweme_id)
+  mediaUrl          String    // permalink we hand to BulkMedya
+  mediaType         String    // 'post' | 'reel' | 'video'
+  postedAt          DateTime?
+  naturalLikesCount Int       @default(0)
+
+  // Lifecycle — mirrors TestAccount:
+  //   available → assigned → consumed   (normal happy path)
+  //   available → invalid                 (deleted / parent banned / etc.)
+  status                 String    @default("available")
+  active                 Boolean   @default(true)
+  assignedTestOrderId    Int?
+  assignedAt             DateTime?
+  consumedAt             DateTime?
+  // 'deleted'         — provider returned 404 on health check
+  // 'parent_invalid'  — owner TestAccount became invalid
+  // 'manual'          — operator flipped it
+  invalidReason          String?
+  invalidatedAt          DateTime?
+
+  firstSeenAt            DateTime  @default(now())
+  lastCheckedAt          DateTime  @default(now())
 
   @@unique([testAccountId, mediaId])
-  @@index([testAccountId, status])
+  @@index([platform, status])
+  @@index([status, assignedAt])
+  @@index([platform, status, firstSeenAt])
   @@index([status, lastCheckedAt])
 }
 

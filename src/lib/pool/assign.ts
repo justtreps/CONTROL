@@ -1,12 +1,12 @@
-// Atomic pick-and-assign + consume helpers for the test account pool.
+// Atomic pick-and-assign + consume helpers for the test account / post pool.
 //
-// Rule: one account = one test for its entire lifetime. pickAndAssignAccount
-// runs inside a Prisma $transaction so two concurrent callers never flip
-// the same row from 'available' to 'assigned'. The test-bot also keeps its
-// old ad-hoc accounts as a fallback — see lib/testbot.ts.
+// Follower pool: one account = one test for its entire lifetime.
+// Engagement pool: one POST = one test (a single parent account can
+// contribute N posts). Both flows sit inside a Prisma $transaction so
+// concurrent callers can't flip the same row 'available' → 'assigned' twice.
 
 import { prisma } from "@/lib/prisma";
-import type { TestAccount } from "@prisma/client";
+import type { TestAccount, TestPost } from "@prisma/client";
 
 export async function pickAndAssignAccount({
   platform,
@@ -77,19 +77,71 @@ export async function pickAndAssignAccount({
   });
 }
 
-// For engagement_test accounts: pick one of their active media rows
-// at random so the testbot can point BulkMedya at a specific post
-// URL. Returns null if the account has no active posts (testbot
-// should treat the assignment as failed and release the account).
-export async function pickRandomActivePost(
-  testAccountId: number
-): Promise<{ id: number; mediaUrl: string; mediaId: string } | null> {
-  const rows = await prisma.testAccountMedia.findMany({
-    where: { testAccountId, status: "active" },
-    select: { id: true, mediaUrl: true, mediaId: true },
+// Engagement pool pick-and-assign. Atomically flips ONE TestPost
+// available → assigned and returns both the post (carries mediaUrl)
+// and its parent TestAccount (needed by the testbot for oracle
+// calls, username drift check, etc.). The parent's own status is
+// untouched — a single account can have multiple assigned/consumed
+// posts over time.
+export async function pickAndAssignPost({
+  platform,
+  testOrderId,
+  targetCountry,
+  minCountryConfidence,
+}: {
+  platform: string;
+  testOrderId: number;
+  targetCountry?: string | null;
+  minCountryConfidence?: "high" | "medium" | "low" | "unknown";
+}): Promise<{ post: TestPost; account: TestAccount } | null> {
+  const minConf = minCountryConfidence ?? "medium";
+  const confOrder = ["unknown", "low", "medium", "high"];
+  const minConfIdx = confOrder.indexOf(minConf);
+  const acceptableConfs = confOrder.slice(minConfIdx);
+
+  return prisma.$transaction(async (tx) => {
+    const baseWhere = {
+      platform,
+      status: "available",
+    };
+
+    // 1st try: post whose parent account detectedCountry matches with
+    // acceptable confidence.
+    let candidate: (TestPost & { testAccount: TestAccount }) | null = null;
+    if (targetCountry) {
+      candidate = await tx.testPost.findFirst({
+        where: {
+          ...baseWhere,
+          testAccount: {
+            detectedCountry: targetCountry,
+            countryConfidence: { in: acceptableConfs },
+          },
+        },
+        include: { testAccount: true },
+        orderBy: { firstSeenAt: "asc" },
+      });
+    }
+    // 2nd try: no country filter.
+    if (!candidate) {
+      candidate = await tx.testPost.findFirst({
+        where: baseWhere,
+        include: { testAccount: true },
+        orderBy: { firstSeenAt: "asc" },
+      });
+    }
+    if (!candidate) return null;
+
+    const updated = await tx.testPost.update({
+      where: { id: candidate.id },
+      data: {
+        status: "assigned",
+        assignedAt: new Date(),
+        assignedTestOrderId: testOrderId,
+        active: false,
+      },
+    });
+    return { post: updated, account: candidate.testAccount };
   });
-  if (rows.length === 0) return null;
-  return rows[Math.floor(Math.random() * rows.length)];
 }
 
 export async function consumeAccount(testAccountId: number): Promise<void> {
@@ -106,13 +158,68 @@ export async function invalidateAccount(
   testAccountId: number,
   reason: string
 ): Promise<void> {
-  await prisma.testAccount.update({
-    where: { id: testAccountId },
+  // Cascade: any post that was still 'available' or 'assigned' on a
+  // now-invalid parent account can never be a valid engagement test
+  // again (the account is banned / private / deleted). Flip them to
+  // invalid(parent_invalid) so the engagement pool doesn't re-serve
+  // ghost posts.
+  await prisma.$transaction([
+    prisma.testAccount.update({
+      where: { id: testAccountId },
+      data: {
+        status: "invalid",
+        invalidReason: reason,
+        invalidatedAt: new Date(),
+        active: false,
+      },
+    }),
+    prisma.testPost.updateMany({
+      where: {
+        testAccountId,
+        status: { in: ["available", "assigned"] },
+      },
+      data: {
+        status: "invalid",
+        invalidReason: "parent_invalid",
+        invalidatedAt: new Date(),
+        active: false,
+      },
+    }),
+  ]);
+}
+
+export async function consumePost(testPostId: number): Promise<void> {
+  await prisma.testPost.update({
+    where: { id: testPostId },
+    data: { status: "consumed", consumedAt: new Date() },
+  });
+}
+
+export async function invalidatePost(
+  testPostId: number,
+  reason: string
+): Promise<void> {
+  await prisma.testPost.update({
+    where: { id: testPostId },
     data: {
       status: "invalid",
       invalidReason: reason,
       invalidatedAt: new Date(),
       active: false,
+    },
+  });
+}
+
+// Put a post back in the pool after a transient placement failure
+// (oracle error, BulkMedya rejection, etc.) so another run can retry.
+export async function releasePost(testPostId: number): Promise<void> {
+  await prisma.testPost.update({
+    where: { id: testPostId },
+    data: {
+      status: "available",
+      assignedAt: null,
+      assignedTestOrderId: null,
+      active: true,
     },
   });
 }
@@ -130,9 +237,12 @@ export async function invalidateAccount(
 export async function consumeCompletedAssignments(): Promise<{
   byMeasurement: number;
   byTimeout: number;
+  postsByMeasurement: number;
+  postsByTimeout: number;
 }> {
   const stuckDeadline = new Date(Date.now() - 48 * 3600 * 1000);
 
+  // ── Follower pool: assigned TestAccount rows ──
   const assigned = await prisma.testAccount.findMany({
     where: {
       status: "assigned",
@@ -168,5 +278,39 @@ export async function consumeCompletedAssignments(): Promise<{
     }
   }
 
-  return { byMeasurement, byTimeout };
+  // ── Engagement pool: assigned TestPost rows (same semantics) ──
+  const assignedPosts = await prisma.testPost.findMany({
+    where: {
+      status: "assigned",
+      assignedTestOrderId: { not: null },
+    },
+    select: {
+      id: true,
+      assignedTestOrderId: true,
+      assignedAt: true,
+    },
+  });
+
+  let postsByMeasurement = 0;
+  let postsByTimeout = 0;
+
+  for (const p of assignedPosts) {
+    const postBaselineCount = await prisma.measurement.count({
+      where: {
+        testOrderId: p.assignedTestOrderId!,
+        checkpoint: { not: "T+0" },
+      },
+    });
+    if (postBaselineCount > 0) {
+      await consumePost(p.id);
+      postsByMeasurement++;
+      continue;
+    }
+    if (p.assignedAt && p.assignedAt < stuckDeadline) {
+      await consumePost(p.id);
+      postsByTimeout++;
+    }
+  }
+
+  return { byMeasurement, byTimeout, postsByMeasurement, postsByTimeout };
 }

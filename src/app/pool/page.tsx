@@ -7,6 +7,7 @@ import { PoolHistoryChart } from "./PoolHistoryChart";
 import { PoolUnifiedActions } from "./PoolUnifiedActions";
 import { PoolActiveJobs } from "./PoolActiveJobs";
 import { PoolAccountsList } from "./PoolAccountsList";
+import { PoolPostsList } from "./PoolPostsList";
 import { PoolAdvancedConfig } from "./PoolAdvancedConfig";
 import { SystemKillSwitch } from "./SystemKillSwitch";
 import { PoolToastProvider } from "./PoolToast";
@@ -27,9 +28,7 @@ export default async function PoolPage({
 
   const [stats, history, config, toggles] = await Promise.all([
     getPoolStats(),
-    getPoolHistory30d(
-      activePool === "follower" ? "follower_test" : "engagement_test"
-    ),
+    getPoolHistory30d(activePool),
     getPoolConfig(),
     getSystemToggles(),
   ]);
@@ -117,13 +116,21 @@ export default async function PoolPage({
             job regardless of pool, labelled with the pool they ran on. */}
         <PoolActiveJobs />
 
-        {/* === ZONE 3 — COMPTES (pre-filtered by activePool) === */}
+        {/* === ZONE 3 — COMPTES OU POSTS (selon l'univers actif) === */}
         <ZoneHeader
           step="ZONE 3"
-          title="COMPTES"
-          hint="recherche, filtre, inspection compte par compte"
+          title={activePool === "follower" ? "COMPTES" : "POSTS"}
+          hint={
+            activePool === "follower"
+              ? "recherche, filtre, inspection compte par compte"
+              : "recherche, filtre, inspection post par post"
+          }
         />
-        <PoolAccountsList activePool={activePool} />
+        {activePool === "follower" ? (
+          <PoolAccountsList activePool={activePool} />
+        ) : (
+          <PoolPostsList />
+        )}
 
         {/* === ZONE 4 — CONFIGURATION AVANCÉE === */}
         <ZoneHeader

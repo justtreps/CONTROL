@@ -663,7 +663,12 @@ async function validateAndUpsertIgCandidate({
     stats.candidatesRejected.private++;
     return;
   }
-  if (oracle.followerCount > cfg.maxFollowerCount) {
+  // Engagement scrapes don't care about the parent account's follower
+  // count — what matters is each post's natural-likes baseline +
+  // freshness. A 100k-follower account with a stale low-likes post
+  // still qualifies; its posts get evaluated individually below.
+  const isEngagementScrape = stats.poolType === "engagement";
+  if (!isEngagementScrape && oracle.followerCount > cfg.maxFollowerCount) {
     stats.candidatesRejected.too_many_followers++;
     return;
   }
@@ -739,8 +744,11 @@ async function validateAndUpsertIgCandidate({
     }
   }
 
-  // Insert the account row + any engagement media rows atomically so
-  // we never end up with a half-populated engagement account.
+  // Insert the parent account + its engagement posts atomically. Under
+  // the new model an account is purely a metadata carrier for the
+  // posts — the lifecycle (available/assigned/consumed/invalid) lives
+  // on TestPost. A single account can contribute N rows, so one scrape
+  // iteration may produce multiple pool entries.
   const res = await prisma.$transaction(async (tx) => {
     const account = await tx.testAccount.upsert({
       where: {
@@ -762,29 +770,40 @@ async function validateAndUpsertIgCandidate({
         scrapeSeedAccount: seed.username,
       },
     });
+    let insertedPosts = 0;
     if (
       accountType === "engagement_test" &&
       account.firstSeenAt.getTime() > Date.now() - 2000
     ) {
-      await tx.testAccountMedia.createMany({
+      const created = await tx.testPost.createMany({
         data: validPosts.map((p) => ({
           testAccountId: account.id,
+          platform: "instagram",
           mediaId: p.mediaId,
           mediaUrl: p.mediaUrl,
           mediaType: p.mediaType,
           postedAt: p.postedAt,
           naturalLikesCount: p.likeCount,
-          status: "active",
+          status: "available",
         })),
         skipDuplicates: true,
       });
+      insertedPosts = created.count;
     }
-    return account;
+    return { account, insertedPosts };
   });
 
-  if (res.firstSeenAt.getTime() > Date.now() - 2000) {
-    stats.addedA++;
-    stats.candidatesQualified++;
+  if (res.account.firstSeenAt.getTime() > Date.now() - 2000) {
+    // Count per pool entity: one follower account OR N engagement
+    // posts. Matches the job target (scrapes launched from the
+    // ENGAGEMENT switch ask for N posts, not accounts).
+    if (accountType === "engagement_test") {
+      stats.addedA += res.insertedPosts;
+      if (res.insertedPosts > 0) stats.candidatesQualified++;
+    } else {
+      stats.addedA++;
+      stats.candidatesQualified++;
+    }
     ctx.existingKeys.add(`instagram:user:${storedUsername.toLowerCase()}`);
     ctx.existingKeys.add(`instagram:uid:${oracle.userId}`);
   }
@@ -817,6 +836,9 @@ async function processTikTokSeed({
   stats.callsUsed++;
 
   const ttFollowerCap = cfg.maxFollowerCountTiktok;
+  // Engagement scrapes: skip follower-count gate (see IG branch
+  // reasoning — the post's natural likes is what matters).
+  const isEngagementScrape = stats.poolType === "engagement";
 
   // Phase 1 — pre-filter on /followers payload (already has follower_
   // count, following_count, aweme_count, so this catches most rejects
@@ -825,7 +847,7 @@ async function processTikTokSeed({
   for (const f of sample) {
     stats.candidatesFetched++;
 
-    if (f.follower_count > ttFollowerCap) {
+    if (!isEngagementScrape && f.follower_count > ttFollowerCap) {
       stats.candidatesRejected.too_many_followers++;
       continue;
     }
@@ -1001,29 +1023,37 @@ async function validateAndUpsertTtCandidate({
         scrapeSeedAccount: seed.username,
       },
     });
+    let insertedPosts = 0;
     if (
       accountType === "engagement_test" &&
       account.firstSeenAt.getTime() > Date.now() - 2000
     ) {
-      await tx.testAccountMedia.createMany({
+      const created = await tx.testPost.createMany({
         data: validPosts.map((p) => ({
           testAccountId: account.id,
+          platform: "tiktok",
           mediaId: p.mediaId,
           mediaUrl: p.mediaUrl,
           mediaType: p.mediaType,
           postedAt: p.postedAt,
           naturalLikesCount: p.likeCount,
-          status: "active",
+          status: "available",
         })),
         skipDuplicates: true,
       });
+      insertedPosts = created.count;
     }
-    return account;
+    return { account, insertedPosts };
   });
 
-  if (res.firstSeenAt.getTime() > Date.now() - 2000) {
-    stats.addedA++;
-    stats.candidatesQualified++;
+  if (res.account.firstSeenAt.getTime() > Date.now() - 2000) {
+    if (accountType === "engagement_test") {
+      stats.addedA += res.insertedPosts;
+      if (res.insertedPosts > 0) stats.candidatesQualified++;
+    } else {
+      stats.addedA++;
+      stats.candidatesQualified++;
+    }
     ctx.existingKeys.add(`tiktok:user:${storedUsername.toLowerCase()}`);
     ctx.existingKeys.add(`tiktok:uid:${oracle.userId}`);
   }
