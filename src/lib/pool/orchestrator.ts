@@ -54,12 +54,18 @@ export async function runOrchestratorTick(): Promise<OrchestratorResult> {
   if (!toggles.poolScrapeEnabled) disabledTypes.push("scrape");
   if (!toggles.poolHealthcheckEnabled) disabledTypes.push("health_check");
 
-  // health_check runs directly from its cron endpoint (300s budget,
-  // concurrency 8) since the 8s tranche here capped throughput at
-  // ~24 checks/min. We exclude jobType='health_check' unconditionally
-  // so an older 'running' health_check row left from the queue era
-  // doesn't get re-picked here.
-  const excluded = new Set<string>([...disabledTypes, "health_check"]);
+  // Both health_check AND scrape now run directly via their own
+  // cron endpoints (300s budget, resumable across ticks) after we
+  // measured the orchestrator's 8s per 60s budget capping throughput
+  // at 13% duty cycle. We exclude both jobType values here so the
+  // orchestrator doesn't double-process a row that the direct-run
+  // crons are already handling. Only 'cleanup' still flows through
+  // here (and it's cheap).
+  const excluded = new Set<string>([
+    ...disabledTypes,
+    "health_check",
+    "scrape",
+  ]);
 
   // Pick the oldest non-terminal job whose subsystem is still enabled.
   // 'running' rows also get picked up in case a previous tick died
