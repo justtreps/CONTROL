@@ -34,6 +34,9 @@ export type HealthStats = {
   lastProcessedId: number;
   batchSize: number;
   queuedRefills: string[]; // platforms that auto-refill fired for
+  // Universe scope — when set, only TestAccount rows of that pool
+  // get picked up. Legacy jobs (undefined) sweep both pools.
+  poolType?: "follower" | "engagement";
 };
 
 export function initHealthStats(
@@ -95,6 +98,15 @@ export async function runHealthCheckTranche({
         platform: { in: platforms },
         status: "available",
         lastCheckedAt: { lt: jobStart },
+        // When the job is universe-scoped, only sweep matching rows.
+        ...(stats.poolType
+          ? {
+              accountType:
+                stats.poolType === "follower"
+                  ? "follower_test"
+                  : "engagement_test",
+            }
+          : {}),
       },
       orderBy: { lastCheckedAt: "asc" }, // oldest check first
       take: CONCURRENCY * 4,

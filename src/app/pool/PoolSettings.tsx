@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
 import { Collapsible } from "./Collapsible";
+import type { ActivePool } from "./PoolUniverseSwitch";
 
 type Cfg = {
   autoRefillEnabled: boolean;
@@ -31,47 +32,55 @@ type Cfg = {
   engagementFreshnessMaxDays: number;
 };
 
-// "Paramètres techniques" — 4 collapsed accordions. Non-dev user
-// doesn't open these day-to-day, but everything they might need to
-// tweak is still reachable.
-export function PoolSettings({ initialConfig }: { initialConfig: Cfg }) {
+// "Paramètres techniques" — scoped to the active pool at the top.
+// Each universe gets the one config body that matters for its flow
+// (qualification rules for abonnés · engagement pool settings for
+// engagement). Quotas and the cron schedule are shared across both
+// pools so they stay below as always-shown sub-accordions.
+//
+// Auto-refill is deliberately NOT here — it's already the primary
+// card in Zone 2 so surfacing it twice just invites inconsistent
+// state.
+export function PoolSettings({
+  initialConfig,
+  activePool,
+}: {
+  initialConfig: Cfg;
+  activePool: ActivePool;
+}) {
   return (
     <div id="pool-settings" className="w-full scroll-mt-20">
       <div className="flex flex-col">
-        <Collapsible
-          label="AUTO-REFILL · SEUILS & CIBLES"
-          hint="quand déclencher un scrape automatique"
-          compact
-        >
-          <RefillBody initial={initialConfig} />
-        </Collapsible>
+        {activePool === "follower" ? (
+          <Collapsible
+            label="CRITÈRES DE QUALITÉ DES COMPTES"
+            hint="filtres au scrape + règles d'invalidation · pool abonnés"
+            compact
+          >
+            <QualificationBody initial={initialConfig} />
+          </Collapsible>
+        ) : (
+          <Collapsible
+            label="POOL ENGAGEMENT (LIKES / VUES / PARTAGES)"
+            hint="toggle + targets + critères posts · pool engagement"
+            compact
+          >
+            <EngagementBody initial={initialConfig} />
+          </Collapsible>
+        )}
         <Collapsible
           label="QUOTAS D'APPELS API"
-          hint="plafonds RapidAPI par job"
+          hint="plafonds RapidAPI par job · partagé"
           compact
         >
           <QuotasBody initial={initialConfig} />
         </Collapsible>
         <Collapsible
           label="VÉRIFICATION AUTOMATIQUE (CRON)"
-          hint="planning du health-check quotidien"
+          hint="planning du health-check quotidien · partagé"
           compact
         >
           <HealthCheckBody initial={initialConfig} />
-        </Collapsible>
-        <Collapsible
-          label="CRITÈRES DE QUALITÉ DES COMPTES"
-          hint="filtres au scrape + règles d'invalidation"
-          compact
-        >
-          <QualificationBody initial={initialConfig} />
-        </Collapsible>
-        <Collapsible
-          label="POOL ENGAGEMENT (LIKES / VUES / PARTAGES)"
-          hint="second pool — comptes avec posts récents"
-          compact
-        >
-          <EngagementBody initial={initialConfig} />
         </Collapsible>
       </div>
     </div>
@@ -178,72 +187,6 @@ function usePatchConfig() {
     }
   }
   return { patch, saving };
-}
-
-// ── Accordion 01 — REFILL ────────────────────────────────────────────
-function RefillBody({ initial }: { initial: Cfg }) {
-  const { patch, saving } = usePatchConfig();
-  const [autoRefill, setAutoRefill] = useState(initial.autoRefillEnabled);
-  const [thrIg, setThrIg] = useState(initial.refillThresholdInstagram);
-  const [tgtIg, setTgtIg] = useState(initial.refillTargetInstagram);
-  const [thrTt, setThrTt] = useState(initial.refillThresholdTiktok);
-  const [tgtTt, setTgtTt] = useState(initial.refillTargetTiktok);
-
-  return (
-    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
-      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
-        Quand le nombre de comptes DISPO (par plateforme) passe sous le seuil,
-        un scrape automatique se lance jusqu&apos;&agrave; atteindre la cible.
-      </p>
-      <ToggleRow
-        label="AUTO-REFILL"
-        value={autoRefill}
-        onChange={setAutoRefill}
-      />
-      <div className="grid grid-cols-2 gap-3">
-        <LabelInput
-          label="SEUIL IG"
-          help="Déclenche un scrape si DISPO < seuil."
-          type="number"
-          value={thrIg}
-          onChange={(e) => setThrIg(Number(e.target.value) || 0)}
-        />
-        <LabelInput
-          label="CIBLE IG"
-          help="Stock DISPO à atteindre."
-          type="number"
-          value={tgtIg}
-          onChange={(e) => setTgtIg(Number(e.target.value) || 0)}
-        />
-        <LabelInput
-          label="SEUIL TT"
-          help="Déclenche un scrape si DISPO < seuil."
-          type="number"
-          value={thrTt}
-          onChange={(e) => setThrTt(Number(e.target.value) || 0)}
-        />
-        <LabelInput
-          label="CIBLE TT"
-          help="Stock DISPO à atteindre."
-          type="number"
-          value={tgtTt}
-          onChange={(e) => setTgtTt(Number(e.target.value) || 0)}
-        />
-      </div>
-      <SaveButton
-        saving={saving}
-        onClick={() =>
-          patch({
-            autoRefillEnabled: autoRefill,
-            refillThresholdInstagram: thrIg,
-            refillTargetInstagram: tgtIg,
-            refillThresholdTiktok: thrTt,
-            refillTargetTiktok: tgtTt,
-          })
-        }
-      />
-    </div>
-  );
 }
 
 // ── Accordion 02 — QUOTAS ───────────────────────────────────────────

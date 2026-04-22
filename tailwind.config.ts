@@ -18,6 +18,12 @@ const config: Config = {
         "text-muted": "var(--text-muted)",
         "border-grid": "var(--border-grid)",
       },
+      keyframes: {
+        fadeIn: {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+      },
     },
   },
   plugins: [],

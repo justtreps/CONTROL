@@ -12,6 +12,7 @@ type ScrapeJobStats = {
   target: number;
   platform: "instagram" | "tiktok" | "both";
   errors: string[];
+  poolType?: "follower" | "engagement";
 };
 
 type HealthJobStats = {
@@ -21,6 +22,7 @@ type HealthJobStats = {
   batchSize: number;
   callsUsed: number;
   errors: string[];
+  poolType?: "follower" | "engagement";
 };
 
 type Job = {
@@ -132,10 +134,15 @@ function JobRow({
   onStop: () => void;
   divider: boolean;
 }) {
+  const poolType = (job.stats as { poolType?: "follower" | "engagement" } | null)
+    ?.poolType;
+  const poolSuffix = poolType
+    ? ` · ${poolType === "follower" ? "ABONNÉS" : "ENGAGEMENT"}`
+    : "";
   const label =
     `${job.jobType.toUpperCase()}${
       job.platform ? `_${job.platform.toUpperCase()}` : ""
-    }`;
+    }${poolSuffix}`;
   const elapsed = Math.max(
     0,
     Math.floor((Date.now() - new Date(job.startedAt).getTime()) / 60_000)

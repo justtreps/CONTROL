@@ -4,14 +4,19 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLoading } from "@/components/LoadingContext";
 import { usePoolToast } from "./PoolToast";
+import type { ActivePool } from "./PoolUniverseSwitch";
 
 // Zone 2 — unified action card. Replaces the old 3-card PoolControls.
 // Combines:
 //   • Auto-refill toggle + threshold summary
 //   • Primary SCRAPE action (platform + count + big red button)
 //   • Secondary HEALTH CHECK action
-// Everything a non-dev user needs to do, in one visible block.
+//
+// Scoped to `activePool`: the scrape + health-check buttons pass
+// their universe as poolType so the backend filters accordingly
+// (follower-only or engagement-only candidates / accounts).
 type Props = {
+  activePool: ActivePool;
   initialConfig: {
     autoRefillEnabled: boolean;
     refillThresholdInstagram: number;
@@ -21,7 +26,9 @@ type Props = {
   };
 };
 
-export function PoolUnifiedActions({ initialConfig }: Props) {
+export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
+  const poolApiValue = activePool === "follower" ? "follower" : "engagement";
+  const poolLabel = activePool === "follower" ? "ABONNÉS" : "ENGAGEMENT";
   const router = useRouter();
   const { show, hide } = useLoading();
   const toast = usePoolToast();
@@ -74,11 +81,15 @@ export function PoolUnifiedActions({ initialConfig }: Props) {
       const res = await fetch("/api/pool/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: scrapePlatform, count: scrapeCount }),
+        body: JSON.stringify({
+          platform: scrapePlatform,
+          count: scrapeCount,
+          poolType: poolApiValue,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        toast.push("ok", `SCRAPE #${data.jobId} LANCÉ`);
+        toast.push("ok", `SCRAPE #${data.jobId} · ${poolLabel} LANCÉ`);
         router.refresh();
       } else {
         toast.push("err", data.error ?? "ÉCHEC");
@@ -101,11 +112,14 @@ export function PoolUnifiedActions({ initialConfig }: Props) {
       const res = await fetch("/api/pool/health-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: healthPlatform }),
+        body: JSON.stringify({
+          platform: healthPlatform,
+          poolType: poolApiValue,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        toast.push("ok", `VÉRIFICATION #${data.jobId} LANCÉE`);
+        toast.push("ok", `VÉRIFICATION #${data.jobId} · ${poolLabel} LANCÉE`);
         router.refresh();
       } else {
         toast.push("err", data.error ?? "ÉCHEC");
@@ -122,8 +136,11 @@ export function PoolUnifiedActions({ initialConfig }: Props) {
 
   return (
     <section className="w-full">
-      <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D]">
-        [ ACTIONS ]
+      <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D] flex items-center gap-3 flex-wrap">
+        <span>[ ACTIONS · {poolLabel} ]</span>
+        <span className="normal-case text-[#666666]/70 text-[10px]">
+          scrape et vérification ciblent uniquement ce pool
+        </span>
       </div>
 
       {/* Auto-refill strip */}
@@ -191,8 +208,9 @@ export function PoolUnifiedActions({ initialConfig }: Props) {
             Scraper.
           </h3>
           <p className="font-mono text-[11px] text-[#666666] tracking-wide normal-case mb-5 leading-relaxed">
-            Lance un job qui va remplir la r&eacute;serve avec de nouveaux comptes test
-            vierges.
+            Lance un job qui va remplir la r&eacute;serve{" "}
+            <span className="text-white">{poolLabel.toLowerCase()}</span> avec
+            de nouveaux comptes.
           </p>
           <div className="flex flex-col gap-3">
             <LabelSelect
@@ -243,8 +261,10 @@ export function PoolUnifiedActions({ initialConfig }: Props) {
             Contrôle.
           </h3>
           <p className="font-mono text-[11px] text-[#666666] tracking-wide normal-case mb-5 leading-relaxed">
-            V&eacute;rifie que chaque compte DISPO est toujours vierge. Invalide
-            ceux qui ont &eacute;t&eacute; supprim&eacute;s / bannis / sont devenus actifs.
+            V&eacute;rifie que chaque compte DISPO du pool{" "}
+            <span className="text-white">{poolLabel.toLowerCase()}</span> est
+            toujours vierge. Invalide ceux qui ont &eacute;t&eacute;
+            supprim&eacute;s / bannis / devenus actifs.
           </p>
           <div className="flex flex-col gap-3">
             <LabelSelect

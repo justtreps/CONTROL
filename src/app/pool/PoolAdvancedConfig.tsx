@@ -8,47 +8,58 @@ import { PoolPrefixesCard } from "./PoolPrefixesCard";
 import { PoolSettings } from "./PoolSettings";
 import { PoolJobsHistory } from "./PoolJobsHistory";
 import { usePoolToast } from "./PoolToast";
+import type { ActivePool } from "./PoolUniverseSwitch";
 
 type Cfg = React.ComponentProps<typeof PoolSettings>["initialConfig"];
 
 // Zone 4 — advanced config wrapper. Collapsed by default so the main
-// page stays focused on everyday tasks. Inside, 3 sub-sections:
-//   A. COMPTES SOURCES — big-account seeds (Method A, always on)
-//   B. MÉTHODE ALTERNATIVE — random-prefix probing (Method B, togglable)
-//   C. PARAMÈTRES TECHNIQUES — auto-refill / quotas / cron / quality
-export function PoolAdvancedConfig({ initialConfig }: { initialConfig: Cfg }) {
+// page stays focused on everyday tasks. Inside, 4 sub-sections:
+//   A. COMPTES SOURCES — big-account seeds (Method A, always on) · SHARED
+//   B. MÉTHODE ALTERNATIVE — random-prefix probing (Method B) · SHARED
+//   C. PARAMÈTRES TECHNIQUES — scoped to activePool (qualification
+//      for abonnés, engagement settings for engagement) + shared quotas + cron
+//   D. HISTORIQUE DES JOBS · SHARED
+export function PoolAdvancedConfig({
+  initialConfig,
+  activePool,
+}: {
+  initialConfig: Cfg;
+  activePool: ActivePool;
+}) {
   return (
     <Collapsible
       banner
       label="CONFIGURATION AVANCÉE"
       hint="pour régler finement le scrape · à laisser fermé en usage normal"
     >
-      {/* Sub-section A — Seeds (Method A) */}
+      {/* Sub-section A — Seeds (Method A) · SHARED */}
       <div className="w-full">
         <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-3 border-b border-[#666666]/20 bg-[#030303] flex items-center gap-3 flex-wrap">
           <span className="text-[#FF3300]">A.</span>
           <span className="text-white">COMPTES SOURCES</span>
           <span className="normal-case text-[#666666]/70 text-[10px]">
-            (&laquo;&nbsp;big accounts&nbsp;&raquo; dans les followers desquels on cherche
-            nos comptes test)
+            partagé entre les 2 pools — «&nbsp;big accounts&nbsp;» dans les
+            followers desquels on cherche nos comptes test
           </span>
         </div>
         <PoolSeedsCard />
       </div>
 
-      {/* Sub-section B — Method B (toggle + prefixes) */}
+      {/* Sub-section B — Method B (toggle + prefixes) · SHARED */}
       <MethodBSection initial={initialConfig} />
 
-      {/* Sub-section C — Technical settings */}
+      {/* Sub-section C — Technical settings · SCOPED to activePool */}
       <div className="w-full">
         <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-3 border-b border-[#666666]/20 bg-[#030303] flex items-center gap-3 flex-wrap">
           <span className="text-[#FF3300]">C.</span>
           <span className="text-white">PARAMÈTRES TECHNIQUES</span>
           <span className="normal-case text-[#666666]/70 text-[10px]">
-            (auto-refill, quotas API, cron, critères de qualité)
+            critères pool{" "}
+            {activePool === "follower" ? "abonnés" : "engagement"} · quotas
+            API + cron (partagés)
           </span>
         </div>
-        <PoolSettings initialConfig={initialConfig} />
+        <PoolSettings initialConfig={initialConfig} activePool={activePool} />
       </div>
 
       {/* Sub-section D — Jobs history */}

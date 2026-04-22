@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
 import { SkeletonRow } from "@/components/Skeleton";
+import type { ActivePool } from "./PoolUniverseSwitch";
 
 type Account = {
   id: number;
@@ -62,14 +63,21 @@ const REASON_SHORT: Record<string, string> = {
 const FILTER =
   "interactive bg-transparent border border-[#666666]/40 focus:border-[#FF3300] px-3 py-2 font-mono text-xs tracking-widest uppercase text-white placeholder:text-[#666666]/60 outline-none transition-colors";
 
-export function PoolAccountsList() {
+export function PoolAccountsList({ activePool }: { activePool: ActivePool }) {
   const router = useRouter();
   const toast = usePoolToast();
+
+  // Account-type filter is now LOCKED to the active universe —
+  // switching universes at the top of /pool is the only way to
+  // change it. The dedicated <select> has been removed to keep the
+  // filter surface coherent (no risk of showing engagement rows
+  // under a "Pool Abonnés" header, which confused operators).
+  const accountType =
+    activePool === "follower" ? "follower_test" : "engagement_test";
 
   const [platform, setPlatform] = useState("all");
   const [status, setStatus] = useState("all");
   const [source, setSource] = useState("all");
-  const [accountType, setAccountType] = useState("all");
   const [country, setCountry] = useState("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState("firstSeenAt");
@@ -114,6 +122,13 @@ export function PoolAccountsList() {
   useEffect(() => {
     setPage(1);
   }, [platform, status, source, accountType, country, q, sort, order]);
+
+  // Reset to page 1 when the parent universe flips — the filtered
+  // result set is brand-new so "page 3" rarely maps to anything
+  // meaningful.
+  useEffect(() => {
+    setPage(1);
+  }, [activePool]);
 
   async function quickRecheck(id: number) {
     if (actioning[id]) return;
@@ -214,16 +229,6 @@ export function PoolAccountsList() {
             <option value="big_account_followers">BIG ACCOUNT FOLLOWERS</option>
             <option value="random_username">RANDOM USERNAME</option>
             <option value="manual">MANUAL</option>
-          </select>
-          <select
-            value={accountType}
-            onChange={(e) => setAccountType(e.target.value)}
-            className={FILTER}
-            aria-label="Type de compte"
-          >
-            <option value="all">TOUS TYPES</option>
-            <option value="follower_test">ABONNÉS</option>
-            <option value="engagement_test">ENGAGEMENT</option>
           </select>
           <select
             value={country}

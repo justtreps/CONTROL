@@ -30,6 +30,13 @@ export const maxDuration = 10;
 const bodySchema = z.object({
   platform: z.enum(["instagram", "tiktok", "both"]).default("both"),
   count: z.number().int().positive().max(10000).default(1000),
+  // Which universe to grow. When set, the scraper enforces an
+  // override in addition to the classic engagementPoolEnabled gate:
+  //   follower    → only keep mediaCount == 0 candidates
+  //   engagement  → only keep mediaCount >= engagementPostsMin
+  // Legacy callers that omit poolType keep the previous behavior
+  // (rely on engagementPoolEnabled + mediaCount routing).
+  poolType: z.enum(["follower", "engagement"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -51,9 +58,15 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  const { platform, count } = parsed.data;
+  const { platform, count, poolType } = parsed.data;
 
   const initial = initScrapeStats(platform, count);
+  if (poolType) {
+    // Stash on the stats JSON rather than adding a dedicated PoolJob
+    // column — zero-migration path, and the scraper already reads
+    // stats at tranche start.
+    (initial as unknown as { poolType?: string }).poolType = poolType;
+  }
   const job = await prisma.poolJob.create({
     data: {
       jobType: "scrape",

@@ -219,6 +219,7 @@ export function PoolJobsHistory() {
                 </td>
                 <td className="px-3 py-3 font-mono text-xs text-[#FF3300] tracking-widest uppercase whitespace-nowrap">
                   {TYPE_LABEL_FR[r.jobType] ?? r.jobType.toUpperCase()}
+                  <span className="text-[#666666]">{poolSuffix(r)}</span>
                 </td>
                 <td className="px-3 py-3 font-mono text-xs text-[#666666] tracking-widest uppercase hidden md:table-cell">
                   {r.platform ? shortPlatform(r.platform) : "—"}
@@ -401,7 +402,7 @@ function JobDetailModal({
               {job
                 ? `${TYPE_LABEL_FR[job.jobType] ?? job.jobType.toUpperCase()}${
                     job.platform ? ` · ${shortPlatform(job.platform)}` : ""
-                  }`
+                  }${poolSuffix(job)}`
                 : "…"}
             </h3>
           </div>
@@ -538,6 +539,12 @@ function shortPlatform(p: string): string {
   if (p === "tiktok") return "TT";
   if (p === "both") return "IG+TT";
   return p.toUpperCase();
+}
+function poolSuffix(job: { stats: Record<string, unknown> | null }): string {
+  const poolType = (job.stats as { poolType?: string } | null)?.poolType;
+  if (poolType === "follower") return " · ABONNÉS";
+  if (poolType === "engagement") return " · ENGAGEMENT";
+  return "";
 }
 function triggerLabel(t: string): string {
   if (t === "manual") return "MANUEL";

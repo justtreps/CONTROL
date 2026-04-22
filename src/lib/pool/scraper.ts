@@ -71,6 +71,13 @@ export type ScrapeStats = {
   // operators can see "no B accounts because Method B is disabled"
   // rather than thinking the phase silently failed.
   phaseBSkipped?: boolean;
+  // Universe override — set when the /api/pool/scrape call passed a
+  // poolType (from the top-of-page universe switch on /pool). When
+  // set, candidate classification is hard-forced:
+  //   follower    → only mediaCount == 0 qualifies (rest rejected)
+  //   engagement  → only mediaCount >= engagementPostsMin qualifies
+  // Legacy jobs (undefined) keep the old engagementPoolEnabled gate.
+  poolType?: "follower" | "engagement";
   // Phase A checkpoint
   a: {
     doneSeedIds: number[];
@@ -669,22 +676,36 @@ async function validateAndUpsertIgCandidate({
     return;
   }
 
-  // Account-type routing. When engagementPoolEnabled=false (default),
-  // behaviour is identical to before: everything becomes follower_test.
-  // When the operator flips the toggle on:
-  //   mediaCount == 0                → follower_test
-  //   mediaCount >= engagementPostsMin → engagement_test
-  //   mediaCount in [1, min-1]        → follower_test (falls through)
-  // We no longer cap with a "max posts" rule — what matters for
-  // engagement quality is freshness + low natural likes, not the
-  // absolute post count. Those checks run later in fetchValidEngagementPosts.
+  // Account-type routing. Two modes:
+  //
+  // (A) Universe-scoped job (stats.poolType set — triggered from the
+  //     /pool ABONNÉS / ENGAGEMENT switch): hard-force accountType
+  //     and REJECT candidates that don't fit. This way a scrape
+  //     launched from "POOL ENGAGEMENT" never adds zero-post rows
+  //     that would just bloat the follower universe.
+  //
+  // (B) Legacy job (no poolType): fall back to the engagementPool
+  //     Enabled gate — mediaCount == 0 stays follower_test, >= min
+  //     becomes engagement_test when the toggle is on, everything
+  //     else falls through as follower_test.
   const engagementCfg = cfg as unknown as {
     engagementPoolEnabled?: boolean;
     engagementPostsMin?: number;
   };
+  const minP = engagementCfg.engagementPostsMin ?? 1;
   let accountType: "follower_test" | "engagement_test" = "follower_test";
-  if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
-    const minP = engagementCfg.engagementPostsMin ?? 1;
+  if (stats.poolType === "follower") {
+    if (oracle.mediaCount > 0) {
+      stats.candidatesRejected.other++;
+      return;
+    }
+  } else if (stats.poolType === "engagement") {
+    if (oracle.mediaCount < minP) {
+      stats.candidatesRejected.other++;
+      return;
+    }
+    accountType = "engagement_test";
+  } else if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
     if (oracle.mediaCount >= minP) {
       accountType = "engagement_test";
     }
@@ -907,14 +928,26 @@ async function validateAndUpsertTtCandidate({
     return;
   }
 
-  // Account-type routing (see IG path for reasoning).
+  // Account-type routing (see IG path for reasoning — same mode A/B
+  // logic based on stats.poolType vs legacy engagementPoolEnabled).
   const engagementCfg = cfg as unknown as {
     engagementPoolEnabled?: boolean;
     engagementPostsMin?: number;
   };
+  const minP = engagementCfg.engagementPostsMin ?? 1;
   let accountType: "follower_test" | "engagement_test" = "follower_test";
-  if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
-    const minP = engagementCfg.engagementPostsMin ?? 1;
+  if (stats.poolType === "follower") {
+    if (oracle.mediaCount > 0) {
+      stats.candidatesRejected.other++;
+      return;
+    }
+  } else if (stats.poolType === "engagement") {
+    if (oracle.mediaCount < minP) {
+      stats.candidatesRejected.other++;
+      return;
+    }
+    accountType = "engagement_test";
+  } else if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
     if (oracle.mediaCount >= minP) {
       accountType = "engagement_test";
     }

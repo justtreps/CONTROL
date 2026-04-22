@@ -9,7 +9,7 @@ const LINKS = [
   { href: "/", label: "ACCUEIL" },
   { href: "/services", label: "SERVICES" },
   { href: "/logs", label: "JOURNAUX" },
-  { href: "/pool", label: "COMPTES TEST" },
+  { href: "/pool", label: "POOL" },
   { href: "/config", label: "CONFIG" },
   { href: "/library", label: "LIBRARY" },
 ];

@@ -23,6 +23,11 @@ export const maxDuration = 10;
 
 const bodySchema = z.object({
   platform: z.enum(["instagram", "tiktok", "both"]).default("both"),
+  // Which pool to sweep. When set, only TestAccount rows whose
+  // accountType matches get picked up — the other pool stays idle.
+  // Legacy callers (cron, manual calls pre-universe-switch) omit
+  // poolType and get the old behavior (both pools).
+  poolType: z.enum(["follower", "engagement"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -44,15 +49,25 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-  const { platform } = parsed.data;
+  const { platform, poolType } = parsed.data;
 
-  // Idempotent — one health-check in flight at a time. If one is
-  // already running, return its jobId so the UI can show progress.
-  const active = await prisma.poolJob.findFirst({
+  // Idempotent — one health-check in flight at a time PER pool. We
+  // key on the stats.poolType so the user can fire a follower check
+  // and an engagement check in parallel (different universes) but
+  // not two of the same.
+  const activeList = await prisma.poolJob.findMany({
     where: {
       jobType: "health_check",
       status: { in: ["pending", "running"] },
     },
+  });
+  const active = activeList.find((j) => {
+    const jobPool = (j.stats as unknown as { poolType?: string } | null)
+      ?.poolType;
+    if (poolType) return jobPool === poolType;
+    // Legacy caller with no poolType collides with any running job,
+    // same as before.
+    return true;
   });
   if (active) {
     return NextResponse.json({
@@ -64,6 +79,9 @@ export async function POST(req: Request) {
   }
 
   const initial = initHealthStats(platform);
+  if (poolType) {
+    (initial as unknown as { poolType?: string }).poolType = poolType;
+  }
   const job = await prisma.poolJob.create({
     data: {
       jobType: "health_check",
