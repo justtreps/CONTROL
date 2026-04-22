@@ -11,6 +11,10 @@ const PUBLIC_PATHS = [
   // internal fire-and-forget refill trigger from suggestions-dynamic
   // hit this path, and allows manual priming via curl.
   "/api/pool/seeds/refill-pool",
+  // One-shot migration endpoints — also cron-auth'd, kept open so
+  // operators can curl them after schema bumps.
+  "/api/pool/reclassify-services",
+  "/api/pool/backfill-country",
 ];
 
 export async function middleware(req: NextRequest) {

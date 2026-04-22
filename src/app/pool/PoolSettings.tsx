@@ -23,6 +23,14 @@ type Cfg = {
   maxFollowerCountTiktok: number;
   maxFollowingCount: number;
   requireNotPrivate: boolean;
+  engagementPoolEnabled: boolean;
+  engagementPoolTargetInstagram: number;
+  engagementPoolTargetTiktok: number;
+  engagementPostsMin: number;
+  engagementPostsMax: number;
+  engagementLikesMaxPerPost: number;
+  engagementFreshnessMaxDays: number;
+  countryDetectionMinConfidence: string;
 };
 
 // "Paramètres techniques" — 4 collapsed accordions. Non-dev user
@@ -59,6 +67,13 @@ export function PoolSettings({ initialConfig }: { initialConfig: Cfg }) {
           compact
         >
           <QualificationBody initial={initialConfig} />
+        </Collapsible>
+        <Collapsible
+          label="POOL ENGAGEMENT (LIKES / VUES / PARTAGES)"
+          hint="second pool — comptes avec posts récents"
+          compact
+        >
+          <EngagementBody initial={initialConfig} />
         </Collapsible>
       </div>
     </div>
@@ -411,6 +426,132 @@ function QualificationBody({ initial }: { initial: Cfg }) {
             maxFollowerCountTiktok: maxFollowersTt,
             maxFollowingCount: maxFollowing,
             requireNotPrivate: requirePublic,
+          })
+        }
+      />
+    </div>
+  );
+}
+
+// ── Accordion 05 — ENGAGEMENT POOL ─────────────────────────────────
+function EngagementBody({ initial }: { initial: Cfg }) {
+  const { patch, saving } = usePatchConfig();
+  const [enabled, setEnabled] = useState(initial.engagementPoolEnabled);
+  const [targetIg, setTargetIg] = useState(
+    initial.engagementPoolTargetInstagram
+  );
+  const [targetTt, setTargetTt] = useState(initial.engagementPoolTargetTiktok);
+  const [postsMin, setPostsMin] = useState(initial.engagementPostsMin);
+  const [postsMax, setPostsMax] = useState(initial.engagementPostsMax);
+  const [likesMax, setLikesMax] = useState(initial.engagementLikesMaxPerPost);
+  const [freshness, setFreshness] = useState(
+    initial.engagementFreshnessMaxDays
+  );
+  const [minConf, setMinConf] = useState(
+    initial.countryDetectionMinConfidence
+  );
+
+  return (
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Pool secondaire pour tester les services de{" "}
+        <span className="text-white">likes / vues / partages / enregistrements</span>
+        . Les comptes de ce pool ont entre {postsMin} et {postsMax} posts
+        récents. Désactivé par défaut — tant que le toggle n&apos;est pas
+        activé, le scraper continue d&apos;utiliser uniquement le pool
+        abonnés historique.
+      </p>
+      <ToggleRow
+        label="POOL ENGAGEMENT ACTIVÉ"
+        value={enabled}
+        onChange={setEnabled}
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <LabelInput
+          label="CIBLE IG ENGAGEMENT"
+          help="Nombre de comptes engagement à maintenir pour Instagram."
+          type="number"
+          value={targetIg}
+          onChange={(e) => setTargetIg(Number(e.target.value) || 0)}
+        />
+        <LabelInput
+          label="CIBLE TT ENGAGEMENT"
+          help="Nombre de comptes engagement à maintenir pour TikTok."
+          type="number"
+          value={targetTt}
+          onChange={(e) => setTargetTt(Number(e.target.value) || 0)}
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <LabelInput
+          label="POSTS MIN PAR COMPTE"
+          help="Un candidat doit avoir au moins N posts pour qualifier."
+          type="number"
+          value={postsMin}
+          onChange={(e) => setPostsMin(Number(e.target.value) || 0)}
+        />
+        <LabelInput
+          label="POSTS MAX PAR COMPTE"
+          help="Au-delà, le compte est trop actif — rejeté."
+          type="number"
+          value={postsMax}
+          onChange={(e) => setPostsMax(Number(e.target.value) || 0)}
+        />
+      </div>
+      <LabelInput
+        label="MAX LIKES NATURELS PAR POST"
+        help="Un post avec plus de N likes a une baseline trop élevée — rejeté."
+        type="number"
+        value={likesMax}
+        onChange={(e) => setLikesMax(Number(e.target.value) || 0)}
+      />
+      <LabelInput
+        label="ANCIENNETÉ MAX DES POSTS (JOURS)"
+        help="Post plus ancien que N jours = obsolète, rejeté au scrape."
+        type="number"
+        value={freshness}
+        onChange={(e) => setFreshness(Number(e.target.value) || 0)}
+      />
+      <label className="flex flex-col gap-1">
+        <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+          CONFIANCE MIN DÉTECTION PAYS
+        </span>
+        <select
+          value={minConf}
+          onChange={(e) => setMinConf(e.target.value)}
+          className={INPUT_CLS}
+        >
+          <option value="high">HIGH</option>
+          <option value="medium">MEDIUM</option>
+          <option value="low">LOW</option>
+          <option value="unknown">UNKNOWN (ACCEPT ANY)</option>
+        </select>
+        <span className="font-mono text-[10px] text-[#666666] normal-case leading-snug">
+          Seuil minimal pour matcher un compte à un service géo-ciblé.
+        </span>
+      </label>
+      <p className="font-mono text-[10px] text-[#666666] normal-case leading-relaxed">
+        Note : le fetching des posts depuis RapidAPI est câblé en Phase 2.
+        Pour l&apos;instant ce toggle active uniquement le <em>routing</em>{" "}
+        des candidats selon leur mediaCount. Les comptes engagement arrivent
+        sans posts attachés — inutilisables jusqu&apos;à la Phase 2.
+      </p>
+      <SaveButton
+        saving={saving}
+        onClick={() =>
+          patch({
+            engagementPoolEnabled: enabled,
+            engagementPoolTargetInstagram: targetIg,
+            engagementPoolTargetTiktok: targetTt,
+            engagementPostsMin: postsMin,
+            engagementPostsMax: postsMax,
+            engagementLikesMaxPerPost: likesMax,
+            engagementFreshnessMaxDays: freshness,
+            countryDetectionMinConfidence: minConf as
+              | "high"
+              | "medium"
+              | "low"
+              | "unknown",
           })
         }
       />

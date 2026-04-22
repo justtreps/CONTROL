@@ -11,15 +11,58 @@ import type { TestAccount } from "@prisma/client";
 export async function pickAndAssignAccount({
   platform,
   testOrderId,
+  accountType,
+  targetCountry,
+  minCountryConfidence,
 }: {
   platform: string;
   testOrderId: number;
+  // When omitted, we pick ANY accountType (backward-compat: the old
+  // testbot call sites didn't pass this and got whatever was next in
+  // the FIFO queue — which in practice was always follower_test since
+  // engagement_test accounts didn't exist yet).
+  accountType?: "follower_test" | "engagement_test";
+  // Optional ISO-2 country — when set, we first try to pick an
+  // account whose detectedCountry matches AND whose confidence is
+  // at least minCountryConfidence (default 'medium'). If none, we
+  // fall back to a country-less pick so the test still runs (just
+  // without a geo match).
+  targetCountry?: string | null;
+  minCountryConfidence?: "high" | "medium" | "low" | "unknown";
 }): Promise<TestAccount | null> {
+  const minConf = minCountryConfidence ?? "medium";
+  // Confidence enum order — higher index = stronger signal. We match
+  // a row if its confidence appears at or after `minConf` in this list.
+  const confOrder = ["unknown", "low", "medium", "high"];
+  const minConfIdx = confOrder.indexOf(minConf);
+  const acceptableConfs = confOrder.slice(minConfIdx);
+
   return prisma.$transaction(async (tx) => {
-    const candidate = await tx.testAccount.findFirst({
-      where: { platform, status: "available" },
-      orderBy: { firstSeenAt: "asc" },
-    });
+    const baseWhere = {
+      platform,
+      status: "available",
+      ...(accountType ? { accountType } : {}),
+    };
+
+    // 1st try: exact country match with acceptable confidence.
+    let candidate = null;
+    if (targetCountry) {
+      candidate = await tx.testAccount.findFirst({
+        where: {
+          ...baseWhere,
+          detectedCountry: targetCountry,
+          countryConfidence: { in: acceptableConfs },
+        },
+        orderBy: { firstSeenAt: "asc" },
+      });
+    }
+    // 2nd try: no country filter (global service OR couldn't match).
+    if (!candidate) {
+      candidate = await tx.testAccount.findFirst({
+        where: baseWhere,
+        orderBy: { firstSeenAt: "asc" },
+      });
+    }
     if (!candidate) return null;
 
     return tx.testAccount.update({
@@ -28,10 +71,25 @@ export async function pickAndAssignAccount({
         status: "assigned",
         assignedAt: new Date(),
         assignedTestOrderId: testOrderId,
-        active: false, // legacy flag — 'assigned' accounts aren't pickable as "active" for anything else
+        active: false,
       },
     });
   });
+}
+
+// For engagement_test accounts: pick one of their active media rows
+// at random so the testbot can point BulkMedya at a specific post
+// URL. Returns null if the account has no active posts (testbot
+// should treat the assignment as failed and release the account).
+export async function pickRandomActivePost(
+  testAccountId: number
+): Promise<{ id: number; mediaUrl: string; mediaId: string } | null> {
+  const rows = await prisma.testAccountMedia.findMany({
+    where: { testAccountId, status: "active" },
+    select: { id: true, mediaUrl: true, mediaId: true },
+  });
+  if (rows.length === 0) return null;
+  return rows[Math.floor(Math.random() * rows.length)];
 }
 
 export async function consumeAccount(testAccountId: number): Promise<void> {

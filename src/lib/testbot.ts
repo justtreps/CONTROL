@@ -1,9 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
 import { fetchFollowerSnapshot, type Platform } from "@/lib/rapidapi";
-import { pickAndAssignAccount, invalidateAccount } from "@/lib/pool/assign";
+import {
+  pickAndAssignAccount,
+  pickRandomActivePost,
+  invalidateAccount,
+} from "@/lib/pool/assign";
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { getPoolConfig } from "@/lib/pool/config";
 import type { Service, TestAccount } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -204,9 +209,33 @@ async function attemptPlaceOrder({
     // ─── Resolve account ────────────────────────────────────────────
     let account: TestAccount | null = null;
 
+    // Route by service classification (falls back to "any account"
+    // when the service hasn't been classified yet — backward-compat
+    // with the old pre-classification rows).
+    const serviceRouting = service as Service & {
+      poolType?: string;
+      targetCountry?: string | null;
+    };
+    const routingType =
+      serviceRouting.poolType === "follower_test" ||
+      serviceRouting.poolType === "engagement_test"
+        ? serviceRouting.poolType
+        : undefined;
+    const cfg = await getPoolConfig().catch(() => null);
+    const minConf = (cfg as unknown as { countryDetectionMinConfidence?: string })
+      ?.countryDetectionMinConfidence as
+      | "high"
+      | "medium"
+      | "low"
+      | "unknown"
+      | undefined;
+
     poolPick = await pickAndAssignAccount({
       platform: service.platform,
-      testOrderId: -1, // backfilled after TestOrder creation
+      testOrderId: -1,
+      accountType: routingType,
+      targetCountry: serviceRouting.targetCountry ?? null,
+      minCountryConfidence: minConf,
     });
 
     if (poolPick) {
@@ -218,6 +247,35 @@ async function attemptPlaceOrder({
 
     if (!account) {
       return { kind: "no_account", reason: "no_available_account" };
+    }
+
+    // If the service targets engagement_test, pick a random active
+    // post for this account so we can send BulkMedya to a post URL
+    // (not the profile). Follower_test still uses the profile URL.
+    let postUrlOverride: string | null = null;
+    if (serviceRouting.poolType === "engagement_test") {
+      const post = await pickRandomActivePost(account.id);
+      if (!post) {
+        // No active post → release the account and skip this service
+        // (engagement_test account with zero posts shouldn't happen
+        // once the engagement scraper path is live; safety net).
+        if (poolPick) {
+          await prisma.testAccount.update({
+            where: { id: poolPick.id },
+            data: {
+              status: "available",
+              assignedAt: null,
+              assignedTestOrderId: null,
+              active: true,
+            },
+          });
+        }
+        return {
+          kind: "skip",
+          reason: `engagement_account_has_no_active_posts_${account.id}`,
+        };
+      }
+      postUrlOverride = post.mediaUrl;
     }
 
     // ─── Baseline-at-placement ──────────────────────────────────────
@@ -318,11 +376,16 @@ async function attemptPlaceOrder({
       realismData: sample.realismData,
     };
 
+    // Route BulkMedya at the right URL: profile for follower_test,
+    // specific post URL for engagement_test (set above when the
+    // service is engagement-flavored).
+    const bulkmedyaLink =
+      postUrlOverride ?? targetUrlFor(service.platform, currentUsername);
     const order = simulated
       ? { order: Date.now() }
       : await placeOrder({
           service: service.bulkmedyaId,
-          link: targetUrlFor(service.platform, currentUsername),
+          link: bulkmedyaLink,
           quantity: service.minQuantity,
         });
 

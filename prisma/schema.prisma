@@ -27,10 +27,32 @@ model Service {
   active          Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  // Routing: which pool the testbot draws from when this service's
+  // cooldown expires.
+  //   'follower_test'   — abonné / subscriber / follower services
+  //   'engagement_test' — like / view / share / save services
+  //   'unknown'         — the classifier couldn't decide; testbot
+  //                       skips until an operator triages via the
+  //                       services-review page
+  poolType        String   @default("unknown")
+
+  // Optional ISO 2-letter country code when the service is geo-
+  // targeted (e.g. "Instagram Followers [ 🇫🇷 France ]" → "FR").
+  // null means the service accepts any country.
+  targetCountry   String?
+
+  // Flipped true by the classifier when its confidence is too low to
+  // assign a poolType — surfaces in /config/services-review for
+  // manual triage.
+  classificationManualReview Boolean @default(false)
+
   testOrders      TestOrder[]
   scores          ServiceScore[]
 
   @@index([platform, serviceType, active])
+  @@index([poolType, active])
+  @@index([targetCountry])
 }
 
 model TestAccount {
@@ -41,6 +63,19 @@ model TestAccount {
   active       Boolean   @default(true)
   lastTestedAt DateTime?
   createdAt    DateTime  @default(now())
+
+  // Pool routing — "follower_test" means the account has 0 posts and
+  // is used to test follower/subscriber services. "engagement_test"
+  // means the account has at least one live post (tracked in Test
+  // AccountMedia) and is used to test likes / views / shares. All
+  // pre-migration rows keep the default so nothing breaks.
+  accountType            String    @default("follower_test")
+
+  // Detected nationality (ISO 2-letter code) + how confident the
+  // detector was. null/'unknown' means the detector couldn't pin one
+  // down — still usable, just not for geo-targeted services.
+  detectedCountry        String?
+  countryConfidence      String    @default("unknown") // 'high' | 'medium' | 'low' | 'unknown'
 
   // ── Pool system extensions (see pool-full-control.md) ──
   // Lifecycle state for accounts in the pool:
@@ -70,6 +105,7 @@ model TestAccount {
   notes                  String?
 
   testOrders             TestOrder[]
+  media                  TestAccountMedia[]
 
   @@unique([platform, username])
   @@index([platform, active])
@@ -80,6 +116,33 @@ model TestAccount {
   // Supports the daily health-check's orderBy: {lastCheckedAt: "asc"}
   // filtered by status='available'. Without it the 6-hourly cron
   // sorts in-memory, which doesn't scale past a few thousand rows.
+  @@index([status, lastCheckedAt])
+  // Supports testbot's pickAndAssignAccount routing by accountType
+  // and detectedCountry.
+  @@index([platform, status, accountType, detectedCountry])
+}
+
+// Posts / reels / videos attached to engagement_test accounts. The
+// testbot points BulkMedya at a random row's mediaUrl instead of the
+// profile URL so likes / views / shares land on a real piece of
+// content, not a bare profile.
+model TestAccountMedia {
+  id              Int       @id @default(autoincrement())
+  testAccount     TestAccount @relation(fields: [testAccountId], references: [id], onDelete: Cascade)
+  testAccountId   Int
+  mediaId         String    // platform-native id (IG pk, TT aweme_id)
+  mediaUrl        String    // the permalink we hand to BulkMedya
+  mediaType       String    // 'post' | 'reel' | 'video'
+  postedAt        DateTime?
+  lastCheckedAt   DateTime  @default(now())
+  naturalLikesCount Int     @default(0)
+  // 'active' — currently usable for an engagement test
+  // 'deleted' — provider returned 404 on recheck
+  // 'stale'   — owner account went private / deleted
+  status          String    @default("active")
+
+  @@unique([testAccountId, mediaId])
+  @@index([testAccountId, status])
   @@index([status, lastCheckedAt])
 }
 
@@ -145,6 +208,22 @@ model PoolConfig {
   // might evolve independently (we routinely accept posts at scrape
   // time but could want to flag later growth).
   invalidateIfMediaAbove           Int      @default(999999)
+
+  // ── Engagement pool ──────────────────────────────────────────────
+  // When enabled, accounts scraped with mediaCount in [engagement
+  // PostsMin, engagementPostsMax] are classified as 'engagement_test'
+  // candidates and their recent posts are sampled. Those posts feed
+  // tests for like / view / share services. Disabled by default so
+  // the original follower_test-only pool behaviour is preserved until
+  // the operator opts in.
+  engagementPoolEnabled            Boolean  @default(false)
+  engagementPoolTargetInstagram    Int      @default(500)
+  engagementPoolTargetTiktok       Int      @default(500)
+  engagementPostsMin               Int      @default(1)
+  engagementPostsMax               Int      @default(10)
+  engagementLikesMaxPerPost        Int      @default(20)
+  engagementFreshnessMaxDays       Int      @default(90)
+  countryDetectionMinConfidence    String   @default("medium") // 'high' | 'medium' | 'low' | 'unknown'
 
   updatedAt                        DateTime @updatedAt
 }

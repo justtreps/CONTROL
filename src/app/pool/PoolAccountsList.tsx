@@ -17,6 +17,22 @@ type Account = {
   firstSeenAt: string;
   lastCheckedAt: string;
   lastFollowerCount: number | null;
+  accountType: string;
+  detectedCountry: string | null;
+  countryConfidence: string;
+};
+
+// Minimal flag map for the column — covers the buckets the classifier
+// tags. Missing entries fall back to the bare code ("XX").
+const COUNTRY_FLAGS: Record<string, string> = {
+  FR: "🇫🇷", BR: "🇧🇷", US: "🇺🇸", GB: "🇬🇧", DE: "🇩🇪",
+  ES: "🇪🇸", IT: "🇮🇹", IN: "🇮🇳", MX: "🇲🇽", TR: "🇹🇷",
+  SA: "🇸🇦", AE: "🇦🇪", JP: "🇯🇵", KR: "🇰🇷", CN: "🇨🇳",
+  RU: "🇷🇺", ID: "🇮🇩", NG: "🇳🇬", AR: "🇦🇷", CO: "🇨🇴",
+  CL: "🇨🇱", PE: "🇵🇪", PT: "🇵🇹", NL: "🇳🇱", BE: "🇧🇪",
+  PL: "🇵🇱", CA: "🇨🇦", AU: "🇦🇺", PH: "🇵🇭", TH: "🇹🇭",
+  VN: "🇻🇳", EG: "🇪🇬", ZA: "🇿🇦", IR: "🇮🇷", PK: "🇵🇰",
+  BD: "🇧🇩", MA: "🇲🇦", DZ: "🇩🇿", TN: "🇹🇳",
 };
 
 type ListResponse = {
@@ -53,6 +69,8 @@ export function PoolAccountsList() {
   const [platform, setPlatform] = useState("all");
   const [status, setStatus] = useState("all");
   const [source, setSource] = useState("all");
+  const [accountType, setAccountType] = useState("all");
+  const [country, setCountry] = useState("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState("firstSeenAt");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
@@ -70,6 +88,8 @@ export function PoolAccountsList() {
         platform,
         status,
         source,
+        accountType,
+        country,
         q,
         sort,
         order,
@@ -93,7 +113,7 @@ export function PoolAccountsList() {
   // Reset to page 1 on filter/search change.
   useEffect(() => {
     setPage(1);
-  }, [platform, status, source, q, sort, order]);
+  }, [platform, status, source, accountType, country, q, sort, order]);
 
   async function quickRecheck(id: number) {
     if (actioning[id]) return;
@@ -196,6 +216,30 @@ export function PoolAccountsList() {
             <option value="manual">MANUAL</option>
           </select>
           <select
+            value={accountType}
+            onChange={(e) => setAccountType(e.target.value)}
+            className={FILTER}
+            aria-label="Type de compte"
+          >
+            <option value="all">TOUS TYPES</option>
+            <option value="follower_test">ABONNÉS</option>
+            <option value="engagement_test">ENGAGEMENT</option>
+          </select>
+          <select
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            className={FILTER}
+            aria-label="Pays détecté"
+          >
+            <option value="all">TOUS PAYS</option>
+            {Object.keys(COUNTRY_FLAGS).map((iso) => (
+              <option key={iso} value={iso}>
+                {COUNTRY_FLAGS[iso]} {iso}
+              </option>
+            ))}
+            <option value="unknown">INCONNU</option>
+          </select>
+          <select
             value={`${sort}:${order}`}
             onChange={(e) => {
               const [s, o] = e.target.value.split(":");
@@ -234,6 +278,12 @@ export function PoolAccountsList() {
                 <th className="text-left px-3 py-3 font-normal hidden sm:table-cell">
                   Plat.
                 </th>
+                <th className="text-left px-3 py-3 font-normal hidden md:table-cell">
+                  Type
+                </th>
+                <th className="text-left px-3 py-3 font-normal hidden md:table-cell">
+                  Pays
+                </th>
                 <th className="text-left px-3 py-3 font-normal">Status</th>
                 <th className="text-left px-3 py-3 font-normal hidden xl:table-cell">
                   Source
@@ -252,7 +302,7 @@ export function PoolAccountsList() {
               {loading && !data && (
                 <>
                   {Array.from({ length: Math.min(limit, 6) }).map((_, i) => (
-                    <SkeletonRow key={`sk-${i}`} cols={9} />
+                    <SkeletonRow key={`sk-${i}`} cols={11} />
                   ))}
                 </>
               )}
@@ -275,6 +325,25 @@ export function PoolAccountsList() {
                   </td>
                   <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest hidden sm:table-cell">
                     {r.platform}
+                  </td>
+                  <td className="px-3 py-3 font-mono text-[10px] text-[#666666] uppercase tracking-widest hidden md:table-cell whitespace-nowrap">
+                    {r.accountType === "engagement_test" ? "ENG." : "ABO."}
+                  </td>
+                  <td className="px-3 py-3 font-mono text-xs tracking-widest hidden md:table-cell whitespace-nowrap">
+                    {r.detectedCountry ? (
+                      <span
+                        title={`confidence: ${r.countryConfidence}`}
+                        className={
+                          r.countryConfidence === "low"
+                            ? "text-[#666666]"
+                            : "text-white"
+                        }
+                      >
+                        {COUNTRY_FLAGS[r.detectedCountry] ?? ""} {r.detectedCountry}
+                      </span>
+                    ) : (
+                      <span className="text-[#666666]/50">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-3 whitespace-nowrap">
                     <span

@@ -22,6 +22,7 @@ import {
 } from "@/lib/rapidapi/tiktok";
 import { fetchIgOracle, fetchTtOracle, type OracleResult } from "./oracle";
 import { getPoolConfig } from "./config";
+import { detectAccountCountry } from "./country-detection";
 
 export type RejectionBreakdown = {
   private: number;
@@ -585,6 +586,38 @@ async function validateAndUpsertIgCandidate({
     return;
   }
 
+  // Account-type routing. When engagementPoolEnabled=false (default),
+  // behaviour is identical to before: everything becomes follower_test.
+  // When the operator flips the toggle on:
+  //   mediaCount == 0                            → follower_test
+  //   mediaCount in [min, max]                   → engagement_test
+  //   mediaCount > engagementPostsMax            → reject
+  const engagementCfg = cfg as unknown as {
+    engagementPoolEnabled?: boolean;
+    engagementPostsMin?: number;
+    engagementPostsMax?: number;
+  };
+  let accountType: "follower_test" | "engagement_test" = "follower_test";
+  if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
+    const minP = engagementCfg.engagementPostsMin ?? 1;
+    const maxP = engagementCfg.engagementPostsMax ?? 10;
+    if (oracle.mediaCount >= minP && oracle.mediaCount <= maxP) {
+      accountType = "engagement_test";
+    } else if (oracle.mediaCount > maxP) {
+      stats.candidatesRejected.too_much_media++;
+      return;
+    }
+    // else (mediaCount in [1, minP-1]) falls through as follower_test
+  }
+
+  // Country detection — cheap, runs on sample data. fullName from the
+  // follower payload + username are enough to hit most tiers; bio is
+  // only in the oracle response for IG (not stored here, so skip).
+  const country = detectAccountCountry({
+    fullName: f.full_name ?? null,
+    username: oracle.username || f.username,
+  });
+
   const storedUsername = oracle.username || f.username;
   const res = await prisma.testAccount.upsert({
     where: { platform_username: { platform: "instagram", username: storedUsername } },
@@ -594,6 +627,9 @@ async function validateAndUpsertIgCandidate({
       username: storedUsername,
       userId: oracle.userId,
       status: "available",
+      accountType,
+      detectedCountry: country.country,
+      countryConfidence: country.confidence,
       lastFollowerCount: oracle.followerCount,
       lastMediaCount: oracle.mediaCount,
       lastFollowingCount: oracle.followingCount,
@@ -747,6 +783,32 @@ async function validateAndUpsertTtCandidate({
     return;
   }
 
+  // Account-type routing (see IG path for reasoning).
+  const engagementCfg = cfg as unknown as {
+    engagementPoolEnabled?: boolean;
+    engagementPostsMin?: number;
+    engagementPostsMax?: number;
+  };
+  let accountType: "follower_test" | "engagement_test" = "follower_test";
+  if (engagementCfg.engagementPoolEnabled && oracle.mediaCount > 0) {
+    const minP = engagementCfg.engagementPostsMin ?? 1;
+    const maxP = engagementCfg.engagementPostsMax ?? 10;
+    if (oracle.mediaCount >= minP && oracle.mediaCount <= maxP) {
+      accountType = "engagement_test";
+    } else if (oracle.mediaCount > maxP) {
+      stats.candidatesRejected.too_much_media++;
+      return;
+    }
+  }
+
+  // Country detection: nickname (TT's full name equivalent) +
+  // signature (bio) + username all feed the detector.
+  const country = detectAccountCountry({
+    fullName: f.nickname ?? null,
+    biography: f.signature ?? null,
+    username: oracle.username || f.unique_id,
+  });
+
   const storedUsername = oracle.username || f.unique_id;
   const res = await prisma.testAccount.upsert({
     where: {
@@ -761,6 +823,9 @@ async function validateAndUpsertTtCandidate({
       username: storedUsername,
       userId: oracle.userId,
       status: "available",
+      accountType,
+      detectedCountry: country.country,
+      countryConfidence: country.confidence,
       lastFollowerCount: oracle.followerCount,
       lastMediaCount: oracle.mediaCount,
       lastFollowingCount: oracle.followingCount,

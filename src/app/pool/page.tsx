@@ -99,6 +99,15 @@ export default async function PoolPage() {
           maxFollowerCountTiktok: config.maxFollowerCountTiktok,
           maxFollowingCount: config.maxFollowingCount,
           requireNotPrivate: config.requireNotPrivate,
+          engagementPoolEnabled: config.engagementPoolEnabled,
+          engagementPoolTargetInstagram: config.engagementPoolTargetInstagram,
+          engagementPoolTargetTiktok: config.engagementPoolTargetTiktok,
+          engagementPostsMin: config.engagementPostsMin,
+          engagementPostsMax: config.engagementPostsMax,
+          engagementLikesMaxPerPost: config.engagementLikesMaxPerPost,
+          engagementFreshnessMaxDays: config.engagementFreshnessMaxDays,
+          countryDetectionMinConfidence:
+            config.countryDetectionMinConfidence,
         }}
       />
     </PoolToastProvider>

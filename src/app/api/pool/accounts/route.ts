@@ -27,10 +27,22 @@ export async function GET(req: Request) {
       ? "asc"
       : "desc";
 
+  const accountType = url.searchParams.get("accountType") ?? undefined;
+  const country = url.searchParams.get("country") ?? undefined;
+
   const where: import("@prisma/client").Prisma.TestAccountWhereInput = {};
   if (platform && platform !== "all") where.platform = platform;
   if (status && status !== "all") where.status = status;
   if (source && source !== "all") where.scrapeSource = source;
+  if (accountType && accountType !== "all")
+    (where as Record<string, unknown>).accountType = accountType;
+  if (country && country !== "all") {
+    if (country === "unknown") {
+      (where as Record<string, unknown>).detectedCountry = null;
+    } else {
+      (where as Record<string, unknown>).detectedCountry = country;
+    }
+  }
   if (q.trim()) {
     where.OR = [
       { username: { contains: q.trim(), mode: "insensitive" } },
