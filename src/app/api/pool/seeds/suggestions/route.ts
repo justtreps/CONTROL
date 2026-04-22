@@ -106,7 +106,9 @@ export async function POST(req: Request) {
   let rejected = 0;
 
   for (const username of integrate) {
-    // Upsert the seed row (enabled, priority 0) + log the decision.
+    // Upsert the seed row (enabled, priority 0) + log the decision
+    // + drop the row from the cache so the refill's USABLE-count
+    // check sees the freed slot.
     await prisma.$transaction(async (tx) => {
       await tx.poolSeedAccount.upsert({
         where: { platform_username: { platform, username } },
@@ -118,15 +120,23 @@ export async function POST(req: Request) {
         update: { action: "integrated" },
         create: { platform, username, action: "integrated" },
       });
+      await tx.poolSeedSuggestionPool.deleteMany({
+        where: { platform, username },
+      });
     });
     integrated++;
   }
 
   for (const username of reject) {
-    await prisma.poolSeedSuggestionAction.upsert({
-      where: { platform_username: { platform, username } },
-      update: { action: "rejected" },
-      create: { platform, username, action: "rejected" },
+    await prisma.$transaction(async (tx) => {
+      await tx.poolSeedSuggestionAction.upsert({
+        where: { platform_username: { platform, username } },
+        update: { action: "rejected" },
+        create: { platform, username, action: "rejected" },
+      });
+      await tx.poolSeedSuggestionPool.deleteMany({
+        where: { platform, username },
+      });
     });
     rejected++;
   }
