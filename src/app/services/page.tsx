@@ -73,6 +73,9 @@ export default async function ServicesPage({
       speedScore: latest?.speedScore ?? null,
       dropScore: latest?.dropScore ?? null,
       history,
+      poolType: s.poolType,
+      targetCountry: s.targetCountry,
+      classificationManualReview: s.classificationManualReview,
     };
   });
 
@@ -81,6 +84,37 @@ export default async function ServicesPage({
       active: true,
       platform: { in: SCOPE.platforms.filter((p) => p.enabled).map((p) => p.id) },
     },
+  });
+
+  // Classification stats — computed over ALL active services (not
+  // just the current platform/type tab) so the header number doesn't
+  // flip every time the user changes tab.
+  const scopeWhere = {
+    active: true,
+    platform: { in: SCOPE.platforms.filter((p) => p.enabled).map((p) => p.id) },
+  };
+  const [byPoolType, geoTargeted] = await Promise.all([
+    prisma.service.groupBy({
+      by: ["poolType"],
+      where: scopeWhere,
+      _count: { _all: true },
+    }),
+    prisma.service.count({
+      where: { ...scopeWhere, targetCountry: { not: null } },
+    }),
+  ]);
+  const poolCounts = {
+    follower_test: 0,
+    engagement_test: 0,
+    unknown: 0,
+  };
+  for (const row of byPoolType) {
+    if (row.poolType in poolCounts) {
+      poolCounts[row.poolType as keyof typeof poolCounts] = row._count._all;
+    }
+  }
+  const manualReviewCount = await prisma.service.count({
+    where: { ...scopeWhere, classificationManualReview: true },
   });
 
   const top =
@@ -110,6 +144,20 @@ export default async function ServicesPage({
               CATALOGUE DES SERVICES BULKMEDYA DANS LE SCOPE MVP.
               SÉLECTIONNE UNE PLATEFORME ET UN TYPE POUR FILTRER.
             </p>
+            <div className="font-mono text-[11px] tracking-widest uppercase flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span className="text-[#FF3300]">
+                {poolCounts.follower_test} ABONNÉS
+              </span>
+              <span className="text-[#7DD3FC]">
+                {poolCounts.engagement_test} ENGAGEMENT
+              </span>
+              <span className="text-[#FFCC00]">
+                {manualReviewCount} MANUEL
+              </span>
+              <span className="text-[#666666]">
+                {geoTargeted} GÉO-CIBLÉS
+              </span>
+            </div>
           </div>
         </div>
       </section>
