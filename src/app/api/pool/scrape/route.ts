@@ -1,22 +1,31 @@
-// Manual scrape trigger (the "LANCER LE SCRAPE" button in Zone 2).
-// Direct-run: creates the PoolJob row ourselves, runs a single
-// tranche inline with a 280s budget, returns the outcome. If the
-// target isn't reached within that budget the job stays 'running'
-// and /api/cron/pool-scrape-runner resumes it every 5 min using
-// the stats-based checkpoint in the PoolJob row.
+// Manual scrape trigger (the "CHERCHER DE NOUVEAUX COMPTES" button).
 //
-// Pre-existing route shape kept (POST { platform, count }) so the
-// UI doesn't need a change. Response gains `finalStatus` + `stats`
-// so PoolUnifiedActions can toast results.
+// Before: this endpoint ran runScrapeJobTranche inline with a 280s
+// budget — the LoadingScreen curtain stayed up for up to 5 minutes
+// while the user was locked out of the app. Terrible UX.
+//
+// Now: create the PoolJob row in status='running', fire a
+// non-awaited internal fetch to /api/cron/pool-scrape-execute?jobId=N
+// so a fresh Vercel invocation picks up the work, and return the
+// jobId in <500ms. UI closes the curtain immediately and the new
+// job shows up in the Active Jobs card.
+//
+// Reliability: if the fire-and-forget fetch fails to reach the
+// execute endpoint (rare — Vercel edge usually dispatches the TCP
+// packet before the caller's function terminates), the
+// /api/cron/pool-scrape-runner cron runs every 5 min and drains
+// any 'running' job it finds. So the job ALWAYS eventually gets
+// processed, just with a 0-5 min delay if the hot path misfires.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { initScrapeStats } from "@/lib/pool/scraper";
-import { runScrapeJobTranche } from "@/lib/pool/scrape-runner";
 import { getSystemToggles } from "@/lib/system/toggles";
 
-export const maxDuration = 300;
+// The outer endpoint returns fast; we don't need 300s here. The
+// heavy work runs in /api/cron/pool-scrape-execute (maxDuration 300).
+export const maxDuration = 10;
 
 const bodySchema = z.object({
   platform: z.enum(["instagram", "tiktok", "both"]).default("both"),
@@ -56,18 +65,33 @@ export async function POST(req: Request) {
     },
   });
 
-  try {
-    const result = await runScrapeJobTranche(job);
-    return NextResponse.json({
-      ok: true,
-      jobId: result.jobId,
-      finalStatus: result.finalStatus,
-      stats: result.stats,
-    });
-  } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message, jobId: job.id },
-      { status: 500 }
+  // Fire-and-forget: kick off a new Vercel invocation to run the
+  // 280s tranche. We don't await the promise — the initial TCP
+  // handshake happens synchronously in the JS event loop, and
+  // Vercel routes the request to a fresh function regardless of
+  // our lifetime. The scrape-runner cron is the safety net if this
+  // dispatch misfires.
+  const origin = new URL(req.url).origin;
+  const executeUrl = `${origin}/api/cron/pool-scrape-execute?jobId=${job.id}`;
+  void fetch(executeUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` },
+    // keepalive tells the runtime we want this request to survive
+    // beyond the current function's death (Vercel respects it for
+    // outbound fetches).
+    keepalive: true,
+  }).catch((e) => {
+    console.error(
+      `[scrape] failed to dispatch execute for job#${job.id}:`,
+      (e as Error).message
     );
-  }
+  });
+
+  return NextResponse.json({
+    ok: true,
+    jobId: job.id,
+    status: "running",
+    platform,
+    count,
+  });
 }

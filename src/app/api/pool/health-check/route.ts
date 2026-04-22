@@ -1,33 +1,29 @@
-// Manual health-check trigger from the /pool "CONTRÔLE" button.
-// Direct-run (same pattern as the cron endpoint) — the orchestrator
-// no longer picks up jobType='health_check' since it capped throughput
-// at ~24 checks/min. This runs inline with a 280s budget.
+// Manual health-check trigger (the "CONTRÔLE" button in Zone 2 and
+// the "LANCER VÉRIFICATION MAINTENANT" button in the seeds section).
+//
+// Same fix as /api/pool/scrape: the old inline 280s run hung the
+// LoadingScreen curtain for up to 5 min. Now we create the PoolJob
+// row in status='running', fire a non-awaited fetch to /api/cron/
+// pool-health-check-execute?jobId=N, and return the jobId in <500ms.
+// UI closes the curtain immediately; the new job shows in Active
+// Jobs and progresses via the triggered separate invocation.
+//
+// Fallback: the 6-hour /api/cron/pool-health-check scheduled cron
+// still runs its own sweep. If the fire-and-forget misfires, the
+// job stays 'running' with zero progress until the user clicks
+// again OR a new check is scheduled.
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import {
-  initHealthStats,
-  runHealthCheckTranche,
-  maybeQueueAutoRefill,
-} from "@/lib/pool/health-check";
+import { initHealthStats } from "@/lib/pool/health-check";
 import { getSystemToggles } from "@/lib/system/toggles";
 
-export const maxDuration = 300;
-
-const BUDGET_MS = 280_000;
+export const maxDuration = 10;
 
 const bodySchema = z.object({
   platform: z.enum(["instagram", "tiktok", "both"]).default("both"),
 });
-
-async function stopRequestedFor(jobId: number): Promise<boolean> {
-  const row = await prisma.poolJob.findUnique({
-    where: { id: jobId },
-    select: { stopRequested: true },
-  });
-  return Boolean(row?.stopRequested);
-}
 
 export async function POST(req: Request) {
   const toggles = await getSystemToggles();
@@ -50,7 +46,8 @@ export async function POST(req: Request) {
   }
   const { platform } = parsed.data;
 
-  // Idempotent — same guard as the cron path.
+  // Idempotent — one health-check in flight at a time. If one is
+  // already running, return its jobId so the UI can show progress.
   const active = await prisma.poolJob.findFirst({
     where: {
       jobType: "health_check",
@@ -62,6 +59,7 @@ export async function POST(req: Request) {
       ok: true,
       skipped: "already_running",
       jobId: active.id,
+      status: active.status,
     });
   }
 
@@ -77,43 +75,25 @@ export async function POST(req: Request) {
     },
   });
 
-  try {
-    const { stats: finalStats } = await runHealthCheckTranche({
-      stats: initial,
-      budgetMs: BUDGET_MS,
-      stopRequested: () => stopRequestedFor(job.id),
-    });
-
-    const stopped = await stopRequestedFor(job.id);
-    await maybeQueueAutoRefill(finalStats);
-
-    await prisma.poolJob.update({
-      where: { id: job.id },
-      data: {
-        status: stopped ? "stopped" : "completed",
-        stats: finalStats as unknown as import("@prisma/client").Prisma.InputJsonValue,
-        endedAt: new Date(),
-      },
-    });
-
-    return NextResponse.json({
-      ok: true,
-      jobId: job.id,
-      status: stopped ? "stopped" : "completed",
-      stats: finalStats,
-    });
-  } catch (e) {
-    await prisma.poolJob.update({
-      where: { id: job.id },
-      data: {
-        status: "error",
-        error: (e as Error).message.slice(0, 1000),
-        endedAt: new Date(),
-      },
-    });
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
+  // Fire-and-forget to the execute worker (separate Vercel invocation,
+  // 300s maxDuration).
+  const origin = new URL(req.url).origin;
+  const executeUrl = `${origin}/api/cron/pool-health-check-execute?jobId=${job.id}`;
+  void fetch(executeUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` },
+    keepalive: true,
+  }).catch((e) => {
+    console.error(
+      `[health-check] failed to dispatch execute for job#${job.id}:`,
+      (e as Error).message
     );
-  }
+  });
+
+  return NextResponse.json({
+    ok: true,
+    jobId: job.id,
+    status: "running",
+    platform,
+  });
 }
