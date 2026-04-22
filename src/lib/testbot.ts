@@ -65,7 +65,13 @@ type AttemptOutcome =
 export async function runTestBot(
   opts: { maxOrders?: number } = {}
 ): Promise<TestBotResult> {
-  const maxOrders = opts.maxOrders ?? 10;
+  // Bumped 10 → 30 because we saw TT services get completely starved:
+  // with 1096 IG vs 714 TT active services and a "never-tested first"
+  // sort, all 10 slots went to IG every run and TT tests never fired.
+  // At 30 slots with fair platform rotation below, each platform gets
+  // ~15 per run and the full catalog cycles through in ~2.5 days
+  // instead of 7.5.
+  const maxOrders = opts.maxOrders ?? 30;
   const result: TestBotResult = {
     attempted: 0,
     placed: 0,
@@ -93,17 +99,39 @@ export async function runTestBot(
     },
   });
 
-  const due = services
-    .filter((s) => {
-      const last = s.testOrders[0];
-      return !last || last.placedAt < cutoff;
-    })
-    .sort((a, b) => {
-      const la = a.testOrders[0]?.placedAt?.getTime() ?? 0;
-      const lb = b.testOrders[0]?.placedAt?.getTime() ?? 0;
-      return la - lb;
-    })
-    .slice(0, maxOrders);
+  // Platform-fair rotation: split eligible services per platform,
+  // take the oldest half of maxOrders from each, then interleave so
+  // the run alternates IG / TT / IG / TT. Prevents the starvation we
+  // saw where 1000+ never-tested IG services always sorted ahead of
+  // any TT service and TT never got a slot.
+  const eligible = services.filter((s) => {
+    const last = s.testOrders[0];
+    return !last || last.placedAt < cutoff;
+  });
+  const byLastTest = (
+    a: (typeof services)[number],
+    b: (typeof services)[number]
+  ) => {
+    const la = a.testOrders[0]?.placedAt?.getTime() ?? 0;
+    const lb = b.testOrders[0]?.placedAt?.getTime() ?? 0;
+    return la - lb;
+  };
+  const igHalf = Math.ceil(maxOrders / 2);
+  const ttHalf = Math.floor(maxOrders / 2);
+  const dueIg = eligible
+    .filter((s) => s.platform === "instagram")
+    .sort(byLastTest)
+    .slice(0, igHalf);
+  const dueTt = eligible
+    .filter((s) => s.platform === "tiktok")
+    .sort(byLastTest)
+    .slice(0, ttHalf);
+  const due: typeof services = [];
+  const maxLen = Math.max(dueIg.length, dueTt.length);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < dueIg.length) due.push(dueIg[i]);
+    if (i < dueTt.length) due.push(dueTt[i]);
+  }
 
   for (const service of due) {
     result.attempted++;

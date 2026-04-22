@@ -54,6 +54,13 @@ export async function runOrchestratorTick(): Promise<OrchestratorResult> {
   if (!toggles.poolScrapeEnabled) disabledTypes.push("scrape");
   if (!toggles.poolHealthcheckEnabled) disabledTypes.push("health_check");
 
+  // health_check runs directly from its cron endpoint (300s budget,
+  // concurrency 8) since the 8s tranche here capped throughput at
+  // ~24 checks/min. We exclude jobType='health_check' unconditionally
+  // so an older 'running' health_check row left from the queue era
+  // doesn't get re-picked here.
+  const excluded = new Set<string>([...disabledTypes, "health_check"]);
+
   // Pick the oldest non-terminal job whose subsystem is still enabled.
   // 'running' rows also get picked up in case a previous tick died
   // mid-tranche — the tranche runners are idempotent (they read from
@@ -61,9 +68,7 @@ export async function runOrchestratorTick(): Promise<OrchestratorResult> {
   const job = await prisma.poolJob.findFirst({
     where: {
       status: { in: ["pending", "running"] },
-      ...(disabledTypes.length
-        ? { jobType: { notIn: disabledTypes } }
-        : {}),
+      jobType: { notIn: Array.from(excluded) },
     },
     orderBy: { startedAt: "asc" },
   });

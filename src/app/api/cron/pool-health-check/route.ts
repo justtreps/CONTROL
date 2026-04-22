@@ -1,18 +1,42 @@
-// Cron-scheduled health check. Queues a health_check job for both
-// platforms; the orchestrator picks it up and runs tranches until
-// done. Honors PoolConfig.healthCheckEnabled.
+// Direct-run health-check cron (replaces the old queue-for-orchestrator
+// pattern). Creates a PoolJob row, runs runHealthCheckTranche straight
+// through with a 280s budget, and updates the row on completion.
+//
+// Why direct-run:
+//   The orchestrator gives each tranche only 8s per 60s cron tick
+//   (~13% duty cycle). With concurrency 8 that capped our throughput
+//   at ~24 checks/min — job #020 took 83 min to do 2008 checks.
+//   Running directly here unlocks the full 300s function budget and
+//   pushes throughput to ~300+ checks/min.
+//
+// Auth: Bearer CRON_SECRET (Vercel Cron sets it automatically).
+// Kill switch: honors SystemToggle.poolHealthcheckEnabled.
+// Idempotency: if a health_check job is already running, we skip.
+//              stopRequested polling checks PoolJob.stopRequested
+//              every tranche iteration so manual STOP still works.
 
 import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getPoolConfig } from "@/lib/pool/config";
-import { initHealthStats } from "@/lib/pool/health-check";
+import {
+  initHealthStats,
+  runHealthCheckTranche,
+  maybeQueueAutoRefill,
+} from "@/lib/pool/health-check";
 import { getSystemToggles } from "@/lib/system/toggles";
 
-// Bumped from 30s → 300s so the orchestrator can finish a full
-// health-check run in one invocation (with concurrency 8 + pool
-// of ~700 rows, a clean sweep takes ~3-5 min).
 export const maxDuration = 300;
+
+const BUDGET_MS = 280_000; // 280s of actual work — leaves 20s headroom
+
+async function stopRequestedFor(jobId: number): Promise<boolean> {
+  const row = await prisma.poolJob.findUnique({
+    where: { id: jobId },
+    select: { stopRequested: true },
+  });
+  return Boolean(row?.stopRequested);
+}
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
@@ -29,7 +53,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, skipped: "disabled" });
   }
 
-  // Idempotent: if a health_check is already pending/running, skip.
+  // Idempotent — one health-check in flight at a time.
   const active = await prisma.poolJob.findFirst({
     where: {
       jobType: "health_check",
@@ -37,21 +61,64 @@ export async function POST(req: Request) {
     },
   });
   if (active) {
-    return NextResponse.json({ ok: true, skipped: "already_running", jobId: active.id });
+    return NextResponse.json({
+      ok: true,
+      skipped: "already_running",
+      jobId: active.id,
+    });
   }
 
-  const stats = initHealthStats("both");
+  const initial = initHealthStats("both");
   const job = await prisma.poolJob.create({
     data: {
       jobType: "health_check",
       platform: null,
       trigger: "cron",
-      status: "pending",
-      stats: stats as unknown as import("@prisma/client").Prisma.InputJsonValue,
+      status: "running",
+      stats:
+        initial as unknown as import("@prisma/client").Prisma.InputJsonValue,
     },
   });
 
-  return NextResponse.json({ ok: true, jobId: job.id });
+  try {
+    const { stats: finalStats } = await runHealthCheckTranche({
+      stats: initial,
+      budgetMs: BUDGET_MS,
+      stopRequested: () => stopRequestedFor(job.id),
+    });
+
+    const stopped = await stopRequestedFor(job.id);
+    await maybeQueueAutoRefill(finalStats);
+
+    await prisma.poolJob.update({
+      where: { id: job.id },
+      data: {
+        status: stopped ? "stopped" : "completed",
+        stats: finalStats as unknown as import("@prisma/client").Prisma.InputJsonValue,
+        endedAt: new Date(),
+      },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      jobId: job.id,
+      status: stopped ? "stopped" : "completed",
+      stats: finalStats,
+    });
+  } catch (e) {
+    await prisma.poolJob.update({
+      where: { id: job.id },
+      data: {
+        status: "error",
+        error: (e as Error).message.slice(0, 1000),
+        endedAt: new Date(),
+      },
+    });
+    return NextResponse.json(
+      { error: (e as Error).message },
+      { status: 500 }
+    );
+  }
 }
 
 export const GET = POST;

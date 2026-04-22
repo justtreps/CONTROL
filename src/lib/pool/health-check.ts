@@ -25,11 +25,12 @@ export type HealthStats = {
   invalidated: number;
   errors: string[];
   callsUsed: number;
-  // Retained for retro-compat with in-flight jobs' stats JSON; the
-  // new runner (orderBy lastCheckedAt ASC) doesn't use it because
-  // every processed row's lastCheckedAt gets bumped to NOW, so the
-  // next findMany naturally returns the oldest-next set without any
-  // explicit cursor.
+  // ISO timestamp set once at job start. Used by the findMany filter
+  // `lastCheckedAt < startedAt` so no row already processed in this
+  // job gets re-picked — eliminates the 1.8× duplicate-check ratio
+  // we observed on job #020.
+  startedAt: string;
+  // Retained for retro-compat with in-flight jobs' stats JSON.
   lastProcessedId: number;
   batchSize: number;
   queuedRefills: string[]; // platforms that auto-refill fired for
@@ -44,10 +45,8 @@ export function initHealthStats(
     invalidated: 0,
     errors: [],
     callsUsed: 0,
+    startedAt: new Date().toISOString(),
     lastProcessedId: 0,
-    // Bumped from 500 → 2000 to let a single cron run (6h cycle)
-    // realistically sweep the entire available pool without multi-day
-    // staleness.
     batchSize: 2000,
     queuedRefills: [],
   };
@@ -73,6 +72,13 @@ export async function runHealthCheckTranche({
   const platforms: string[] =
     stats.platform === "both" ? ["instagram", "tiktok"] : [stats.platform];
 
+  // Retro-compat: jobs started before this field existed have
+  // startedAt === undefined. Fall back to "now - 1h" so they don't
+  // accidentally filter out every row.
+  const jobStart = stats.startedAt
+    ? new Date(stats.startedAt)
+    : new Date(Date.now() - 3_600_000);
+
   while (Date.now() < deadline) {
     if (await stopRequested()) return { done: false, stats };
     if (stats.callsUsed >= cfg.maxRapidapiCallsPerHealthcheck)
@@ -81,10 +87,14 @@ export async function runHealthCheckTranche({
 
     // Pull a wave that's 4× the concurrency so each findMany round
     // feeds multiple parallel batches before we hit the DB again.
+    // `lastCheckedAt < jobStart` prevents re-picking rows we've
+    // already processed in THIS job (they now have lastCheckedAt=NOW
+    // which is >= jobStart).
     const rows = await prisma.testAccount.findMany({
       where: {
         platform: { in: platforms },
         status: "available",
+        lastCheckedAt: { lt: jobStart },
       },
       orderBy: { lastCheckedAt: "asc" }, // oldest check first
       take: CONCURRENCY * 4,

@@ -94,9 +94,12 @@ model PoolConfig {
   refillThresholdTiktok            Int      @default(500)
   refillTargetTiktok               Int      @default(1000)
 
-  // RapidAPI budget caps per run
-  maxRapidapiCallsPerScrapeRun     Int      @default(10000)
-  maxRapidapiCallsPerHealthcheck   Int      @default(3000)
+  // RapidAPI budget caps per run. Dropped from 10000/3000 to 3000/
+  // 1500 after seeing the daily quota hit ~7500 calls/24h — a tighter
+  // ceiling per run amortizes better across the day and leaves
+  // headroom for measurement bot + testbot + seeds-health-check.
+  maxRapidapiCallsPerScrapeRun     Int      @default(3000)
+  maxRapidapiCallsPerHealthcheck   Int      @default(1500)
   maxAttemptsMethodB               Int      @default(5000)
   maxPagesPerSeed                  Int      @default(50)
 
