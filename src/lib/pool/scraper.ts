@@ -15,10 +15,16 @@
 // Method B (random-username probes) remains a stub — not a priority yet.
 
 import { prisma } from "@/lib/prisma";
-import { fetchInstagramFollowers } from "@/lib/rapidapi/instagram";
+import {
+  fetchInstagramFollowers,
+  fetchInstagramUserPosts,
+  instagramPostUrl,
+} from "@/lib/rapidapi/instagram";
 import {
   fetchTikTokFollowers,
   fetchTikTokUserByUsername,
+  fetchTikTokUserVideos,
+  tiktokVideoUrl,
 } from "@/lib/rapidapi/tiktok";
 import { fetchIgOracle, fetchTtOracle, type OracleResult } from "./oracle";
 import { getPoolConfig } from "./config";
@@ -232,6 +238,83 @@ async function buildScrapeContext(
 const IG_ORACLE_CONCURRENCY = 4;
 const TT_ORACLE_CONCURRENCY = 8;
 const TT_MULTI_SEED_CONCURRENCY = 3;
+
+// Shape of a post we can hand BulkMedya for engagement tests. Built
+// from either fetchInstagramUserPosts() or fetchTikTokUserVideos()
+// and filtered by freshness + natural likes against PoolConfig before
+// being written to TestAccountMedia.
+type EngagementPost = {
+  mediaId: string;
+  mediaUrl: string;
+  mediaType: "post" | "reel" | "video";
+  likeCount: number;
+  postedAt: Date | null;
+};
+
+// Fetch + filter an engagement candidate's recent posts. Returns an
+// empty array when the provider call fails OR the account has no
+// post matching the freshness + likes ceiling — the caller treats
+// this as "reject: no_valid_posts" and doesn't insert the account.
+//
+// Uses stats.callsUsed for budget accounting and stats.errors for
+// any transient provider error (so we can see why a given seed's
+// engagement yield tanked).
+async function fetchValidEngagementPosts({
+  platform,
+  userId,
+  stats,
+  cfg,
+}: {
+  platform: "instagram" | "tiktok";
+  userId: string;
+  stats: ScrapeStats;
+  cfg: Awaited<ReturnType<typeof getPoolConfig>>;
+}): Promise<EngagementPost[]> {
+  const maxAgeMs =
+    (cfg.engagementFreshnessMaxDays ?? 90) * 24 * 3600 * 1000;
+  const nowMs = Date.now();
+  const maxLikes = cfg.engagementLikesMaxPerPost ?? 20;
+
+  try {
+    if (platform === "instagram") {
+      const { posts } = await fetchInstagramUserPosts(userId, 5);
+      stats.callsUsed++;
+      const valid: EngagementPost[] = [];
+      for (const p of posts) {
+        if (p.likeCount > maxLikes) continue;
+        if (p.takenAt !== null && nowMs - p.takenAt > maxAgeMs) continue;
+        valid.push({
+          mediaId: p.mediaId,
+          mediaUrl: instagramPostUrl(p),
+          mediaType: p.mediaType,
+          likeCount: p.likeCount,
+          postedAt: p.takenAt ? new Date(p.takenAt) : null,
+        });
+      }
+      return valid;
+    }
+    const { videos } = await fetchTikTokUserVideos(userId, 5);
+    stats.callsUsed++;
+    const valid: EngagementPost[] = [];
+    for (const v of videos) {
+      if (v.likeCount > maxLikes) continue;
+      if (v.createTime !== null && nowMs - v.createTime > maxAgeMs) continue;
+      valid.push({
+        mediaId: v.mediaId,
+        mediaUrl: tiktokVideoUrl(v),
+        mediaType: "video",
+        likeCount: v.likeCount,
+        postedAt: v.createTime ? new Date(v.createTime) : null,
+      });
+    }
+    return valid;
+  } catch (e) {
+    stats.errors.push(
+      `engagement-posts ${platform}/${userId}: ${(e as Error).message.slice(0, 120)}`
+    );
+    return [];
+  }
+}
 
 // Per-seed lifecycle: run the processor inside try/catch, track
 // errors at both job and DB level, auto-disable on persistent
@@ -619,24 +702,67 @@ async function validateAndUpsertIgCandidate({
   });
 
   const storedUsername = oracle.username || f.username;
-  const res = await prisma.testAccount.upsert({
-    where: { platform_username: { platform: "instagram", username: storedUsername } },
-    update: {},
-    create: {
+
+  // Engagement candidate → we need at least one valid post before we
+  // commit to persisting the row. Otherwise the pool would fill up
+  // with accounts the testbot can't use.
+  let validPosts: EngagementPost[] = [];
+  if (accountType === "engagement_test") {
+    validPosts = await fetchValidEngagementPosts({
       platform: "instagram",
-      username: storedUsername,
       userId: oracle.userId,
-      status: "available",
-      accountType,
-      detectedCountry: country.country,
-      countryConfidence: country.confidence,
-      lastFollowerCount: oracle.followerCount,
-      lastMediaCount: oracle.mediaCount,
-      lastFollowingCount: oracle.followingCount,
-      scrapeSource: "big_account_followers",
-      scrapeSeedAccount: seed.username,
-    },
+      stats,
+      cfg: cfg as Awaited<ReturnType<typeof getPoolConfig>>,
+    });
+    if (validPosts.length === 0) {
+      stats.candidatesRejected.other++;
+      return;
+    }
+  }
+
+  // Insert the account row + any engagement media rows atomically so
+  // we never end up with a half-populated engagement account.
+  const res = await prisma.$transaction(async (tx) => {
+    const account = await tx.testAccount.upsert({
+      where: {
+        platform_username: { platform: "instagram", username: storedUsername },
+      },
+      update: {},
+      create: {
+        platform: "instagram",
+        username: storedUsername,
+        userId: oracle.userId,
+        status: "available",
+        accountType,
+        detectedCountry: country.country,
+        countryConfidence: country.confidence,
+        lastFollowerCount: oracle.followerCount,
+        lastMediaCount: oracle.mediaCount,
+        lastFollowingCount: oracle.followingCount,
+        scrapeSource: "big_account_followers",
+        scrapeSeedAccount: seed.username,
+      },
+    });
+    if (
+      accountType === "engagement_test" &&
+      account.firstSeenAt.getTime() > Date.now() - 2000
+    ) {
+      await tx.testAccountMedia.createMany({
+        data: validPosts.map((p) => ({
+          testAccountId: account.id,
+          mediaId: p.mediaId,
+          mediaUrl: p.mediaUrl,
+          mediaType: p.mediaType,
+          postedAt: p.postedAt,
+          naturalLikesCount: p.likeCount,
+          status: "active",
+        })),
+        skipDuplicates: true,
+      });
+    }
+    return account;
   });
+
   if (res.firstSeenAt.getTime() > Date.now() - 2000) {
     stats.addedA++;
     stats.candidatesQualified++;
@@ -810,29 +936,65 @@ async function validateAndUpsertTtCandidate({
   });
 
   const storedUsername = oracle.username || f.unique_id;
-  const res = await prisma.testAccount.upsert({
-    where: {
-      platform_username: {
+
+  let validPosts: EngagementPost[] = [];
+  if (accountType === "engagement_test") {
+    validPosts = await fetchValidEngagementPosts({
+      platform: "tiktok",
+      userId: oracle.userId,
+      stats,
+      cfg: cfg as Awaited<ReturnType<typeof getPoolConfig>>,
+    });
+    if (validPosts.length === 0) {
+      stats.candidatesRejected.other++;
+      return;
+    }
+  }
+
+  const res = await prisma.$transaction(async (tx) => {
+    const account = await tx.testAccount.upsert({
+      where: {
+        platform_username: {
+          platform: "tiktok",
+          username: storedUsername,
+        },
+      },
+      update: {},
+      create: {
         platform: "tiktok",
         username: storedUsername,
+        userId: oracle.userId,
+        status: "available",
+        accountType,
+        detectedCountry: country.country,
+        countryConfidence: country.confidence,
+        lastFollowerCount: oracle.followerCount,
+        lastMediaCount: oracle.mediaCount,
+        lastFollowingCount: oracle.followingCount,
+        scrapeSource: "big_account_followers",
+        scrapeSeedAccount: seed.username,
       },
-    },
-    update: {},
-    create: {
-      platform: "tiktok",
-      username: storedUsername,
-      userId: oracle.userId,
-      status: "available",
-      accountType,
-      detectedCountry: country.country,
-      countryConfidence: country.confidence,
-      lastFollowerCount: oracle.followerCount,
-      lastMediaCount: oracle.mediaCount,
-      lastFollowingCount: oracle.followingCount,
-      scrapeSource: "big_account_followers",
-      scrapeSeedAccount: seed.username,
-    },
+    });
+    if (
+      accountType === "engagement_test" &&
+      account.firstSeenAt.getTime() > Date.now() - 2000
+    ) {
+      await tx.testAccountMedia.createMany({
+        data: validPosts.map((p) => ({
+          testAccountId: account.id,
+          mediaId: p.mediaId,
+          mediaUrl: p.mediaUrl,
+          mediaType: p.mediaType,
+          postedAt: p.postedAt,
+          naturalLikesCount: p.likeCount,
+          status: "active",
+        })),
+        skipDuplicates: true,
+      });
+    }
+    return account;
   });
+
   if (res.firstSeenAt.getTime() > Date.now() - 2000) {
     stats.addedA++;
     stats.candidatesQualified++;

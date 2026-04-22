@@ -246,3 +246,89 @@ export async function fetchInstagramUserInfo(
     isVerified: Boolean(u.is_verified ?? d.is_verified ?? json.is_verified),
   };
 }
+
+// ── Recent posts — engagement pool path ─────────────────────────────
+// Shape used by the scraper when an account qualifies as engagement_
+// test and we need to build its TestAccountMedia rows.
+
+export type InstagramPost = {
+  mediaId: string;       // platform-native id / pk
+  shortcode: string;     // used to build https://www.instagram.com/p/{code}/
+  mediaType: "post" | "reel";
+  likeCount: number;
+  takenAt: number | null; // epoch ms (null if provider didn't expose)
+};
+
+export type InstagramPostsResponse = {
+  count: number;
+  posts: InstagramPost[];
+};
+
+type RawUserPosts = {
+  data?: {
+    items?: Array<{
+      id?: string | number;
+      pk?: string | number;
+      code?: string;
+      shortcode?: string;
+      like_count?: number;
+      likes_count?: number;
+      taken_at?: number | string;
+      taken_at_timestamp?: number | string;
+      media_type?: number; // 1=photo, 2=video/reel, 8=carousel
+      product_type?: string; // "clips" for reels
+    }>;
+    count?: number;
+  };
+  items?: Array<unknown>;
+};
+
+// Fetch a small window of the most recent feed posts for a user id.
+// We don't page further — we only need a few valid candidates to
+// populate TestAccountMedia.
+export async function fetchInstagramUserPosts(
+  userId: string,
+  count = 5
+): Promise<InstagramPostsResponse> {
+  const json = (await call(
+    `/userposts/?username_or_id=${encodeURIComponent(userId)}&count=${count}`
+  )) as RawUserPosts;
+
+  const rawItems = json?.data?.items ?? [];
+  const posts: InstagramPost[] = [];
+  for (const raw of rawItems) {
+    const mediaId = String(raw.pk ?? raw.id ?? "");
+    const shortcode = String(raw.shortcode ?? raw.code ?? "");
+    if (!mediaId || !shortcode) continue;
+    const isReel = raw.product_type === "clips" || raw.media_type === 2;
+    const likeCount = Number(raw.like_count ?? raw.likes_count ?? 0);
+    const takenAtRaw = raw.taken_at ?? raw.taken_at_timestamp ?? null;
+    const takenAt = takenAtRaw
+      ? // IG returns either seconds (legacy) or millis depending on endpoint.
+        // Normalize: < 1e12 means seconds, >= 1e12 means millis.
+        Number(takenAtRaw) < 1e12
+        ? Number(takenAtRaw) * 1000
+        : Number(takenAtRaw)
+      : null;
+    posts.push({
+      mediaId,
+      shortcode,
+      mediaType: isReel ? "reel" : "post",
+      likeCount,
+      takenAt,
+    });
+  }
+  return {
+    count: posts.length,
+    posts,
+  };
+}
+
+// Build the permalink from a shortcode. Reels use /reel/, feed posts
+// use /p/. Picking the right one matters for BulkMedya — wrong URL
+// shape = refund.
+export function instagramPostUrl(post: InstagramPost): string {
+  return post.mediaType === "reel"
+    ? `https://www.instagram.com/reel/${post.shortcode}/`
+    : `https://www.instagram.com/p/${post.shortcode}/`;
+}

@@ -104,7 +104,7 @@ export function PoolAccountsList() {
     } finally {
       setLoading(false);
     }
-  }, [platform, status, source, q, sort, order, page, limit]);
+  }, [platform, status, source, accountType, country, q, sort, order, page, limit]);
 
   useEffect(() => {
     refresh();

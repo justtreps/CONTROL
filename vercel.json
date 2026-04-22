@@ -12,6 +12,7 @@
     { "path": "/api/cron/pool-scrape-runner", "schedule": "*/5 * * * *" },
     { "path": "/api/cron/pool-health-check", "schedule": "0 */6 * * *" },
     { "path": "/api/cron/pool-seeds-health-check", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/pool-posts-health-check", "schedule": "0 */6 * * *" },
     { "path": "/api/cron/pool-cleanup", "schedule": "0 4 * * *" },
     { "path": "/api/cron/suggestions-refill", "schedule": "*/15 * * * *" }
   ]

@@ -22,12 +22,32 @@ export type PoolStats = {
   lastScrapeAt: string | null;
   nextHealthCheckAt: string | null;
   activeJobs: number;
+  // Dual-pool additions — always present even when engagementPool
+  // Enabled is false (engagement counts will just be 0). Separate
+  // sub-objects keep the existing Hero layout working.
+  followerPool: {
+    instagram: StatusBreakdown;
+    tiktok: StatusBreakdown;
+  };
+  engagementPool: {
+    instagram: StatusBreakdown;
+    tiktok: StatusBreakdown;
+  };
+  countryBreakdown: {
+    follower: Array<{ country: string | null; count: number }>;
+    engagement: Array<{ country: string | null; count: number }>;
+  };
 };
 
-async function statusBreakdown(platform: string): Promise<StatusBreakdown> {
+async function statusBreakdown(
+  platform: string,
+  accountType?: "follower_test" | "engagement_test"
+): Promise<StatusBreakdown> {
+  const where: Record<string, unknown> = { platform };
+  if (accountType) where.accountType = accountType;
   const rows = await prisma.testAccount.groupBy({
     by: ["status"],
-    where: { platform },
+    where,
     _count: { _all: true },
   });
   const empty: StatusBreakdown = {
@@ -45,29 +65,68 @@ async function statusBreakdown(platform: string): Promise<StatusBreakdown> {
   return empty;
 }
 
+async function countryBreakdownFor(
+  accountType: "follower_test" | "engagement_test"
+): Promise<Array<{ country: string | null; count: number }>> {
+  const rows = await prisma.testAccount.groupBy({
+    by: ["detectedCountry"],
+    where: { accountType, status: { in: ["available", "assigned"] } },
+    _count: { _all: true },
+    orderBy: { _count: { detectedCountry: "desc" } },
+    take: 6,
+  });
+  return rows.map((r) => ({
+    country: r.detectedCountry,
+    count: r._count._all,
+  }));
+}
+
 export async function getPoolStats(): Promise<PoolStats> {
-  const [cfg, igBreakdown, ttBreakdown, lastScrape, activeJobs] =
-    await Promise.all([
-      getPoolConfig(),
-      statusBreakdown("instagram"),
-      statusBreakdown("tiktok"),
-      prisma.poolJob.findFirst({
-        where: { jobType: "scrape", status: "completed" },
-        orderBy: { endedAt: "desc" },
-        select: { endedAt: true },
-      }),
-      prisma.poolJob.count({
-        where: { status: { in: ["pending", "running"] } },
-      }),
-    ]);
+  const [
+    cfg,
+    igBreakdown,
+    ttBreakdown,
+    igFollower,
+    ttFollower,
+    igEngagement,
+    ttEngagement,
+    followerCountries,
+    engagementCountries,
+    lastScrape,
+    activeJobs,
+  ] = await Promise.all([
+    getPoolConfig(),
+    statusBreakdown("instagram"),
+    statusBreakdown("tiktok"),
+    statusBreakdown("instagram", "follower_test"),
+    statusBreakdown("tiktok", "follower_test"),
+    statusBreakdown("instagram", "engagement_test"),
+    statusBreakdown("tiktok", "engagement_test"),
+    countryBreakdownFor("follower_test"),
+    countryBreakdownFor("engagement_test"),
+    prisma.poolJob.findFirst({
+      where: { jobType: "scrape", status: "completed" },
+      orderBy: { endedAt: "desc" },
+      select: { endedAt: true },
+    }),
+    prisma.poolJob.count({
+      where: { status: { in: ["pending", "running"] } },
+    }),
+  ]);
 
   return {
     instagram: { ...igBreakdown, target: cfg.refillTargetInstagram },
     tiktok: { ...ttBreakdown, target: cfg.refillTargetTiktok },
     autoRefillEnabled: cfg.autoRefillEnabled,
     lastScrapeAt: lastScrape?.endedAt?.toISOString() ?? null,
-    nextHealthCheckAt: null, // best-effort; real cron next-run would need cron parser
+    nextHealthCheckAt: null,
     activeJobs,
+    followerPool: { instagram: igFollower, tiktok: ttFollower },
+    engagementPool: { instagram: igEngagement, tiktok: ttEngagement },
+    countryBreakdown: {
+      follower: followerCountries,
+      engagement: engagementCountries,
+    },
   };
 }
 

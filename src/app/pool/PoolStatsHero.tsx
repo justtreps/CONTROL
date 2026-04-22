@@ -47,8 +47,13 @@ export function PoolStatsHero({ initialStats }: Props) {
         </div>
 
         <div className="lg:col-span-5 min-w-0 font-mono text-xs uppercase tracking-widest flex flex-col gap-6">
-          <PlatformBlock label="INSTAGRAM" data={stats.instagram} />
-          <PlatformBlock label="TIKTOK" data={stats.tiktok} />
+          {/* Dual-pool split : abonnés / engagement. Counts are
+              computed from TestAccount.accountType — engagement row
+              is 0/0 until engagementPoolEnabled is flipped on AND
+              the scraper ingests matching candidates. */}
+          <DualPoolBlock stats={stats} />
+
+          <CountryBreakdown stats={stats} />
 
           <div className="flex flex-col gap-2 pt-4 border-t border-[#666666]/20">
             <MetaRow
@@ -72,31 +77,87 @@ export function PoolStatsHero({ initialStats }: Props) {
   );
 }
 
-function PlatformBlock({
-  label,
-  data,
-}: {
-  label: string;
-  data: { available: number; assigned: number; consumed: number; invalid: number; archived: number; target: number };
-}) {
-  const pct = Math.min(100, Math.round((data.available / Math.max(1, data.target)) * 100));
+// Emoji map for the top-countries row. Kept in sync with the one in
+// PoolAccountsList. Unknown codes just show the bare ISO.
+const FLAGS: Record<string, string> = {
+  FR: "🇫🇷", BR: "🇧🇷", US: "🇺🇸", GB: "🇬🇧", DE: "🇩🇪",
+  ES: "🇪🇸", IT: "🇮🇹", IN: "🇮🇳", MX: "🇲🇽", TR: "🇹🇷",
+  SA: "🇸🇦", AE: "🇦🇪", JP: "🇯🇵", KR: "🇰🇷", CN: "🇨🇳",
+  RU: "🇷🇺", ID: "🇮🇩", NG: "🇳🇬", AR: "🇦🇷", CO: "🇨🇴",
+  CL: "🇨🇱", PE: "🇵🇪", PT: "🇵🇹", NL: "🇳🇱", BE: "🇧🇪",
+  PL: "🇵🇱", CA: "🇨🇦", AU: "🇦🇺", PH: "🇵🇭", TH: "🇹🇭",
+  VN: "🇻🇳", EG: "🇪🇬", ZA: "🇿🇦", IR: "🇮🇷", PK: "🇵🇰",
+  BD: "🇧🇩", MA: "🇲🇦", DZ: "🇩🇿", TN: "🇹🇳",
+};
+
+function DualPoolBlock({ stats }: { stats: PoolStats }) {
+  const follower = {
+    ig: stats.followerPool.instagram.available + stats.followerPool.instagram.assigned,
+    tt: stats.followerPool.tiktok.available + stats.followerPool.tiktok.assigned,
+  };
+  const engagement = {
+    ig: stats.engagementPool.instagram.available + stats.engagementPool.instagram.assigned,
+    tt: stats.engagementPool.tiktok.available + stats.engagementPool.tiktok.assigned,
+  };
   return (
-    <div className="flex flex-col gap-1 border-l-2 border-[#FF3300] pl-3">
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="text-[#FF3300]">{label}</span>
-        <span className="text-[#666666] tabular-nums">{pct}%</span>
-      </div>
-      <Row
-        label="AVAILABLE"
-        value={`${data.available.toLocaleString("en-US")} / ${data.target.toLocaleString("en-US")}`}
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <PoolSummary
+        title="POOL ABONNÉS"
+        igCount={follower.ig}
+        ttCount={follower.tt}
         accent
       />
-      <Row label="ASSIGNED" value={String(data.assigned)} />
-      <Row label="CONSUMED" value={String(data.consumed)} />
-      <Row label="INVALID" value={String(data.invalid)} />
+      <PoolSummary
+        title="POOL ENGAGEMENT"
+        igCount={engagement.ig}
+        ttCount={engagement.tt}
+      />
     </div>
   );
 }
+
+function PoolSummary({
+  title,
+  igCount,
+  ttCount,
+  accent = false,
+}: {
+  title: string;
+  igCount: number;
+  ttCount: number;
+  accent?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col gap-1 border-l-2 pl-3 ${accent ? "border-[#FF3300]" : "border-[#666666]/60"}`}
+    >
+      <div className={`${accent ? "text-[#FF3300]" : "text-white"}`}>{title}</div>
+      <Row label="IG" value={igCount.toLocaleString("en-US")} accent />
+      <Row label="TT" value={ttCount.toLocaleString("en-US")} accent />
+    </div>
+  );
+}
+
+function CountryBreakdown({ stats }: { stats: PoolStats }) {
+  const follower = stats.countryBreakdown.follower;
+  if (follower.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1 pt-4 border-t border-[#666666]/20">
+      <div className="text-[#666666]">[ TOP PAYS · POOL ABONNÉS ]</div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {follower.slice(0, 5).map((c) => (
+          <span key={c.country ?? "null"} className="text-white">
+            {c.country
+              ? `${FLAGS[c.country] ?? ""} ${c.country}`
+              : "UNKNOWN"}{" "}
+            <span className="text-[#666666]">{c.count}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function Row({
   label,

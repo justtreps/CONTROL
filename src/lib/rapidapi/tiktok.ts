@@ -120,6 +120,68 @@ export async function fetchTikTokUserByUsername(
   };
 }
 
+// ── Recent videos — engagement pool path ───────────────────────────
+export type TikTokVideo = {
+  mediaId: string;        // aweme_id
+  authorUniqueId: string; // needed to build the permalink
+  likeCount: number;
+  createTime: number | null; // epoch ms
+};
+
+export type TikTokVideosResponse = {
+  count: number;
+  videos: TikTokVideo[];
+};
+
+type RawUserVideos = {
+  code?: number;
+  data?: {
+    videos?: Array<{
+      id?: string | number;
+      aweme_id?: string | number;
+      author?: { unique_id?: string; uniqueId?: string };
+      unique_id?: string;
+      digg_count?: number;
+      like_count?: number;
+      play_count?: number;
+      create_time?: number | string;
+      createTime?: number | string;
+    }>;
+  };
+};
+
+export async function fetchTikTokUserVideos(
+  userId: string,
+  count = 5
+): Promise<TikTokVideosResponse> {
+  const json = (await call(
+    `/user/posts?user_id=${encodeURIComponent(userId)}&count=${count}`
+  )) as RawUserVideos;
+
+  const rawItems = json?.data?.videos ?? [];
+  const videos: TikTokVideo[] = [];
+  for (const raw of rawItems) {
+    const mediaId = String(raw.aweme_id ?? raw.id ?? "");
+    const authorUniqueId = String(
+      raw.author?.unique_id ?? raw.author?.uniqueId ?? raw.unique_id ?? ""
+    );
+    if (!mediaId || !authorUniqueId) continue;
+    const likeCount = Number(raw.digg_count ?? raw.like_count ?? 0);
+    const ctRaw = raw.create_time ?? raw.createTime ?? null;
+    const createTime = ctRaw
+      ? Number(ctRaw) < 1e12
+        ? Number(ctRaw) * 1000
+        : Number(ctRaw)
+      : null;
+    videos.push({ mediaId, authorUniqueId, likeCount, createTime });
+  }
+  return { count: videos.length, videos };
+}
+
+export function tiktokVideoUrl(video: TikTokVideo): string {
+  return `https://www.tiktok.com/@${video.authorUniqueId}/video/${video.mediaId}`;
+}
+
 // Resolve by numeric user_id. Used by the pool oracle to verify that
 // a follower returned by /user/followers still exists under the same
 // stable id + fetch fresh counts. Returns null on 404-ish responses
