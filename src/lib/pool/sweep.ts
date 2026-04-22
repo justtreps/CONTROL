@@ -121,8 +121,11 @@ export async function sweepPool(opts: {
     const renamed =
       oracle.username.length > 0 &&
       oracle.username.toLowerCase() !== r.username.toLowerCase();
-    const followersTooHigh =
-      oracle.followerCount > cfg.maxFollowerCount;
+    const followerCap =
+      platform === "tiktok"
+        ? cfg.maxFollowerCountTiktok
+        : cfg.maxFollowerCount;
+    const followersTooHigh = oracle.followerCount > followerCap;
     const mediaTooHigh = oracle.mediaCount > cfg.invalidateIfMediaAbove;
     const followingTooHigh =
       oracle.followingCount > cfg.maxFollowingCount;

@@ -128,7 +128,14 @@ model PoolConfig {
   // with a handful of posts is still usable — what matters is that
   // the account isn't tracking anyone yet and has near-zero
   // followers.
+  // Platform-split follower thresholds. Instagram uses
+  // maxFollowerCount (strict, 5) because IG accounts rarely grow
+  // organically without intent. TikTok uses maxFollowerCountTiktok
+  // (tolerant, 30) because TT's viral dynamics push even dormant
+  // accounts to 5-30 followers through random exposure — a 5-cap
+  // there would invalidate perfectly good test accounts.
   maxFollowerCount                 Int      @default(5)
+  maxFollowerCountTiktok           Int      @default(30)
   maxMediaCount                    Int      @default(999999)
   maxFollowingCount                Int      @default(100)
   requireNotPrivate                Boolean  @default(true)

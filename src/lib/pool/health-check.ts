@@ -125,6 +125,7 @@ async function processOneAccount({
   stats: HealthStats;
   cfg: {
     maxFollowerCount: number;
+    maxFollowerCountTiktok: number;
     maxFollowingCount: number;
     invalidateIfMediaAbove: number;
     requireNotPrivate: boolean;
@@ -163,8 +164,13 @@ async function processOneAccount({
     oracle.username.length > 0 &&
     oracle.username.toLowerCase() !== row.username.toLowerCase();
 
+  const followerCap =
+    row.platform === "tiktok"
+      ? cfg.maxFollowerCountTiktok
+      : cfg.maxFollowerCount;
+
   let invalidReason: string | null = null;
-  if (oracle.followerCount > cfg.maxFollowerCount)
+  if (oracle.followerCount > followerCap)
     invalidReason = "became_active";
   else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
     invalidReason = "became_active";

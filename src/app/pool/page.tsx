@@ -96,6 +96,7 @@ export default async function PoolPage() {
           healthCheckEnabled: config.healthCheckEnabled,
           healthCheckCron: config.healthCheckCron,
           maxFollowerCount: config.maxFollowerCount,
+          maxFollowerCountTiktok: config.maxFollowerCountTiktok,
           maxFollowingCount: config.maxFollowingCount,
           requireNotPrivate: config.requireNotPrivate,
         }}

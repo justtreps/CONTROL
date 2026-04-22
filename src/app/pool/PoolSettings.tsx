@@ -20,6 +20,7 @@ type Cfg = {
   healthCheckEnabled: boolean;
   healthCheckCron: string;
   maxFollowerCount: number;
+  maxFollowerCountTiktok: number;
   maxFollowingCount: number;
   requireNotPrivate: boolean;
 };
@@ -356,7 +357,10 @@ function HealthCheckBody({ initial }: { initial: Cfg }) {
 // ── Accordion 04 — QUALIFICATION ────────────────────────────────────
 function QualificationBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
-  const [maxFollowers, setMaxFollowers] = useState(initial.maxFollowerCount);
+  const [maxFollowersIg, setMaxFollowersIg] = useState(initial.maxFollowerCount);
+  const [maxFollowersTt, setMaxFollowersTt] = useState(
+    initial.maxFollowerCountTiktok
+  );
   const [maxFollowing, setMaxFollowing] = useState(initial.maxFollowingCount);
   const [requirePublic, setRequirePublic] = useState(initial.requireNotPrivate);
 
@@ -364,16 +368,24 @@ function QualificationBody({ initial }: { initial: Cfg }) {
     <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
       <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
         Règles qui définissent ce qu&apos;est un &laquo;&nbsp;bon compte
-        test&nbsp;&raquo;. Le <span className="text-white">MAX ABONNÉS</span>{" "}
-        sert à la fois au scrape (candidat rejeté s&apos;il dépasse) et à la
-        vérification quotidienne (compte invalidé s&apos;il dépasse).
+        test&nbsp;&raquo;. Seuils <span className="text-white">séparés par
+        plateforme</span> : Instagram est strict, TikTok plus tolérant. Chaque
+        seuil sert à la fois au scrape (candidat rejeté s&apos;il dépasse) et
+        à la vérification quotidienne (compte invalidé s&apos;il dépasse).
       </p>
       <LabelInput
-        label="MAX ABONNÉS"
-        help="Scrape : candidat rejeté si > N. Vérif quotidienne : compte invalidé si > N."
+        label="MAX ABONNÉS INSTAGRAM"
+        help="Seuil strict : comptes vraiment inactifs."
         type="number"
-        value={maxFollowers}
-        onChange={(e) => setMaxFollowers(Number(e.target.value) || 0)}
+        value={maxFollowersIg}
+        onChange={(e) => setMaxFollowersIg(Number(e.target.value) || 0)}
+      />
+      <LabelInput
+        label="MAX ABONNÉS TIKTOK"
+        help="Seuil plus tolérant : TikTok a une dynamique virale naturelle, même les comptes dormants gagnent 5-30 followers."
+        type="number"
+        value={maxFollowersTt}
+        onChange={(e) => setMaxFollowersTt(Number(e.target.value) || 0)}
       />
       <LabelInput
         label="MAX ABONNEMENTS"
@@ -395,7 +407,8 @@ function QualificationBody({ initial }: { initial: Cfg }) {
         saving={saving}
         onClick={() =>
           patch({
-            maxFollowerCount: maxFollowers,
+            maxFollowerCount: maxFollowersIg,
+            maxFollowerCountTiktok: maxFollowersTt,
             maxFollowingCount: maxFollowing,
             requireNotPrivate: requirePublic,
           })

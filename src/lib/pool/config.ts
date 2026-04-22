@@ -20,3 +20,18 @@ export async function updatePoolConfig(
     data: patch,
   });
 }
+
+// Platform-aware follower cap. IG is strict (5), TT is tolerant (30)
+// because TT's viral exposure randomly pushes dormant accounts to
+// 5-30 followers. Callers that already branched on platform should
+// use this helper instead of picking the field themselves so the
+// rule stays consistent across scraper / health-check / sweep /
+// recheck.
+export function followerCapFor(
+  platform: string,
+  cfg: Pick<PoolConfig, "maxFollowerCount" | "maxFollowerCountTiktok">
+): number {
+  return platform === "tiktok"
+    ? cfg.maxFollowerCountTiktok
+    : cfg.maxFollowerCount;
+}

@@ -23,6 +23,7 @@ const patchSchema = z
     healthCheckEnabled: z.boolean().optional(),
     healthCheckCron: z.string().min(1).max(64).optional(),
     maxFollowerCount: z.number().int().min(0).optional(),
+    maxFollowerCountTiktok: z.number().int().min(0).optional(),
     maxMediaCount: z.number().int().min(0).optional(),
     maxFollowingCount: z.number().int().min(0).optional(),
     requireNotPrivate: z.boolean().optional(),

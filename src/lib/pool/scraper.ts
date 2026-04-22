@@ -462,7 +462,7 @@ async function processTikTokSeed({
   seed: { id: number; username: string; platform: string };
   stats: ScrapeStats;
   cfg: {
-    maxFollowerCount: number;
+    maxFollowerCountTiktok: number;
     maxMediaCount: number;
     maxFollowingCount: number;
   };
@@ -472,11 +472,16 @@ async function processTikTokSeed({
   const { sample } = await fetchTikTokFollowers(info.userId);
   stats.callsUsed++;
 
+  // TT uses a looser follower threshold than IG because the platform's
+  // viral exposure model pushes dormant accounts to 5-30 followers
+  // organically; a 5-cap there would reject healthy test candidates.
+  const ttFollowerCap = cfg.maxFollowerCountTiktok;
+
   for (const f of sample) {
     stats.candidatesFetched++;
 
     // Cheap prefilter from the /followers payload (no extra call).
-    if (f.follower_count > cfg.maxFollowerCount) {
+    if (f.follower_count > ttFollowerCap) {
       stats.candidatesRejected.too_many_followers++;
       continue;
     }
@@ -507,7 +512,7 @@ async function processTikTokSeed({
 
     // Re-qualify with the fresh oracle counts (they may differ from
     // the /followers snapshot).
-    if (oracle.followerCount > cfg.maxFollowerCount) {
+    if (oracle.followerCount > ttFollowerCap) {
       stats.candidatesRejected.too_many_followers++;
       continue;
     }

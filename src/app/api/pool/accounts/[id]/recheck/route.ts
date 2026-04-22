@@ -82,8 +82,13 @@ export async function POST(
     oracle.username.length > 0 &&
     oracle.username.toLowerCase() !== row.username.toLowerCase();
 
+  const followerCap =
+    row.platform === "tiktok"
+      ? cfg.maxFollowerCountTiktok
+      : cfg.maxFollowerCount;
+
   let invalidReason: string | null = null;
-  if (oracle.followerCount > cfg.maxFollowerCount)
+  if (oracle.followerCount > followerCap)
     invalidReason = "became_active";
   else if (oracle.mediaCount > cfg.invalidateIfMediaAbove)
     invalidReason = "became_active";
