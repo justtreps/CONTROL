@@ -11,6 +11,7 @@ import {
   CartesianGrid,
   Legend,
 } from "recharts";
+import type { ActivePool } from "./PoolUniverseSwitch";
 
 type StatusBreakdown = {
   available: number;
@@ -26,7 +27,10 @@ type Day = {
   tiktok: StatusBreakdown;
 };
 
-type Props = { initialData: Day[] };
+type Props = {
+  initialData: Day[];
+  activePool: ActivePool;
+};
 
 type PlatformFilter = "both" | "instagram" | "tiktok";
 type StatusKey = "available" | "assigned" | "consumed" | "invalid";
@@ -38,8 +42,9 @@ const STATUS_COLORS: Record<StatusKey, string> = {
   invalid: "#FFFFFF",
 };
 
-export function PoolHistoryChart({ initialData }: Props) {
+export function PoolHistoryChart({ initialData, activePool }: Props) {
   const [platform, setPlatform] = useState<PlatformFilter>("both");
+  const poolLabel = activePool === "follower" ? "ABONNÉS" : "ENGAGEMENT";
   const [visible, setVisible] = useState<Record<StatusKey, boolean>>({
     available: true,
     assigned: true,
@@ -93,7 +98,7 @@ export function PoolHistoryChart({ initialData }: Props) {
       >
         <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none z-10">
           <span className="font-mono text-xs text-[#FF3300] tracking-widest">
-            [ ASSET: POOL-EVOLUTION ]
+            [ ASSET: POOL-EVOLUTION · {poolLabel} ]
           </span>
           <span className="font-mono text-xs text-white tracking-widest">
             30-DAY-HISTORY

@@ -27,7 +27,9 @@ export default async function PoolPage({
 
   const [stats, history, config, toggles] = await Promise.all([
     getPoolStats(),
-    getPoolHistory30d(),
+    getPoolHistory30d(
+      activePool === "follower" ? "follower_test" : "engagement_test"
+    ),
     getPoolConfig(),
     getSystemToggles(),
   ]);
@@ -93,7 +95,7 @@ export default async function PoolPage({
           hint="l'état de la réserve en un coup d'œil"
         />
         <Onboarding activePool={activePool} />
-        <PoolHistoryChart initialData={history} />
+        <PoolHistoryChart initialData={history} activePool={activePool} />
 
         {/* === ZONE 2 — ACTIONS (scoped to activePool) === */}
         <ZoneHeader

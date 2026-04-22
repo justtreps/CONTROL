@@ -132,7 +132,13 @@ export async function getPoolStats(): Promise<PoolStats> {
 
 // Daily rollup for the 30-day history graph. Computed live from
 // existing TestAccount rows — no snapshot table required for v1.
-export async function getPoolHistory30d(): Promise<
+//
+// Scoped by accountType so the graph reflects the active universe
+// (follower / engagement) instead of a catch-all total. Caller
+// passes the pool they want; undefined returns unscoped (legacy).
+export async function getPoolHistory30d(
+  accountType?: "follower_test" | "engagement_test"
+): Promise<
   Array<{
     date: string;
     instagram: StatusBreakdown;
@@ -142,6 +148,11 @@ export async function getPoolHistory30d(): Promise<
   const now = new Date();
   now.setUTCHours(0, 0, 0, 0);
   const days: Array<{ date: string; instagram: StatusBreakdown; tiktok: StatusBreakdown }> = [];
+
+  // Shared where-slice applied to every count below. Adding accountType
+  // here means all 4 point-in-time counts (seen / assigned / consumed /
+  // invalid) stay aligned to the same universe.
+  const typeFilter = accountType ? { accountType } : {};
 
   // For each of the last 30 days, compute what each status count WOULD
   // have been at that day's end. Uses firstSeenAt / assignedAt /
@@ -154,7 +165,7 @@ export async function getPoolHistory30d(): Promise<
       // available at end-of-day = firstSeenAt <= d AND (not yet assigned/invalid/consumed/archived by then)
       const [seen, assigned, consumed, invalid] = await Promise.all([
         prisma.testAccount.count({
-          where: { platform, firstSeenAt: { lte: endOfDay } },
+          where: { platform, firstSeenAt: { lte: endOfDay }, ...typeFilter },
         }),
         prisma.testAccount.count({
           where: {
@@ -164,13 +175,22 @@ export async function getPoolHistory30d(): Promise<
               { consumedAt: null },
               { consumedAt: { gt: endOfDay } },
             ],
+            ...typeFilter,
           },
         }),
         prisma.testAccount.count({
-          where: { platform, consumedAt: { lte: endOfDay, not: null } },
+          where: {
+            platform,
+            consumedAt: { lte: endOfDay, not: null },
+            ...typeFilter,
+          },
         }),
         prisma.testAccount.count({
-          where: { platform, invalidatedAt: { lte: endOfDay, not: null } },
+          where: {
+            platform,
+            invalidatedAt: { lte: endOfDay, not: null },
+            ...typeFilter,
+          },
         }),
       ]);
       const available = Math.max(0, seen - assigned - consumed - invalid);
