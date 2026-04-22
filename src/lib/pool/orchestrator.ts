@@ -45,7 +45,72 @@ async function stopRequestedFor(jobId: number): Promise<boolean> {
   return Boolean(row?.stopRequested);
 }
 
+// Hard ceiling: any job that has sat in 'running' this long with zero
+// work done is presumed dead (fire-and-forget dispatch misfired, worker
+// crashed before its first write, etc.). 30 min is well beyond the
+// longest normal tranche (scrape + health both cap at 280s per run) so
+// we won't false-positive a slow-but-alive job.
+const STALE_NO_PROGRESS_MS = 30 * 60 * 1000;
+
+// Walks every running job and flips the obvious zombies to 'error' so
+// downstream idempotency gates (e.g. the health-check cron's
+// "skip if one already running" check) don't stay pinned on a dead row.
+// Runs at the top of every orchestrator tick — cheap query, same 60s
+// cadence as everything else.
+export async function runStaleJobWatchdog(): Promise<number> {
+  const cutoff = new Date(Date.now() - STALE_NO_PROGRESS_MS);
+  const stale = await prisma.poolJob.findMany({
+    where: {
+      status: "running",
+      startedAt: { lt: cutoff },
+    },
+    select: { id: true, jobType: true, startedAt: true, stats: true },
+  });
+
+  let flagged = 0;
+  for (const j of stale) {
+    const s = (j.stats as Record<string, number | undefined> | null) ?? {};
+    const checked = s.checked ?? 0;
+    const callsUsed = s.callsUsed ?? 0;
+    const addedA = s.addedA ?? 0;
+    const addedB = s.addedB ?? 0;
+
+    // Progress heuristic per job type. Any non-zero progress signal
+    // means the worker ran at least one iteration — leave it alone
+    // (the normal runners will either finish it or pick it up again
+    // on the next cron tick).
+    const isNoProgress =
+      j.jobType === "health_check"
+        ? checked === 0 && callsUsed === 0
+        : j.jobType === "scrape"
+          ? addedA + addedB === 0 && callsUsed === 0
+          : false; // cleanup jobs are fast — unknown types: leave alone
+
+    if (!isNoProgress) continue;
+
+    const ageMin = Math.floor(
+      (Date.now() - j.startedAt.getTime()) / 60_000
+    );
+    await prisma.poolJob.update({
+      where: { id: j.id },
+      data: {
+        status: "error",
+        error: `stale_no_progress: ${j.jobType} running ${ageMin}min with no checks/calls — fire-and-forget dispatch likely failed`,
+        endedAt: new Date(),
+      },
+    });
+    flagged++;
+  }
+  return flagged;
+}
+
 export async function runOrchestratorTick(): Promise<OrchestratorResult> {
+  // Watchdog first — unblocks idempotency gates if any health-check
+  // or scrape job has been dead-in-the-water for 30+ min. Cheap query
+  // that runs before anything else so a genuinely stuck row doesn't
+  // keep masking itself.
+  const flagged = await runStaleJobWatchdog();
+
   // Kill-switch gate: skip any job whose subsystem is paused. Those
   // jobs stay in 'pending' forever until the toggle is flipped back on
   // — that's the whole point of the kill switch.
@@ -81,10 +146,11 @@ export async function runOrchestratorTick(): Promise<OrchestratorResult> {
   if (!job) {
     return {
       ran: false,
+      ...(flagged ? { staleFlagged: flagged } : {}),
       ...(disabledTypes.length
         ? { skipped: `paused_by_toggle:${disabledTypes.join(",")}` }
         : {}),
-    } as OrchestratorResult & { skipped?: string };
+    } as OrchestratorResult & { skipped?: string; staleFlagged?: number };
   }
 
   if (job.status === "pending") {
