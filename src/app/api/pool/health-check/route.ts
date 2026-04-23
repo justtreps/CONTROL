@@ -18,6 +18,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { initHealthStats } from "@/lib/pool/health-check";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { acquireKeyForNewJob } from "@/lib/rapidapi/key-manager";
 
 export const maxDuration = 10;
 
@@ -82,12 +83,17 @@ export async function POST(req: Request) {
   if (poolType) {
     (initial as unknown as { poolType?: string }).poolType = poolType;
   }
+
+  const apiKey = await acquireKeyForNewJob("instagram");
+  const rapidApiKeyId = apiKey && apiKey.id !== -1 ? apiKey.id : null;
+
   const job = await prisma.poolJob.create({
     data: {
       jobType: "health_check",
       platform: platform === "both" ? null : platform,
       trigger: "manual",
       status: "running",
+      rapidApiKeyId,
       stats:
         initial as unknown as import("@prisma/client").Prisma.InputJsonValue,
     },

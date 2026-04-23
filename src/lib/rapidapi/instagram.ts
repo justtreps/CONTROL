@@ -1,5 +1,10 @@
 import { getRapidApiKey } from "@/lib/config";
 import { waitForIgSlot } from "./rate-limit";
+import {
+  currentKey,
+  switchOnCap,
+  recordApiCall,
+} from "./key-manager";
 
 const HOST = "instagram-scraper-20251.p.rapidapi.com";
 
@@ -9,6 +14,19 @@ const HOST = "instagram-scraper-20251.p.rapidapi.com";
 // cases or plan-level quota drift.
 const RATE_LIMIT_BACKOFF_MS = 2000;
 const MAX_429_RETRIES = 3;
+
+// RapidAPI surfaces two very different failure modes under status
+// 429. Distinguishing them is critical: monthly cap needs a key
+// failover, per-second rate limit just needs backoff.
+function looksLikeQuotaExceeded(body: string): boolean {
+  const s = body.toLowerCase();
+  return (
+    s.includes("quota") ||
+    s.includes("monthly limit") ||
+    s.includes("you have exceeded") ||
+    s.includes("upgrade your plan")
+  );
+}
 
 export type InstagramFollower = {
   id: string;
@@ -25,38 +43,51 @@ export type InstagramFollowersResponse = {
 };
 
 async function call(path: string, attempt = 0): Promise<unknown> {
-  const key = await getRapidApiKey();
-  if (!key) throw new Error("RapidAPI key not configured");
+  // Prefer the ALS-scoped key (multi-key pool). Falls back to the
+  // config env var so /api/config/rapidapi-keys endpoints and debug
+  // tools that run outside a job context still work.
+  const ctx = currentKey();
+  const token = ctx?.token ?? (await getRapidApiKey());
+  if (!token) throw new Error("RapidAPI key not configured");
 
-  // Rate-limit gate — queues up to 85 IG calls per rolling 60s
-  // across the whole Vercel invocation. Shared by every caller of
-  // this client (scraper / health check / engagement extract + fill
-  // / rechecks / seeds health check).
   await waitForIgSlot();
 
   const res = await fetch(`https://${HOST}${path}`, {
     headers: {
-      "x-rapidapi-key": key,
+      "x-rapidapi-key": token,
       "x-rapidapi-host": HOST,
     },
     cache: "no-store",
   });
 
-  // 429 fallback — should be almost impossible now that every call
-  // passes through the limiter, but if the upstream bursts faster
-  // than our tracker (e.g. clock skew, parallel Vercel invocations
-  // sharing the same RapidAPI key), wait + retry with exponential
-  // backoff before surfacing a 429 as a stuck-job trigger.
-  if (res.status === 429 && attempt < MAX_429_RETRIES) {
-    const waitMs = RATE_LIMIT_BACKOFF_MS * Math.pow(2, attempt);
-    await new Promise((r) => setTimeout(r, waitMs));
-    return call(path, attempt + 1);
+  if (res.status === 429) {
+    const body = await res.text().catch(() => "");
+    // Monthly-cap 429 — cap the current key and try to switch.
+    if (ctx && looksLikeQuotaExceeded(body)) {
+      const next = await switchOnCap(body.slice(0, 200));
+      if (!next) {
+        throw new Error("all_keys_capped");
+      }
+      // Don't increment `attempt` — the new key starts fresh.
+      return call(path, 0);
+    }
+    // Per-second rate-limit — backoff and retry.
+    if (attempt < MAX_429_RETRIES) {
+      const waitMs = RATE_LIMIT_BACKOFF_MS * Math.pow(2, attempt);
+      await new Promise((r) => setTimeout(r, waitMs));
+      return call(path, attempt + 1);
+    }
+    throw new Error(`Instagram RapidAPI 429: ${body.slice(0, 200)}`);
   }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Instagram RapidAPI ${res.status}: ${body.slice(0, 200)}`);
   }
+
+  // Track successful calls against the current key's monthly quota.
+  // Batched flush every 5s (see key-manager).
+  recordApiCall();
   return res.json();
 }
 

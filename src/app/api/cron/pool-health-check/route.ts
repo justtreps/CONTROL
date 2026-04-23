@@ -25,6 +25,7 @@ import {
   maybeQueueAutoRefill,
 } from "@/lib/pool/health-check";
 import { finalizeTrancheStatus, startJobHeartbeat } from "@/lib/pool/job-health";
+import { withAssignedKey } from "@/lib/rapidapi/key-manager";
 import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 300;
@@ -87,11 +88,13 @@ export async function POST(req: Request) {
   });
 
   try {
-    const { done, stats: finalStats } = await runHealthCheckTranche({
-      stats: initial,
-      budgetMs: BUDGET_MS,
-      stopRequested: () => stopRequestedFor(job.id),
-    });
+    const { done, stats: finalStats } = await withAssignedKey(job, () =>
+      runHealthCheckTranche({
+        stats: initial,
+        budgetMs: BUDGET_MS,
+        stopRequested: () => stopRequestedFor(job.id),
+      })
+    );
 
     const stopped = await stopRequestedFor(job.id);
     if (done) await maybeQueueAutoRefill(finalStats);

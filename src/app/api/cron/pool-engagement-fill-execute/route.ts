@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { getPoolConfig } from "@/lib/pool/config";
 import { finalizeTrancheStatus, startJobHeartbeat } from "@/lib/pool/job-health";
+import { withAssignedKey } from "@/lib/rapidapi/key-manager";
 import {
   runEngagementFillTranche,
   syncFillCounters,
@@ -73,11 +74,13 @@ export async function POST(req: Request) {
   });
 
   try {
-    const { done, stats: finalStats } = await runEngagementFillTranche({
-      stats,
-      budgetMs: BUDGET_MS,
-      stopRequested: () => stopRequestedFor(job.id),
-    });
+    const { done, stats: finalStats } = await withAssignedKey(job, () =>
+      runEngagementFillTranche({
+        stats,
+        budgetMs: BUDGET_MS,
+        stopRequested: () => stopRequestedFor(job.id),
+      })
+    );
 
     const stopped = await stopRequestedFor(job.id);
     const cfg = await getPoolConfig();

@@ -4,6 +4,7 @@ import { getConfig } from "@/lib/config";
 import { isDryRun } from "@/lib/router";
 import { ConfigForms } from "./ConfigForms";
 import { ConfigDangerZone } from "./ConfigDangerZone";
+import { RapidApiKeysCard } from "./RapidApiKeysCard";
 
 export const dynamic = "force-dynamic";
 
@@ -117,6 +118,8 @@ export default async function ConfigPage() {
           active: a.active,
         }))}
       />
+
+      <RapidApiKeysCard />
 
       <ConfigDangerZone />
     </>

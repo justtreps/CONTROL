@@ -22,6 +22,7 @@ import {
 } from "./scraper";
 import { getPoolConfig } from "./config";
 import { finalizeTrancheStatus, startJobHeartbeat } from "./job-health";
+import { withAssignedKey } from "@/lib/rapidapi/key-manager";
 import type { PoolJob } from "@prisma/client";
 
 export const SCRAPE_BUDGET_MS = 280_000;
@@ -44,7 +45,10 @@ export type ScrapeRunResult = {
 // responsible for having created/picked the row and set its status
 // to 'running' before calling this.
 export async function runScrapeJobTranche(
-  job: Pick<PoolJob, "id" | "stats" | "jobType" | "startedAt">
+  job: Pick<
+    PoolJob,
+    "id" | "stats" | "jobType" | "startedAt" | "rapidApiKeyId" | "platform"
+  >
 ): Promise<ScrapeRunResult> {
   const beforeStats = job.stats as Record<string, unknown> | null;
   const stats = job.stats as unknown as ScrapeStats;
@@ -53,11 +57,13 @@ export async function runScrapeJobTranche(
     getStats: () => stats as unknown as Record<string, unknown>,
   });
   try {
-    const { done, stats: updated } = await runScrapeTranche({
-      stats,
-      budgetMs: SCRAPE_BUDGET_MS,
-      stopRequested: () => stopRequestedFor(job.id),
-    });
+    const { done, stats: updated } = await withAssignedKey(job, () =>
+      runScrapeTranche({
+        stats,
+        budgetMs: SCRAPE_BUDGET_MS,
+        stopRequested: () => stopRequestedFor(job.id),
+      })
+    );
     const stopped = await stopRequestedFor(job.id);
     const cfg = await getPoolConfig();
     const { finalStatus, stuckReason } = finalizeTrancheStatus({

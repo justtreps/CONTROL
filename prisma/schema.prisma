@@ -388,6 +388,12 @@ model PoolJob {
   jobType        String   // 'scrape' | 'health_check' | 'cleanup'
   platform       String?  // null = multi-platform
   trigger        String   // 'manual' | 'cron' | 'auto_refill'
+  // Which RapidApiKey this job is currently using. Set at creation
+  // (round-robin via pickNextApiKey) and may drift during the run
+  // if the original key caps and the IG client auto-switches to
+  // another active key. null = no key assigned yet, or running
+  // under the env-var fallback when no DB key exists.
+  rapidApiKeyId  Int?
 
   status         String   @default("pending")
   // 'pending' | 'running' | 'completed' | 'stopped' | 'error'
@@ -402,6 +408,32 @@ model PoolJob {
 
   @@index([status, startedAt])
   @@index([jobType, status])
+}
+
+// RapidAPI keys manageable from /config. Each provider (instagram /
+// tiktok) can have N active keys; the key manager picks them round-
+// robin at job creation and auto-fails over to another active key
+// inside a running job when the current one caps.
+model RapidApiKey {
+  id                 Int       @id @default(autoincrement())
+  provider           String    // 'instagram' | 'tiktok'
+  label              String
+  token              String
+  // 'active'   — available to be picked + receive traffic
+  // 'capped'   — quota exceeded, skipped until resetDayOfMonth hits
+  // 'disabled' — operator manually turned it off
+  status             String    @default("active")
+  quotaMonthly       Int?
+  quotaUsed          Int       @default(0)
+  resetDayOfMonth    Int?      // 1-31, clamped to month length at reset time
+  rateLimitPerMin    Int?
+  lastCappedAt       DateTime?
+  lastUsedAt         DateTime?
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([provider, status])
 }
 
 model TestOrder {

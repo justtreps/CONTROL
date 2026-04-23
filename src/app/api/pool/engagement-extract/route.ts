@@ -10,6 +10,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { initExtractStats } from "@/lib/pool/engagement-extract";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { acquireKeyForNewJob } from "@/lib/rapidapi/key-manager";
 
 export const maxDuration = 10;
 
@@ -60,12 +61,16 @@ export async function POST(req: Request) {
   // history labels it cleanly (· ENGAGEMENT suffix).
   (initial as unknown as { poolType?: string }).poolType = "engagement";
 
+  const apiKey = await acquireKeyForNewJob("instagram");
+  const rapidApiKeyId = apiKey && apiKey.id !== -1 ? apiKey.id : null;
+
   const job = await prisma.poolJob.create({
     data: {
       jobType: "engagement_extract",
       platform: platform === "both" ? null : platform,
       trigger: "manual",
       status: "running",
+      rapidApiKeyId,
       stats:
         initial as unknown as import("@prisma/client").Prisma.InputJsonValue,
     },
