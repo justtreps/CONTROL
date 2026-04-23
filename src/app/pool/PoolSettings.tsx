@@ -467,17 +467,56 @@ function EngagementBody({ initial }: { initial: Cfg }) {
   );
 }
 
-// ── Accordion — SERVICES SYNC (frequency + last-run readout) ───────
+// ── Accordion — SERVICES SYNC (frequency + last-run readout + manual trigger) ───────
 function ServicesSyncBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
+  const toast = usePoolToast();
+  const router = useRouter();
   const [freq, setFreq] = useState(
     initial.servicesSyncFrequencyHours ?? 1
   );
 
-  const lastRun = initial.lastServicesSyncAt
-    ? formatRelative(initial.lastServicesSyncAt)
-    : null;
-  const r = initial.lastServicesSyncResult ?? null;
+  // Local optimistic state — overrides the SSR readout as soon as the
+  // manual sync returns so the user gets instant feedback without a
+  // full page refresh. router.refresh() fires in the background to
+  // pull in any other reactive bits (Hero stats, etc.).
+  const [lastRunAt, setLastRunAt] = useState<string | null>(
+    initial.lastServicesSyncAt
+  );
+  const [lastResult, setLastResult] = useState<Record<string, number> | null>(
+    initial.lastServicesSyncResult ?? null
+  );
+  const [syncing, setSyncing] = useState(false);
+
+  const lastRun = lastRunAt ? formatRelative(lastRunAt) : null;
+  const r = lastResult;
+
+  async function runManualSync() {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/config/sync-services", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setLastRunAt(new Date().toISOString());
+        setLastResult(data as Record<string, number>);
+        const c = Number(data.created ?? 0);
+        const u = Number(data.updated ?? 0);
+        const d = Number(data.deactivated ?? 0);
+        toast.push(
+          "ok",
+          `SYNC OK · +${c} CRÉÉS · ${u} UPDATED · ${d} DEACTIVATED`
+        );
+        router.refresh();
+      } else {
+        toast.push("err", `ÉCHEC SYNC: ${data.error ?? "unknown"}`);
+      }
+    } catch (e) {
+      toast.push("err", `ERREUR RÉSEAU: ${(e as Error).message.slice(0, 60)}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
     <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
@@ -487,22 +526,37 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
         valeur 6h = 1 sync tous les 6h même si le cron fire toutes les
         heures.
       </p>
-      <label className="flex flex-col gap-1">
-        <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-          FRÉQUENCE SYNC SERVICES (HEURES)
-        </span>
-        <select
-          value={freq}
-          onChange={(e) => setFreq(Number(e.target.value))}
-          className={INPUT_CLS}
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 sm:items-end">
+        <label className="flex flex-col gap-1 min-w-0">
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            FRÉQUENCE SYNC SERVICES (HEURES)
+          </span>
+          <select
+            value={freq}
+            onChange={(e) => setFreq(Number(e.target.value))}
+            className={INPUT_CLS}
+          >
+            <option value={1}>1H — chaque heure</option>
+            <option value={3}>3H</option>
+            <option value={6}>6H</option>
+            <option value={12}>12H</option>
+            <option value={24}>24H — une fois par jour</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          onClick={runManualSync}
+          disabled={syncing}
+          className={`interactive border px-5 py-2 font-mono text-xs tracking-widest uppercase transition-colors whitespace-nowrap ${
+            syncing
+              ? "border-[#666666]/40 text-[#666666] cursor-wait"
+              : "border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black"
+          }`}
+          title="Ignore la fréquence et lance un sync tout de suite"
         >
-          <option value={1}>1H — chaque heure</option>
-          <option value={3}>3H</option>
-          <option value={6}>6H</option>
-          <option value={12}>12H</option>
-          <option value={24}>24H — une fois par jour</option>
-        </select>
-      </label>
+          {syncing ? "[ SYNC EN COURS... ]" : "[ SYNC MAINTENANT ]"}
+        </button>
+      </div>
 
       <div className="flex flex-col gap-2 pt-3 border-t border-[#666666]/20 font-mono text-[11px] tracking-widest uppercase">
         <div className="flex items-center justify-between">
