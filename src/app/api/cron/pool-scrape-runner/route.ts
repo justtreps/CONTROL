@@ -36,12 +36,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, skipped: "kill_switch" });
   }
 
-  // Heartbeat-aware pick — skips jobs currently being actively worked
-  // on by another invocation (execute dispatch that landed). Only
-  // picks up pending rows, stale/missing-heartbeat running rows, or
-  // running rows older than the grace window. Keeps the runner as a
-  // true backup when dual-dispatched from /api/pool/scrape.
-  const job = await pickJobForRunner("scrape");
+  // Heartbeat-aware pick. When the runner was fired as a dispatcher
+  // backup (query param set by /api/pool/scrape), wait through the
+  // grace window if no verdict yet — closes the dual-dispatch race
+  // where execute dropped silently.
+  const fromDispatcher =
+    new URL(req.url).searchParams.get("fromDispatcher") === "1";
+  const job = await pickJobForRunner("scrape", {
+    waitOnGrace: fromDispatcher,
+  });
 
   if (!job) {
     return NextResponse.json({ ok: true, skipped: "no_pending_scrape" });

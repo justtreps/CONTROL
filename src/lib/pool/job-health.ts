@@ -263,39 +263,73 @@ export function startJobHeartbeat({
 //   running, stale / missing
 //     heartbeat + age ≥ 10s      → take over (execute crashed or
 //                                 never dispatched)
-export async function pickJobForRunner(
-  jobType: string
-): Promise<PoolJob | null> {
-  const candidates = await prisma.poolJob.findMany({
-    where: {
-      jobType,
-      status: { in: ["pending", "running"] },
-    },
-    orderBy: { startedAt: "asc" },
-    take: 5,
-  });
-  const now = Date.now();
+type PickResult =
+  | { verdict: "take"; job: PoolJob }
+  | { verdict: "grace"; job: PoolJob }
+  | { verdict: "none" };
+
+function pickOnce(candidates: PoolJob[], now: number): PickResult {
   const FRESH_HEARTBEAT_MS = 15_000;
   const FRESH_CREATION_MS = 10_000;
+  let graceMatch: PoolJob | null = null;
 
   for (const c of candidates) {
-    if (c.status === "pending") return c;
+    if (c.status === "pending") return { verdict: "take", job: c };
     const s = c.stats as Record<string, unknown> | null;
     const lastProgressAt = s?.lastProgressAt as string | undefined;
     const lastMs = lastProgressAt
       ? new Date(lastProgressAt).getTime()
       : null;
     if (lastMs !== null && now - lastMs < FRESH_HEARTBEAT_MS) {
-      // Another worker is actively heartbeating — leave it alone.
-      continue;
+      continue; // active worker heartbeating
     }
     if (lastMs === null && now - c.startedAt.getTime() < FRESH_CREATION_MS) {
-      // Brand new, execute might still be spinning up — grace window.
+      // Grace — execute may still be spinning up. Remember but keep
+      // scanning; if nothing else is takeable, the caller decides
+      // whether to wait + retry.
+      if (!graceMatch) graceMatch = c;
       continue;
     }
-    return c;
+    return { verdict: "take", job: c };
   }
-  return null;
+  if (graceMatch) return { verdict: "grace", job: graceMatch };
+  return { verdict: "none" };
+}
+
+// Runner-side job selection. Default behaviour (from a cron tick):
+// returns the first takeable row or null if everything's healthy.
+// With `waitOnGrace: true` (set when the runner was fired as a
+// backup from a manual dispatcher), if every candidate is within
+// the "execute may be spinning up" grace window, we sleep ~12s and
+// retry once. This closes the dual-dispatch race where:
+//   • execute dispatch dropped silently
+//   • runner fired ~100ms later and saw the job in the grace window
+//     → would have skipped and waited 5 min for the next cron tick.
+// After the 12s sleep, a healthy execute has heartbeat-ed at least
+// once (3s interval) so we skip; a dead one still has no heartbeat
+// and we take over.
+export async function pickJobForRunner(
+  jobType: string,
+  opts: { waitOnGrace?: boolean } = {}
+): Promise<PoolJob | null> {
+  const take = async () =>
+    prisma.poolJob.findMany({
+      where: {
+        jobType,
+        status: { in: ["pending", "running"] },
+      },
+      orderBy: { startedAt: "asc" },
+      take: 5,
+    });
+
+  const first = pickOnce(await take(), Date.now());
+  if (first.verdict === "take") return first.job;
+  if (first.verdict === "none") return null;
+  // verdict === 'grace'
+  if (!opts.waitOnGrace) return null;
+  await new Promise((r) => setTimeout(r, 12_000));
+  const second = pickOnce(await take(), Date.now());
+  return second.verdict === "take" ? second.job : null;
 }
 
 // Shared finalization helper used by every tranche worker. Given the

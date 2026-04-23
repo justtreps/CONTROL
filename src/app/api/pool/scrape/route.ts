@@ -88,7 +88,7 @@ export async function POST(req: Request) {
   const origin = new URL(req.url).origin;
   const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
   const executeUrl = `${origin}/api/cron/pool-scrape-execute?jobId=${job.id}`;
-  const runnerUrl = `${origin}/api/cron/pool-scrape-runner`;
+  const runnerUrl = `${origin}/api/cron/pool-scrape-runner?fromDispatcher=1`;
   void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
     (e) => {
       console.error(

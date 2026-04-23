@@ -37,7 +37,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, skipped: "kill_switch" });
   }
 
-  const job = await pickJobForRunner("engagement_extract");
+  const fromDispatcher =
+    new URL(req.url).searchParams.get("fromDispatcher") === "1";
+  const job = await pickJobForRunner("engagement_extract", {
+    waitOnGrace: fromDispatcher,
+  });
   if (!job) {
     return NextResponse.json({ ok: true, skipped: "no_pending_extract" });
   }
