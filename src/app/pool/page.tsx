@@ -170,6 +170,8 @@ export default async function PoolPage({
             lastServicesSyncResult: config.lastServicesSyncResult as
               | Record<string, number>
               | null,
+            servicesSyncStartedAt:
+              config.servicesSyncStartedAt?.toISOString() ?? null,
           }}
         />
       </div>

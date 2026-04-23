@@ -38,6 +38,29 @@ export async function POST(req: Request) {
     }
   }
 
+  // Second gate — a manual click may have started a sync seconds
+  // before us. Respect that lock so we don't run twice in parallel
+  // and double-bill BulkMedya.
+  const STALE_LOCK_MS = 10 * 60 * 1000;
+  if (cfg.servicesSyncStartedAt) {
+    const elapsedMs = Date.now() - cfg.servicesSyncStartedAt.getTime();
+    if (elapsedMs < STALE_LOCK_MS) {
+      return NextResponse.json({
+        ok: true,
+        skipped: "already_running",
+        startedAt: cfg.servicesSyncStartedAt.toISOString(),
+      });
+    }
+  }
+
+  // Acquire the lock inline — the cron keeps its inline-run style
+  // (it's already running in a 300s cron slot, no need for the fire-
+  // and-forget dispatch dance that the UI needs).
+  await prisma.poolConfig.update({
+    where: { id: 1 },
+    data: { servicesSyncStartedAt: new Date() },
+  });
+
   try {
     const result = await syncServices();
     // Stamp the run timestamp + counts so the UI can show "last sync
@@ -48,10 +71,17 @@ export async function POST(req: Request) {
         lastServicesSyncAt: new Date(),
         lastServicesSyncResult:
           result as unknown as import("@prisma/client").Prisma.InputJsonValue,
+        servicesSyncStartedAt: null,
       },
     });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
+    await prisma.poolConfig
+      .update({
+        where: { id: 1 },
+        data: { servicesSyncStartedAt: null },
+      })
+      .catch(() => null);
     return NextResponse.json(
       { error: (e as Error).message },
       { status: 500 }

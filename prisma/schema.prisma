@@ -281,6 +281,12 @@ model PoolConfig {
   servicesSyncFrequencyHours       Int       @default(1)
   lastServicesSyncAt               DateTime?
   lastServicesSyncResult           Json?
+  // In-flight lock for the fire-and-forget manual sync + scheduled
+  // cron. Set at dispatch, cleared at completion (or on error). Any
+  // second trigger while this is recent (<10 min) gets "already_
+  // running". Values older than 10 min are treated as stale locks
+  // left by a dead worker and ignored.
+  servicesSyncStartedAt            DateTime?
 
   updatedAt                        DateTime @updatedAt
 }

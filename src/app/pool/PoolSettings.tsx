@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePoolToast } from "./PoolToast";
 import { Collapsible } from "./Collapsible";
@@ -33,6 +33,7 @@ type Cfg = {
   servicesSyncFrequencyHours: number;
   lastServicesSyncAt: string | null;
   lastServicesSyncResult: Record<string, number> | null;
+  servicesSyncStartedAt: string | null;
 };
 
 // "Paramètres techniques" — scoped to the active pool at the top.
@@ -472,51 +473,107 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
   const { patch, saving } = usePatchConfig();
   const toast = usePoolToast();
   const router = useRouter();
-  const [freq, setFreq] = useState(
-    initial.servicesSyncFrequencyHours ?? 1
-  );
+  const [freq, setFreq] = useState(initial.servicesSyncFrequencyHours ?? 1);
 
-  // Local optimistic state — overrides the SSR readout as soon as the
-  // manual sync returns so the user gets instant feedback without a
-  // full page refresh. router.refresh() fires in the background to
-  // pull in any other reactive bits (Hero stats, etc.).
-  const [lastRunAt, setLastRunAt] = useState<string | null>(
-    initial.lastServicesSyncAt
-  );
-  const [lastResult, setLastResult] = useState<Record<string, number> | null>(
-    initial.lastServicesSyncResult ?? null
-  );
-  const [syncing, setSyncing] = useState(false);
+  // SSR-driven readout. router.refresh() from the polling effect
+  // repaints these via new props — we don't keep local shadow state
+  // beyond the "watching" flag below so the UI always reflects the
+  // actual DB.
+  const lastRun = initial.lastServicesSyncAt
+    ? formatRelative(initial.lastServicesSyncAt)
+    : null;
+  const r = initial.lastServicesSyncResult ?? null;
 
-  const lastRun = lastRunAt ? formatRelative(lastRunAt) : null;
-  const r = lastResult;
+  // Server-side "run in progress" — true when either this click, a
+  // concurrent click, OR the hourly cron is currently executing.
+  const inProgressServer = Boolean(initial.servicesSyncStartedAt);
+
+  // Local "waiting for completion" state — set after a click, cleared
+  // when the server lastServicesSyncAt prop changes vs. the snapshot
+  // taken at click time. Drives the polling effect below.
+  const [watching, setWatching] = useState(false);
+  const watchRef = useRef<string | null>(null);
+
+  // Polling: every 10s while watching, router.refresh() to pull new
+  // SSR props. When lastServicesSyncAt changes compared to the
+  // pre-click snapshot, show completion toast + stop watching.
+  useEffect(() => {
+    if (!watching) return;
+    const id = setInterval(() => {
+      router.refresh();
+    }, 10_000);
+    // Safety cap — give up after 6 minutes so a silently dead worker
+    // doesn't leave the spinner forever. The lock itself auto-stales
+    // after 10 min server-side.
+    const timeout = setTimeout(
+      () => {
+        setWatching(false);
+        toast.push(
+          "err",
+          "SYNC : AUCUNE RÉPONSE APRÈS 6 MIN — VÉRIFIE VERCEL LOGS"
+        );
+      },
+      6 * 60_000
+    );
+    return () => {
+      clearInterval(id);
+      clearTimeout(timeout);
+    };
+  }, [watching, router, toast]);
+
+  // Detect completion: initial.lastServicesSyncAt shifted vs snapshot.
+  useEffect(() => {
+    if (!watching) return;
+    if (!initial.lastServicesSyncAt) return;
+    if (initial.lastServicesSyncAt === watchRef.current) return;
+    // New sync landed — celebrate + exit watch mode.
+    setWatching(false);
+    const data = initial.lastServicesSyncResult;
+    if (data) {
+      const c = Number(data.created ?? 0);
+      const u = Number(data.updated ?? 0);
+      const d = Number(data.deactivated ?? 0);
+      toast.push(
+        "ok",
+        `SYNC OK · +${c} CRÉÉS · ${u} UPDATED · ${d} DEACTIVATED`
+      );
+    } else {
+      toast.push("ok", "SYNC TERMINÉ");
+    }
+  }, [initial.lastServicesSyncAt, initial.lastServicesSyncResult, watching, toast]);
 
   async function runManualSync() {
-    if (syncing) return;
-    setSyncing(true);
+    if (watching || inProgressServer) return;
+    // Snapshot the current lastServicesSyncAt so the polling effect
+    // can tell when the new run has landed.
+    watchRef.current = initial.lastServicesSyncAt;
     try {
       const res = await fetch("/api/config/sync-services", { method: "POST" });
       const data = await res.json();
-      if (res.ok) {
-        setLastRunAt(new Date().toISOString());
-        setLastResult(data as Record<string, number>);
-        const c = Number(data.created ?? 0);
-        const u = Number(data.updated ?? 0);
-        const d = Number(data.deactivated ?? 0);
-        toast.push(
-          "ok",
-          `SYNC OK · +${c} CRÉÉS · ${u} UPDATED · ${d} DEACTIVATED`
-        );
-        router.refresh();
-      } else {
-        toast.push("err", `ÉCHEC SYNC: ${data.error ?? "unknown"}`);
+      if (!res.ok) {
+        toast.push("err", `ÉCHEC DISPATCH: ${data.error ?? "unknown"}`);
+        return;
       }
+      if (data.skipped === "already_running") {
+        toast.push(
+          "err",
+          "SYNC DÉJÀ EN COURS — ATTENDS LA FIN AVANT DE RECLIQUER"
+        );
+        setWatching(true); // still poll — it's running, we want the readout
+        return;
+      }
+      toast.push("ok", "SYNC LANCÉ EN ARRIÈRE-PLAN");
+      setWatching(true);
+      router.refresh();
     } catch (e) {
       toast.push("err", `ERREUR RÉSEAU: ${(e as Error).message.slice(0, 60)}`);
-    } finally {
-      setSyncing(false);
     }
   }
+
+  const buttonDisabled = watching || inProgressServer;
+  const buttonLabel = buttonDisabled
+    ? "[ SYNC EN COURS... ]"
+    : "[ SYNC MAINTENANT ]";
 
   return (
     <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
@@ -546,15 +603,19 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
         <button
           type="button"
           onClick={runManualSync}
-          disabled={syncing}
+          disabled={buttonDisabled}
           className={`interactive border px-5 py-2 font-mono text-xs tracking-widest uppercase transition-colors whitespace-nowrap ${
-            syncing
+            buttonDisabled
               ? "border-[#666666]/40 text-[#666666] cursor-wait"
               : "border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black"
           }`}
-          title="Ignore la fréquence et lance un sync tout de suite"
+          title={
+            buttonDisabled
+              ? "Un sync est déjà en cours — attend la fin"
+              : "Ignore la fréquence et lance un sync tout de suite (en arrière-plan)"
+          }
         >
-          {syncing ? "[ SYNC EN COURS... ]" : "[ SYNC MAINTENANT ]"}
+          {buttonLabel}
         </button>
       </div>
 
