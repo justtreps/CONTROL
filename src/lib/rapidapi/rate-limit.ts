@@ -27,6 +27,11 @@ const REDIS_KEY = "rapidapi:ig:ratelimit:v1";
 let redisClient: Redis | null = null;
 let redisAvailable: boolean | null = null; // null = not probed yet
 
+// Captured the last fallback reason so the debug endpoint can
+// surface it in the UI (env missing vs constructor throw vs reads
+// throwing) without exposing the secrets themselves.
+let fallbackReason: string | null = null;
+
 function getRedis(): Redis | null {
   if (redisAvailable === false) return null;
   if (redisClient) return redisClient;
@@ -35,6 +40,7 @@ function getRedis(): Redis | null {
   if (!url || !token) {
     if (redisAvailable === null) {
       redisAvailable = false;
+      fallbackReason = `env missing: url=${Boolean(url)} token=${Boolean(token)}`;
       console.warn(
         "[ig-ratelimit] UPSTASH_REDIS_REST_URL/_TOKEN not set — falling back to per-process in-memory limiter. Cross-worker quota is NOT enforced."
       );
@@ -46,15 +52,18 @@ function getRedis(): Redis | null {
     redisAvailable = true;
     return redisClient;
   } catch (e) {
-    // Bad URL / malformed token would throw here. Flip the flag so
-    // we don't keep retrying the constructor on every call.
     redisAvailable = false;
+    fallbackReason = `constructor threw: ${(e as Error).message.slice(0, 120)}`;
     console.warn(
       "[ig-ratelimit] Redis constructor threw, falling back to in-memory:",
       (e as Error).message.slice(0, 120)
     );
     return null;
   }
+}
+
+export function getFallbackReason(): string | null {
+  return fallbackReason;
 }
 
 // ── Lua script: atomic acquire ──────────────────────────────────────
@@ -241,5 +250,6 @@ export async function ig429SnapshotForDebug(): Promise<{
     backend: "in-memory",
     inFlightWindowSize: windowTimestamps.length,
     maxPerWindow: MAX_REQUESTS_PER_WINDOW,
+    ...(fallbackReason ? { error: `upstash fallback: ${fallbackReason}` } : {}),
   };
 }
