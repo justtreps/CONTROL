@@ -93,6 +93,13 @@ export function PoolSettings({
         >
           <ServicesSyncBody initial={initialConfig} />
         </Collapsible>
+        <Collapsible
+          label="RATE LIMITER RAPIDAPI"
+          hint="fenêtre live IG · partagé"
+          compact
+        >
+          <RateLimiterBody />
+        </Collapsible>
       </div>
     </div>
   );
@@ -695,4 +702,155 @@ function formatRelative(iso: string | null): string {
   if (h < 24) return `${h}H AGO`;
   const d = Math.floor(h / 24);
   return `${d}D AGO`;
+}
+
+// ── Accordion — RATE LIMITER LIVE SNAPSHOT ─────────────────────────
+// Polls /api/pool/debug/rate-limiter every 5s and renders the
+// in-flight window count vs the 85 req/min cap. Shared across both
+// universes (the limiter itself is global).
+type RateLimiterSnapshot = {
+  backend: "upstash" | "in-memory";
+  inFlightWindowSize: number;
+  maxPerWindow: number;
+};
+
+function RateLimiterBody() {
+  const [snap, setSnap] = useState<RateLimiterSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const res = await fetch("/api/pool/debug/rate-limiter", {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          if (!cancelled) setError(`HTTP ${res.status}`);
+          return;
+        }
+        const data = (await res.json()) as RateLimiterSnapshot;
+        if (!cancelled) {
+          setSnap(data);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message.slice(0, 80));
+      }
+    }
+    tick();
+    const id = setInterval(tick, 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const max = snap?.maxPerWindow ?? 85;
+  const count = snap?.inFlightWindowSize ?? 0;
+  const backend = snap?.backend;
+
+  // Status bucket — OK under 60, CHARGE at 60-79, SATURÉ at 80+.
+  const status =
+    count < 60 ? "OK" : count < 80 ? "CHARGE" : "SATURÉ";
+  const statusColor =
+    status === "OK"
+      ? "#00CC66"
+      : status === "CHARGE"
+        ? "#FFCC00"
+        : "#FF3300";
+
+  // Progress bar fill — proportion of the cap currently consumed.
+  const fillPct = Math.min(100, Math.round((count / max) * 100));
+
+  return (
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-5">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Fenêtre glissante de 60 secondes sur les appels RapidAPI
+        Instagram. Plafond 85/min (marge 15% sous la limite MEGA
+        100/min). Shared entre tous les workers Vercel quand le
+        backend Upstash est actif — sinon per-process in-memory.
+      </p>
+
+      {/* BACKEND badge */}
+      <div className="flex items-center justify-between border-b border-[#666666]/20 pb-4">
+        <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+          BACKEND
+        </span>
+        {backend === "upstash" ? (
+          <span
+            className="font-mono text-[11px] tracking-widest uppercase border px-3 py-1"
+            style={{ color: "#00CC66", borderColor: "#00CC66" }}
+          >
+            [ UPSTASH ]
+          </span>
+        ) : backend === "in-memory" ? (
+          <span
+            className="font-mono text-[11px] tracking-widest uppercase border px-3 py-1"
+            style={{ color: "#FFCC00", borderColor: "#FFCC00" }}
+          >
+            [ IN-MEMORY ]
+          </span>
+        ) : (
+          <span className="font-mono text-[11px] tracking-widest uppercase border border-[#666666]/40 text-[#666666] px-3 py-1">
+            [ ... ]
+          </span>
+        )}
+      </div>
+
+      {/* FENÊTRE COURANTE — big number */}
+      <div className="flex flex-col gap-2">
+        <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+          FENÊTRE COURANTE (60s)
+        </span>
+        <div className="flex items-baseline justify-between">
+          <span
+            className="brand font-display tracking-tight leading-none tabular-nums text-white"
+            style={{ fontSize: "clamp(2.5rem, 6vw, 4.5rem)" }}
+          >
+            {count}
+            <span className="text-[#666666]">
+              {" "}
+              / {max}
+            </span>
+          </span>
+          <span className="font-mono text-[11px] text-[#666666] tracking-widest uppercase tabular-nums">
+            {fillPct}%
+          </span>
+        </div>
+        <div className="w-full h-[3px] bg-[#666666]/20 overflow-hidden">
+          <div
+            className="h-full transition-all duration-300"
+            style={{
+              width: `${fillPct}%`,
+              backgroundColor: statusColor,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* STATUT badge */}
+      <div className="flex items-center justify-between pt-2">
+        <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+          STATUT
+        </span>
+        <span
+          className="font-mono text-[11px] tracking-widest uppercase border px-3 py-1"
+          style={{ color: statusColor, borderColor: statusColor }}
+        >
+          [ {status} ]
+        </span>
+      </div>
+
+      {error && (
+        <div className="font-mono text-[10px] text-[#FF3300] tracking-widest uppercase normal-case border border-[#FF3300]/40 px-3 py-2">
+          ERREUR POLL : {error}
+        </div>
+      )}
+
+      <div className="font-mono text-[10px] text-[#666666]/60 tracking-widest uppercase">
+        AUTO-REFRESH · 5S
+      </div>
+    </div>
+  );
 }
