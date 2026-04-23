@@ -43,7 +43,7 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
   const [scrapeCount, setScrapeCount] = useState(1000);
   const [scrapeRunning, setScrapeRunning] = useState(false);
 
-  const [extractRunning, setExtractRunning] = useState(false);
+  const [fillRunning, setFillRunning] = useState(false);
 
   const [healthPlatform, setHealthPlatform] = useState<
     "instagram" | "tiktok" | "both"
@@ -107,12 +107,12 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
     }
   }
 
-  async function runExtract() {
-    if (extractRunning) return;
-    setExtractRunning(true);
+  async function runFill() {
+    if (fillRunning) return;
+    setFillRunning(true);
     show();
     try {
-      const res = await fetch("/api/pool/engagement-extract", {
+      const res = await fetch("/api/pool/engagement-fill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -122,7 +122,11 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
       });
       const data = await res.json();
       if (res.ok) {
-        toast.push("ok", `EXTRACT #${data.jobId} LANCÉ`);
+        if (data.skipped === "already_running") {
+          toast.push("err", `FILL DÉJÀ EN COURS · JOB #${data.jobId}`);
+        } else {
+          toast.push("ok", `FILL #${data.jobId} LANCÉ`);
+        }
         router.refresh();
       } else {
         toast.push("err", data.error ?? "ÉCHEC");
@@ -132,7 +136,7 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
     } finally {
       setTimeout(() => {
         hide();
-        setExtractRunning(false);
+        setFillRunning(false);
       }, 600);
     }
   }
@@ -243,10 +247,10 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
           <p className="font-mono text-[11px] text-[#666666] tracking-wide normal-case mb-5 leading-relaxed">
             {isEngagement ? (
               <>
-                Exploite d&apos;abord le{" "}
-                <span className="text-white">pool abonnés existant</span>{" "}
-                (1 appel API / compte, très cheap). Bouton secondaire si
-                épuisé : scrape via seeds (2 appels / compte).
+                Grow le pool <span className="text-white">engagement</span>{" "}
+                jusqu&apos;à atteindre la cible. Le système choisit la
+                méthode la moins chère tout seul — pas de bouton à
+                choisir.
               </>
             ) : (
               <>
@@ -281,30 +285,21 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
               <>
                 <button
                   type="button"
-                  onClick={runExtract}
-                  disabled={extractRunning}
+                  onClick={runFill}
+                  disabled={fillRunning}
                   className="interactive group relative w-full border border-[#FF3300] bg-[#FF3300] text-black py-4 px-5 flex justify-between items-center text-left disabled:opacity-60 mt-1"
                 >
                   <span className="font-mono text-xs tracking-widest">
-                    {extractRunning
+                    {fillRunning
                       ? "[ LANCEMENT... ]"
-                      : "[ EXTRAIRE POSTS DU POOL ABONNÉS ]"}
+                      : "[ REMPLIR LE POOL ENGAGEMENT ]"}
                   </span>
                   <span className="font-mono text-xs">→</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={runScrape}
-                  disabled={scrapeRunning}
-                  className="interactive group relative w-full border border-[#666666]/50 bg-transparent text-[#666666] hover:border-white hover:text-white py-3 px-5 flex justify-between items-center text-left disabled:opacity-60 transition-colors"
-                >
-                  <span className="font-mono text-xs tracking-widest">
-                    {scrapeRunning
-                      ? "[ LANCEMENT... ]"
-                      : "[ SCRAPER VIA SEEDS ]"}
-                  </span>
-                  <span className="font-mono text-xs">→</span>
-                </button>
+                <p className="font-mono text-[10px] text-[#666666] normal-case tracking-wide leading-snug mt-1">
+                  Méthode : extract pool abonnés → fallback seeds si
+                  nécessaire
+                </p>
               </>
             ) : (
               <button

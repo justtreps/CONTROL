@@ -37,15 +37,37 @@ type ExtractJobStats = {
   poolType?: "follower" | "engagement";
 };
 
+type FillJobStats = {
+  platform: "instagram" | "tiktok" | "both";
+  target: number;
+  phase: "extract" | "scrape" | "done";
+  totalAdded: number;
+  addedViaExtract: number;
+  addedViaScrape: number;
+  extract?: { accountsProcessed?: number; callsUsed?: number };
+  scrape?: { callsUsed?: number };
+  poolType?: "engagement";
+};
+
 type Job = {
   id: number;
-  jobType: "scrape" | "health_check" | "cleanup" | "engagement_extract";
+  jobType:
+    | "scrape"
+    | "health_check"
+    | "cleanup"
+    | "engagement_extract"
+    | "engagement_fill";
   platform: string | null;
   trigger: string;
   status: string;
   startedAt: string;
   endedAt: string | null;
-  stats: ScrapeJobStats | HealthJobStats | ExtractJobStats | null;
+  stats:
+    | ScrapeJobStats
+    | HealthJobStats
+    | ExtractJobStats
+    | FillJobStats
+    | null;
   stopRequested: boolean;
   error: string | null;
 };
@@ -176,6 +198,18 @@ function JobRow({
       const s = job.stats as ExtractJobStats;
       progress = `${s.addedPosts.toLocaleString("en-US")} / ${s.target.toLocaleString("en-US")} POSTS · ${s.accountsProcessed} COMPTES · ${s.accountsExhausted} ÉPUISÉS`;
       calls = s.callsUsed.toLocaleString("en-US");
+    } else if (job.jobType === "engagement_fill") {
+      const s = job.stats as FillJobStats;
+      const phaseLabel =
+        s.phase === "extract"
+          ? "PHASE 1 · EXTRACT"
+          : s.phase === "scrape"
+            ? "PHASE 2 · SEEDS"
+            : "TERMINÉ";
+      progress = `${s.totalAdded.toLocaleString("en-US")} / ${s.target.toLocaleString("en-US")} POSTS · ${phaseLabel} · EX:${s.addedViaExtract} SC:${s.addedViaScrape}`;
+      const extractCalls = s.extract?.callsUsed ?? 0;
+      const scrapeCalls = s.scrape?.callsUsed ?? 0;
+      calls = (extractCalls + scrapeCalls).toLocaleString("en-US");
     }
   }
 

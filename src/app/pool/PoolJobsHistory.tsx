@@ -51,6 +51,7 @@ const TYPE_LABEL_FR: Record<string, string> = {
   health_check: "VÉRIF.",
   cleanup: "NETTOYAGE",
   engagement_extract: "EXTRACT",
+  engagement_fill: "FILL",
 };
 
 const FILTER_CLS =

@@ -77,6 +77,7 @@ export async function runStaleJobWatchdog(): Promise<number> {
 
     const addedPosts = s.addedPosts ?? 0;
     const accountsProcessed = s.accountsProcessed ?? 0;
+    const totalAdded = s.totalAdded ?? 0;
 
     // Progress heuristic per job type. Any non-zero progress signal
     // means the worker ran at least one iteration — leave it alone
@@ -89,7 +90,9 @@ export async function runStaleJobWatchdog(): Promise<number> {
           ? addedA + addedB === 0 && callsUsed === 0
           : j.jobType === "engagement_extract"
             ? addedPosts === 0 && accountsProcessed === 0 && callsUsed === 0
-            : false; // cleanup jobs are fast — unknown types: leave alone
+            : j.jobType === "engagement_fill"
+              ? totalAdded === 0
+              : false; // cleanup jobs are fast — unknown types: leave alone
 
     if (!isNoProgress) continue;
 
@@ -133,6 +136,7 @@ export async function runOrchestratorTick(): Promise<OrchestratorResult> {
     "health_check",
     "scrape",
     "engagement_extract",
+    "engagement_fill",
   ]);
 
   // Pick the oldest non-terminal job whose subsystem is still enabled.
