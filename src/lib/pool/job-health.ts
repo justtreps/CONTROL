@@ -15,7 +15,8 @@
 //                             looping on some pathological input
 //                             without surfacing errors.
 
-import type { PoolJob, PoolConfig } from "@prisma/client";
+import type { PoolJob, PoolConfig, Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
 
 export type StuckReason =
   | "budget_exhausted"
@@ -198,6 +199,52 @@ export function updateLastProgress(
   ) {
     (stats as Record<string, unknown>).lastProgressAt = new Date().toISOString();
   }
+}
+
+// Periodically persist the live stats snapshot to the PoolJob row
+// while a tranche is running, so the UI's 5s poll sees counters
+// advance in near real-time instead of jumping at tranche end.
+//
+// Writes only the `stats` field — status / endedAt / error belong to
+// the terminal finalize. Uses an "in-flight" guard so a slow UPDATE
+// can't stack re-entries. Failures are swallowed; the terminal
+// finalize will re-write the full state anyway.
+export function startJobHeartbeat({
+  jobId,
+  getStats,
+  intervalMs = 3000,
+}: {
+  jobId: number;
+  getStats: () => Record<string, unknown>;
+  intervalMs?: number;
+}): { stop: () => Promise<void> } {
+  let inFlight = false;
+  let stopped = false;
+
+  const id = setInterval(async () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      const snap = getStats();
+      await prisma.poolJob.update({
+        where: { id: jobId },
+        data: {
+          stats: snap as unknown as Prisma.InputJsonValue,
+        },
+      });
+    } catch {
+      /* best-effort — terminal finalize will land the full state */
+    } finally {
+      inFlight = false;
+    }
+  }, intervalMs);
+
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(id);
+    },
+  };
 }
 
 // Shared finalization helper used by every tranche worker. Given the

@@ -7,7 +7,7 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { getPoolConfig } from "@/lib/pool/config";
-import { finalizeTrancheStatus } from "@/lib/pool/job-health";
+import { finalizeTrancheStatus, startJobHeartbeat } from "@/lib/pool/job-health";
 import {
   runEngagementExtractTranche,
   type ExtractStats,
@@ -61,6 +61,10 @@ export async function POST(req: Request) {
 
   const beforeStats = job.stats as Record<string, unknown> | null;
   const stats = job.stats as unknown as ExtractStats;
+  const hb = startJobHeartbeat({
+    jobId: job.id,
+    getStats: () => stats as unknown as Record<string, unknown>,
+  });
 
   try {
     const { done, stats: finalStats } = await runEngagementExtractTranche({
@@ -111,6 +115,8 @@ export async function POST(req: Request) {
       { error: (e as Error).message, jobId: job.id },
       { status: 500 }
     );
+  } finally {
+    await hb.stop();
   }
 }
 

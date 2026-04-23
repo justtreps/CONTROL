@@ -24,7 +24,7 @@ import {
   runHealthCheckTranche,
   maybeQueueAutoRefill,
 } from "@/lib/pool/health-check";
-import { finalizeTrancheStatus } from "@/lib/pool/job-health";
+import { finalizeTrancheStatus, startJobHeartbeat } from "@/lib/pool/job-health";
 import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 300;
@@ -81,6 +81,11 @@ export async function POST(req: Request) {
     },
   });
 
+  const hb = startJobHeartbeat({
+    jobId: job.id,
+    getStats: () => initial as unknown as Record<string, unknown>,
+  });
+
   try {
     const { done, stats: finalStats } = await runHealthCheckTranche({
       stats: initial,
@@ -130,6 +135,8 @@ export async function POST(req: Request) {
       { error: (e as Error).message },
       { status: 500 }
     );
+  } finally {
+    await hb.stop();
   }
 }
 

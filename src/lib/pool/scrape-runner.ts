@@ -21,7 +21,7 @@ import {
   type ScrapeStats,
 } from "./scraper";
 import { getPoolConfig } from "./config";
-import { finalizeTrancheStatus } from "./job-health";
+import { finalizeTrancheStatus, startJobHeartbeat } from "./job-health";
 import type { PoolJob } from "@prisma/client";
 
 export const SCRAPE_BUDGET_MS = 280_000;
@@ -48,6 +48,10 @@ export async function runScrapeJobTranche(
 ): Promise<ScrapeRunResult> {
   const beforeStats = job.stats as Record<string, unknown> | null;
   const stats = job.stats as unknown as ScrapeStats;
+  const hb = startJobHeartbeat({
+    jobId: job.id,
+    getStats: () => stats as unknown as Record<string, unknown>,
+  });
   try {
     const { done, stats: updated } = await runScrapeTranche({
       stats,
@@ -86,5 +90,7 @@ export async function runScrapeJobTranche(
       },
     });
     throw e;
+  } finally {
+    await hb.stop();
   }
 }
