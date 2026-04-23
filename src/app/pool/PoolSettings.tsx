@@ -484,27 +484,27 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
     : null;
   const r = initial.lastServicesSyncResult ?? null;
 
-  // Server-side "run in progress" — true when either this click, a
-  // concurrent click, OR the hourly cron is currently executing.
+  // Server-side "run in progress" — ultimately the single source of
+  // truth. inProgressServer=true means the DB lock is held; false
+  // means the worker has released it (success, error, or stale>10m
+  // auto-clear). The button's enabled state is driven by this alone
+  // so the UI can never get stuck on client-only flags.
   const inProgressServer = Boolean(initial.servicesSyncStartedAt);
 
-  // Local "waiting for completion" state — set after a click, cleared
-  // when the server lastServicesSyncAt prop changes vs. the snapshot
-  // taken at click time. Drives the polling effect below.
+  // "watching" = we want to poll for completion + pop a toast.
+  // Independent from button state — exists only to drive the
+  // router.refresh() loop and the completion toast.
   const [watching, setWatching] = useState(false);
   const watchRef = useRef<string | null>(null);
 
   // Polling: every 10s while watching, router.refresh() to pull new
-  // SSR props. When lastServicesSyncAt changes compared to the
-  // pre-click snapshot, show completion toast + stop watching.
+  // SSR props. Stops the moment the server lock clears OR a new
+  // lastServicesSyncAt lands (whichever comes first).
   useEffect(() => {
     if (!watching) return;
     const id = setInterval(() => {
       router.refresh();
     }, 10_000);
-    // Safety cap — give up after 6 minutes so a silently dead worker
-    // doesn't leave the spinner forever. The lock itself auto-stales
-    // after 10 min server-side.
     const timeout = setTimeout(
       () => {
         setWatching(false);
@@ -521,15 +521,21 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
     };
   }, [watching, router, toast]);
 
-  // Detect completion: initial.lastServicesSyncAt shifted vs snapshot.
+  // Completion detection — primary signal: server lock cleared.
+  // Secondary: lastServicesSyncAt shifted vs our click-time snapshot.
+  // Either signal exits watch mode so a race condition (prop update
+  // ordering) can't leave the UI stuck.
   useEffect(() => {
     if (!watching) return;
-    if (!initial.lastServicesSyncAt) return;
-    if (initial.lastServicesSyncAt === watchRef.current) return;
-    // New sync landed — celebrate + exit watch mode.
+    const lockCleared = !inProgressServer;
+    const timestampShifted =
+      initial.lastServicesSyncAt &&
+      initial.lastServicesSyncAt !== watchRef.current;
+    if (!lockCleared && !timestampShifted) return;
+
     setWatching(false);
     const data = initial.lastServicesSyncResult;
-    if (data) {
+    if (timestampShifted && data) {
       const c = Number(data.created ?? 0);
       const u = Number(data.updated ?? 0);
       const d = Number(data.deactivated ?? 0);
@@ -537,15 +543,20 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
         "ok",
         `SYNC OK · +${c} CRÉÉS · ${u} UPDATED · ${d} DEACTIVATED`
       );
-    } else {
-      toast.push("ok", "SYNC TERMINÉ");
+    } else if (lockCleared) {
+      // Lock cleared but no new result — likely already-completed
+      // when we started watching. Silent exit (don't spam toasts).
     }
-  }, [initial.lastServicesSyncAt, initial.lastServicesSyncResult, watching, toast]);
+  }, [
+    inProgressServer,
+    initial.lastServicesSyncAt,
+    initial.lastServicesSyncResult,
+    watching,
+    toast,
+  ]);
 
   async function runManualSync() {
-    if (watching || inProgressServer) return;
-    // Snapshot the current lastServicesSyncAt so the polling effect
-    // can tell when the new run has landed.
+    if (inProgressServer) return;
     watchRef.current = initial.lastServicesSyncAt;
     try {
       const res = await fetch("/api/config/sync-services", { method: "POST" });
@@ -559,7 +570,7 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
           "err",
           "SYNC DÉJÀ EN COURS — ATTENDS LA FIN AVANT DE RECLIQUER"
         );
-        setWatching(true); // still poll — it's running, we want the readout
+        setWatching(true);
         return;
       }
       toast.push("ok", "SYNC LANCÉ EN ARRIÈRE-PLAN");
@@ -570,10 +581,15 @@ function ServicesSyncBody({ initial }: { initial: Cfg }) {
     }
   }
 
-  const buttonDisabled = watching || inProgressServer;
-  const buttonLabel = buttonDisabled
+  // Button disable is driven by SERVER state only — inProgressServer
+  // is Boolean(initial.servicesSyncStartedAt). Client-only flags no
+  // longer gate the click so the UI can't desync from the DB truth.
+  const buttonDisabled = inProgressServer;
+  const buttonLabel = inProgressServer
     ? "[ SYNC EN COURS... ]"
-    : "[ SYNC MAINTENANT ]";
+    : watching
+      ? "[ SYNC MAINTENANT ]" // watching but lock cleared — ready again
+      : "[ SYNC MAINTENANT ]";
 
   return (
     <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
