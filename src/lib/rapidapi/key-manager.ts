@@ -13,6 +13,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { prisma } from "@/lib/prisma";
+import { getRapidApiKey } from "@/lib/config";
 
 export type ApiKeyCtx = {
   id: number;
@@ -145,27 +146,31 @@ export async function flushUsage(): Promise<void> {
 }
 
 // Ensures at least one DB row exists for IG — seeded from the
-// RAPIDAPI_KEY env var on first use so prod doesn't lose service
-// while the operator hasn't populated the UI yet. Idempotent.
+// existing RapidAPI credential (Config table first, RAPIDAPI_KEY env
+// var second) on first use so prod doesn't lose service while the
+// operator hasn't populated the new table yet. Idempotent.
 export async function ensureDefaultKeySeeded(): Promise<void> {
   const count = await prisma.rapidApiKey.count({
     where: { provider: "instagram" },
   });
   if (count > 0) return;
-  const envToken = process.env.RAPIDAPI_KEY;
-  if (!envToken) return;
+  // getRapidApiKey resolves Config row first, then env var — matches
+  // the IG client's existing fallback path so seeding picks up
+  // whatever was already working for prod.
+  const existingToken = await getRapidApiKey().catch(() => null);
+  if (!existingToken) return;
   await prisma.rapidApiKey.create({
     data: {
       provider: "instagram",
-      label: "default (from env var)",
-      token: envToken,
+      label: "default (migrated)",
+      token: existingToken,
       status: "active",
       quotaMonthly: 130_000,
       resetDayOfMonth: 2,
       rateLimitPerMin: 85,
     },
   });
-  console.log("[rapidapi-keys] seeded default IG key from RAPIDAPI_KEY env");
+  console.log("[rapidapi-keys] seeded default IG key from existing credential");
 }
 
 // Picks the round-robin key for a new job + returns the full ctx.
@@ -177,11 +182,14 @@ export async function acquireKeyForNewJob(
   await ensureDefaultKeySeeded();
   const picked = await pickNextApiKey(provider, []);
   if (picked) return picked;
-  // No active DB key — fall back to env var so we never hard-break
-  // prod when the table is temporarily empty.
-  const envToken = process.env.RAPIDAPI_KEY;
-  if (envToken && provider === "instagram") {
-    return { id: -1, token: envToken, provider: "instagram" };
+  // No active DB key — fall back to the existing credential source
+  // (Config row or env var) so we never hard-break prod when the
+  // table is temporarily empty.
+  if (provider === "instagram") {
+    const legacyToken = await getRapidApiKey().catch(() => null);
+    if (legacyToken) {
+      return { id: -1, token: legacyToken, provider: "instagram" };
+    }
   }
   return null;
 }
