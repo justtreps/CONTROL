@@ -11,6 +11,7 @@ import { getPoolConfig } from "@/lib/pool/config";
 import { finalizeTrancheStatus, startJobHeartbeat, pickJobForRunner } from "@/lib/pool/job-health";
 import {
   runEngagementFillTranche,
+  syncFillCounters,
   type FillStats,
 } from "@/lib/pool/engagement-fill";
 
@@ -56,7 +57,8 @@ export async function POST(req: Request) {
   const stats = job.stats as unknown as FillStats;
   const hb = startJobHeartbeat({
     jobId: job.id,
-    getStats: () => stats as unknown as Record<string, unknown>,
+    getStats: () =>
+      syncFillCounters(stats) as unknown as Record<string, unknown>,
   });
 
   try {

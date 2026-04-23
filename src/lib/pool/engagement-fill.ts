@@ -57,6 +57,25 @@ export function initFillStats(
   };
 }
 
+// Re-derive the surface-level counters from the nested sub-stats.
+// The inner tranche runners (runEngagementExtractTranche,
+// runScrapeTranche) mutate THEIR OWN stats refs — extract.addedPosts,
+// scrape.addedA, scrape.addedB — but have no view of the parent
+// FillStats. So totalAdded / addedViaExtract / addedViaScrape on the
+// parent go stale WITHIN a tranche until the fill runner re-syncs
+// them at phase boundaries. The heartbeat wraps its getStats through
+// this helper so the UI sees accurate progress every ~3s, not only
+// at phase transitions.
+export function syncFillCounters(stats: FillStats): FillStats {
+  stats.addedViaExtract = stats.extract?.addedPosts ?? stats.addedViaExtract;
+  if (stats.scrape) {
+    stats.addedViaScrape =
+      (stats.scrape.addedA ?? 0) + (stats.scrape.addedB ?? 0);
+  }
+  stats.totalAdded = stats.addedViaExtract + stats.addedViaScrape;
+  return stats;
+}
+
 export async function runEngagementFillTranche({
   stats,
   budgetMs,

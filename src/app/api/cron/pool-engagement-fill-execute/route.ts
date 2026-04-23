@@ -11,6 +11,7 @@ import { getPoolConfig } from "@/lib/pool/config";
 import { finalizeTrancheStatus, startJobHeartbeat } from "@/lib/pool/job-health";
 import {
   runEngagementFillTranche,
+  syncFillCounters,
   type FillStats,
 } from "@/lib/pool/engagement-fill";
 
@@ -64,7 +65,11 @@ export async function POST(req: Request) {
   const stats = job.stats as unknown as FillStats;
   const hb = startJobHeartbeat({
     jobId: job.id,
-    getStats: () => stats as unknown as Record<string, unknown>,
+    // Re-derive totalAdded / addedViaExtract / addedViaScrape from
+    // the nested sub-stats on every tick so the UI's progress number
+    // tracks inner tranche mutations in real time.
+    getStats: () =>
+      syncFillCounters(stats) as unknown as Record<string, unknown>,
   });
 
   try {
