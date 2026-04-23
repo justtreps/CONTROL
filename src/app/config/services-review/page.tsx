@@ -19,8 +19,11 @@ export default async function ServicesReviewPage() {
       id: true,
       name: true,
       platform: true,
+      serviceType: true,
       poolType: true,
       targetCountry: true,
+      classificationManualReview: true,
+      active: true,
     },
     take: 500,
   });

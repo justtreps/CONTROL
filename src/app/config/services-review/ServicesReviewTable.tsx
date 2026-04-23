@@ -2,13 +2,17 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { isTestableService, whyNotTestable } from "@/lib/services/testable";
 
 type Row = {
   id: number;
   name: string;
   platform: string;
+  serviceType: string;
   poolType: string;
   targetCountry: string | null;
+  classificationManualReview: boolean;
+  active: boolean;
 };
 
 type PoolType = "follower_test" | "engagement_test" | "unknown";
@@ -52,12 +56,23 @@ export function ServicesReviewTable({ initial }: { initial: Row[] }) {
   return (
     <section className="px-4 md:px-8 pb-24">
       <div className="max-w-7xl mx-auto border border-[#666666]/30">
+        <div className="px-4 md:px-6 py-3 border-b border-[#666666]/20 bg-[#0D0D0D] font-mono text-[10px] text-[#666666] tracking-widest uppercase normal-case leading-relaxed">
+          Rappel : le testbot tourne UNIQUEMENT sur les services vendables
+          (IG/TT · followers/likes/views/shares/saves · poolType décidé ·
+          pas de manual review). Les rows ci-dessous sont toutes{" "}
+          <span className="text-[#FFCC00]">IGNORÉES</span> tant qu&apos;elles
+          restent en triage — une fois tranchées, elles passent{" "}
+          <span className="text-[#FF3300]">TESTÉES</span> (si{" "}
+          <em>abonnés</em> ou <em>engagement</em>) ou restent ignorées (si{" "}
+          <em>ignorer</em>).
+        </div>
         <table className="w-full">
           <thead className="bg-[#0D0D0D] text-[#666666] font-mono text-xs uppercase tracking-widest">
             <tr className="border-b border-[#666666]/20">
               <th className="text-left px-4 py-3 font-normal">Service</th>
               <th className="text-left px-3 py-3 font-normal">Plat.</th>
               <th className="text-left px-3 py-3 font-normal">Pays</th>
+              <th className="text-left px-3 py-3 font-normal">Testbot</th>
               <th className="text-right px-3 py-3 font-normal">Décision</th>
             </tr>
           </thead>
@@ -75,6 +90,9 @@ export function ServicesReviewTable({ initial }: { initial: Row[] }) {
                 </td>
                 <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
                   {r.targetCountry ?? "—"}
+                </td>
+                <td className="px-3 py-3 whitespace-nowrap">
+                  <TestbotBadge row={r} />
                 </td>
                 <td className="px-3 py-3 text-right whitespace-nowrap">
                   <div className="inline-flex gap-2">
@@ -111,5 +129,33 @@ export function ServicesReviewTable({ initial }: { initial: Row[] }) {
         </table>
       </div>
     </section>
+  );
+}
+
+// Visual feedback on whether a row would currently be picked by the
+// testbot's sellable-services filter. On this page every row is in
+// manual review so the badge always reads IGNORÉ until the operator
+// decides — once decided (ABONNÉS / ENGAGEMENT), the row drops out of
+// the query and becomes TESTÉ on /services.
+function TestbotBadge({ row }: { row: Row }) {
+  const testable = isTestableService(row);
+  const reason = whyNotTestable(row);
+  if (testable) {
+    return (
+      <span
+        className="inline-block font-mono text-[10px] tracking-widest uppercase border border-[#FF3300] text-[#FF3300] px-2 py-0.5"
+        title="Ce service est pické par le cron testbot"
+      >
+        TESTÉ
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-block font-mono text-[10px] tracking-widest uppercase border border-[#666666]/60 text-[#666666] px-2 py-0.5"
+      title={reason ? `Ignoré par le testbot · ${reason}` : "Ignoré par le testbot"}
+    >
+      IGNORÉ PAR TESTBOT
+    </span>
   );
 }

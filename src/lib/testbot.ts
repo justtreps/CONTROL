@@ -9,6 +9,7 @@ import {
 } from "@/lib/pool/assign";
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
 import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -94,15 +95,33 @@ export async function runTestBot(
 
   const cutoff = new Date(Date.now() - SERVICE_COOLDOWN_HOURS * 3600 * 1000);
 
-  const services = await prisma.service.findMany({
-    where: {
-      active: true,
-      platform: { in: ["instagram", "tiktok"] },
-    },
-    include: {
-      testOrders: { orderBy: { placedAt: "desc" }, take: 1 },
-    },
-  });
+  // Sellable-only gate: the testbot is the upstream feeder for
+  // ServiceScore, so anything we don't actually route to MyBoost has
+  // no business sitting in the test cycle (it just pollutes the
+  // pool's resources and the scoring pipeline). Predicate centralised
+  // in lib/services/testable — same rules drive the UI badge.
+  const [services, totalActiveOnSellablePlatforms] = await Promise.all([
+    prisma.service.findMany({
+      where: TESTABLE_WHERE,
+      include: {
+        testOrders: { orderBy: { placedAt: "desc" }, take: 1 },
+      },
+    }),
+    prisma.service.count({
+      where: {
+        active: true,
+        platform: { in: [...SELLABLE_PLATFORMS] },
+      },
+    }),
+  ]);
+
+  const skippedNotSellable = Math.max(
+    0,
+    totalActiveOnSellablePlatforms - services.length
+  );
+  console.log(
+    `[testbot] Filtered ${services.length} services eligible, skipped ${skippedNotSellable} (reason: not sellable)`
+  );
 
   // Platform-fair rotation: split eligible services per platform,
   // take the oldest half of maxOrders from each, then interleave so
