@@ -24,6 +24,7 @@ import {
   runHealthCheckTranche,
   maybeQueueAutoRefill,
 } from "@/lib/pool/health-check";
+import { finalizeTrancheStatus } from "@/lib/pool/job-health";
 import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 300;
@@ -81,28 +82,39 @@ export async function POST(req: Request) {
   });
 
   try {
-    const { stats: finalStats } = await runHealthCheckTranche({
+    const { done, stats: finalStats } = await runHealthCheckTranche({
       stats: initial,
       budgetMs: BUDGET_MS,
       stopRequested: () => stopRequestedFor(job.id),
     });
 
     const stopped = await stopRequestedFor(job.id);
-    await maybeQueueAutoRefill(finalStats);
+    if (done) await maybeQueueAutoRefill(finalStats);
+
+    const { finalStatus, stuckReason } = finalizeTrancheStatus({
+      job,
+      beforeStats: initial as unknown as Record<string, unknown>,
+      afterStats: finalStats as unknown as Record<string, unknown>,
+      cfg,
+      stopped,
+      done,
+    });
 
     await prisma.poolJob.update({
       where: { id: job.id },
       data: {
-        status: stopped ? "stopped" : "completed",
+        status: finalStatus,
         stats: finalStats as unknown as import("@prisma/client").Prisma.InputJsonValue,
-        endedAt: new Date(),
+        error: stuckReason ?? undefined,
+        endedAt: finalStatus === "running" ? null : new Date(),
       },
     });
 
     return NextResponse.json({
       ok: true,
       jobId: job.id,
-      status: stopped ? "stopped" : "completed",
+      status: finalStatus,
+      stuckReason,
       stats: finalStats,
     });
   } catch (e) {

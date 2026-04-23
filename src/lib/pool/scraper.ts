@@ -240,9 +240,10 @@ async function buildScrapeContext(
 }
 
 // Concurrency tuning — different caps per platform because the TT
-// RapidAPI plan is far roomier than IG's. Bumping IG above 4-5 hits
-// 429s; TT happily takes 8-way parallelism.
-const IG_ORACLE_CONCURRENCY = 4;
+// RapidAPI plan is far roomier than IG's. IG ULTRA still 429s above
+// 3-way parallelism on sustained load (measured empirically after
+// the budget bump to 10k calls/run); TT happily takes 8.
+const IG_ORACLE_CONCURRENCY = 3;
 const TT_ORACLE_CONCURRENCY = 8;
 const TT_MULTI_SEED_CONCURRENCY = 3;
 

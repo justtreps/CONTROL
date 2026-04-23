@@ -72,25 +72,29 @@ type Job = {
   error: string | null;
 };
 
-// Section 4 — only renders when at least one job is active. Polls
-// /api/pool/jobs?status=running every 5s; also picks up 'pending'
-// jobs that haven't been touched by the orchestrator yet.
+// Section 4 — only renders when at least one job is active OR stuck.
+// Polls /api/pool/jobs?status=running + status=pending + status=stuck
+// every 5s. Stuck rows render a RED [ STUCK ] badge with a reason +
+// [ RELANCER ] action so the operator can recover without digging.
 export function PoolActiveJobs() {
   const router = useRouter();
   const toast = usePoolToast();
   const [rows, setRows] = useState<Job[]>([]);
   const [stopping, setStopping] = useState<Record<number, boolean>>({});
+  const [relaunching, setRelaunching] = useState<Record<number, boolean>>({});
 
   const fetchActive = useCallback(async () => {
     try {
-      const [running, pending] = await Promise.all([
+      const [running, pending, stuck] = await Promise.all([
         fetch("/api/pool/jobs?status=running&limit=10", { cache: "no-store" }),
         fetch("/api/pool/jobs?status=pending&limit=10", { cache: "no-store" }),
+        fetch("/api/pool/jobs?status=stuck&limit=10", { cache: "no-store" }),
       ]);
-      if (!running.ok || !pending.ok) return;
+      if (!running.ok || !pending.ok || !stuck.ok) return;
       const r = (await running.json()) as { rows: Job[] };
       const p = (await pending.json()) as { rows: Job[] };
-      const merged = [...p.rows, ...r.rows].sort(
+      const s = (await stuck.json()) as { rows: Job[] };
+      const merged = [...p.rows, ...r.rows, ...s.rows].sort(
         (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime()
       );
       setRows(merged);
@@ -98,6 +102,28 @@ export function PoolActiveJobs() {
       /* swallow */
     }
   }, []);
+
+  async function relaunch(jobId: number) {
+    if (relaunching[jobId]) return;
+    setRelaunching((s) => ({ ...s, [jobId]: true }));
+    try {
+      const res = await fetch(`/api/pool/jobs/${jobId}/relaunch`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.push("ok", `JOB #${jobId} RELANCÉ → #${data.newJobId}`);
+        router.refresh();
+        fetchActive();
+      } else {
+        toast.push("err", data.error ?? `RELANCE #${jobId} ÉCHEC`);
+      }
+    } catch {
+      toast.push("err", "ERREUR RÉSEAU");
+    } finally {
+      setRelaunching((s) => ({ ...s, [jobId]: false }));
+    }
+  }
 
   useEffect(() => {
     fetchActive();
@@ -147,7 +173,9 @@ export function PoolActiveJobs() {
               key={job.id}
               job={job}
               stopping={Boolean(stopping[job.id])}
+              relaunching={Boolean(relaunching[job.id])}
               onStop={() => stop(job.id)}
+              onRelaunch={() => relaunch(job.id)}
               divider={idx > 0}
             />
           ))}
@@ -160,12 +188,16 @@ export function PoolActiveJobs() {
 function JobRow({
   job,
   stopping,
+  relaunching,
   onStop,
+  onRelaunch,
   divider,
 }: {
   job: Job;
   stopping: boolean;
+  relaunching: boolean;
   onStop: () => void;
+  onRelaunch: () => void;
   divider: boolean;
 }) {
   const poolType = (job.stats as { poolType?: "follower" | "engagement" } | null)
@@ -213,30 +245,59 @@ function JobRow({
     }
   }
 
+  const isStuck = job.status === "stuck";
   const statusLabel = job.stopRequested
     ? "[ STOPPING... ]"
-    : job.status === "pending"
-      ? "[ PENDING ]"
-      : "[ RUNNING ]";
+    : isStuck
+      ? "[ STUCK ]"
+      : job.status === "pending"
+        ? "[ PENDING ]"
+        : "[ RUNNING ]";
   const statusColor = job.stopRequested
     ? "text-white"
-    : job.status === "pending"
-      ? "text-[#FFCC00]"
-      : "text-[#FF3300]";
+    : isStuck
+      ? "text-[#FF3300]"
+      : job.status === "pending"
+        ? "text-[#FFCC00]"
+        : "text-[#FF3300]";
+
+  // Human-readable French reason for a stuck job, surfaced in the
+  // row directly under the label so the operator never has to open
+  // the detail drawer to see what went wrong.
+  const stuckReasonFr = isStuck
+    ? job.error === "budget_exhausted"
+      ? "BUDGET API ATTEINT"
+      : job.error === "rate_limited_by_rapidapi"
+        ? "LIMITE RAPIDAPI PAR SECONDE ATTEINTE"
+        : job.error === "stale_no_progress"
+          ? "AUCUNE PROGRESSION DEPUIS 30 MIN"
+          : `STUCK · ${(job.error ?? "?").toString().toUpperCase()}`
+    : null;
 
   return (
     <div
       className={`py-5 font-mono text-xs tracking-widest uppercase ${
         divider ? "border-t border-[#666666]/20" : ""
-      }`}
+      } ${isStuck ? "bg-[#FF3300]/5" : ""}`}
     >
-      <div className="flex flex-wrap items-baseline justify-between gap-3 mb-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-3 mb-1">
         <div className="flex items-baseline gap-3">
           <span className="text-[#666666]">[ JOB_ID: {String(job.id).padStart(3, "0")} ]</span>
           <span className="brand font-display text-base text-white">{label}</span>
         </div>
-        <span className={statusColor}>{statusLabel}</span>
+        <span
+          className={`${statusColor} ${
+            isStuck ? "border border-[#FF3300] px-2 py-0.5" : ""
+          }`}
+        >
+          {statusLabel}
+        </span>
       </div>
+      {stuckReasonFr && (
+        <div className="mb-3 text-[11px] text-[#FF3300]/90 tracking-wide normal-case">
+          → {stuckReasonFr}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-2 md:gap-6 text-[#666666]">
         <Kv k="STARTED" v={elapsedLabel} />
@@ -246,10 +307,20 @@ function JobRow({
       <div className="grid grid-cols-1 md:grid-cols-4 gap-2 md:gap-6 text-[#666666] mt-2">
         <Kv k="CALLS" v={calls} />
         <div className="md:col-span-3 flex items-center justify-end gap-3">
+          {isStuck && (
+            <button
+              type="button"
+              onClick={onRelaunch}
+              disabled={relaunching}
+              className="interactive border border-white bg-white text-black hover:bg-[#FF3300] hover:border-[#FF3300] transition-colors px-3 py-1 disabled:opacity-50"
+            >
+              {relaunching ? "[ RELANCE... ]" : "[ RELANCER ]"}
+            </button>
+          )}
           <button
             type="button"
             onClick={onStop}
-            disabled={stopping || job.stopRequested}
+            disabled={stopping || job.stopRequested || isStuck}
             className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1 disabled:opacity-50"
           >
             [ STOP ]

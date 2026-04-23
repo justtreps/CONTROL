@@ -210,7 +210,7 @@ model PoolConfig {
   // 1500 after seeing the daily quota hit ~7500 calls/24h — a tighter
   // ceiling per run amortizes better across the day and leaves
   // headroom for measurement bot + testbot + seeds-health-check.
-  maxRapidapiCallsPerScrapeRun     Int      @default(3000)
+  maxRapidapiCallsPerScrapeRun     Int      @default(10000)
   maxRapidapiCallsPerHealthcheck   Int      @default(1500)
   maxAttemptsMethodB               Int      @default(5000)
   maxPagesPerSeed                  Int      @default(50)

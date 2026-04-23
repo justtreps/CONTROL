@@ -7,6 +7,8 @@ import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { getPoolConfig } from "@/lib/pool/config";
+import { finalizeTrancheStatus } from "@/lib/pool/job-health";
 import {
   runEngagementFillTranche,
   type FillStats,
@@ -58,6 +60,7 @@ export async function POST(req: Request) {
     });
   }
 
+  const beforeStats = job.stats as Record<string, unknown> | null;
   const stats = job.stats as unknown as FillStats;
 
   try {
@@ -68,7 +71,15 @@ export async function POST(req: Request) {
     });
 
     const stopped = await stopRequestedFor(job.id);
-    const finalStatus = stopped ? "stopped" : done ? "completed" : "running";
+    const cfg = await getPoolConfig();
+    const { finalStatus, stuckReason } = finalizeTrancheStatus({
+      job,
+      beforeStats,
+      afterStats: finalStats as unknown as Record<string, unknown>,
+      cfg,
+      stopped,
+      done,
+    });
 
     await prisma.poolJob.update({
       where: { id: job.id },
@@ -76,6 +87,7 @@ export async function POST(req: Request) {
         status: finalStatus,
         stats:
           finalStats as unknown as import("@prisma/client").Prisma.InputJsonValue,
+        error: stuckReason ?? undefined,
         endedAt: finalStatus === "running" ? null : new Date(),
       },
     });
@@ -84,6 +96,7 @@ export async function POST(req: Request) {
       ok: true,
       jobId: job.id,
       status: finalStatus,
+      stuckReason,
       stats: finalStats,
     });
   } catch (e) {

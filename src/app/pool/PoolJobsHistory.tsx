@@ -36,6 +36,7 @@ const STATUS_COLOR: Record<string, string> = {
   completed: "#FFFFFF",
   stopped: "#999999",
   error: "#FF3300",
+  stuck: "#FF3300",
 };
 
 const STATUS_LABEL_FR: Record<string, string> = {
@@ -44,6 +45,13 @@ const STATUS_LABEL_FR: Record<string, string> = {
   completed: "TERMINÉ",
   stopped: "ARRÊTÉ",
   error: "ERREUR",
+  stuck: "STUCK",
+};
+
+const STUCK_REASON_LABEL_FR: Record<string, string> = {
+  budget_exhausted: "BUDGET API ATTEINT",
+  rate_limited_by_rapidapi: "LIMITE RAPIDAPI PAR SECONDE ATTEINTE",
+  stale_no_progress: "AUCUNE PROGRESSION DEPUIS 30 MIN",
 };
 
 const TYPE_LABEL_FR: Record<string, string> = {
@@ -142,6 +150,7 @@ export function PoolJobsHistory() {
           <option value="all">TOUS STATUTS</option>
           <option value="pending">EN ATTENTE</option>
           <option value="running">EN COURS</option>
+          <option value="stuck">STUCK</option>
           <option value="completed">TERMINÉ</option>
           <option value="stopped">ARRÊTÉ</option>
           <option value="error">ERREUR</option>
@@ -480,7 +489,19 @@ function JobDetailModal({
                 </p>
               </Section>
 
-              {job.error && (
+              {job.status === "stuck" && job.error && (
+                <Section title="RAISON DU BLOCAGE">
+                  <div className="normal-case text-[#FF3300] tracking-wide text-[12px] border border-[#FF3300]/60 bg-[#FF3300]/5 p-3">
+                    {STUCK_REASON_LABEL_FR[job.error] ??
+                      `STUCK · ${job.error.toUpperCase()}`}
+                    <div className="text-[10px] text-[#666666] tracking-widest mt-2 uppercase">
+                      code : {job.error}
+                    </div>
+                  </div>
+                </Section>
+              )}
+
+              {job.status !== "stuck" && job.error && (
                 <Section title="ERREUR">
                   <pre className="normal-case text-[#FF3300] tracking-wide whitespace-pre-wrap break-words bg-[#0D0D0D] border border-[#FF3300]/40 p-3 text-[11px] leading-relaxed">
                     {job.error}

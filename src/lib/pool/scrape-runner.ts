@@ -20,6 +20,8 @@ import {
   runScrapeTranche,
   type ScrapeStats,
 } from "./scraper";
+import { getPoolConfig } from "./config";
+import { finalizeTrancheStatus } from "./job-health";
 import type { PoolJob } from "@prisma/client";
 
 export const SCRAPE_BUDGET_MS = 280_000;
@@ -34,7 +36,7 @@ async function stopRequestedFor(jobId: number): Promise<boolean> {
 
 export type ScrapeRunResult = {
   jobId: number;
-  finalStatus: "completed" | "running" | "stopped" | "error";
+  finalStatus: string;
   stats: ScrapeStats;
 };
 
@@ -42,8 +44,9 @@ export type ScrapeRunResult = {
 // responsible for having created/picked the row and set its status
 // to 'running' before calling this.
 export async function runScrapeJobTranche(
-  job: Pick<PoolJob, "id" | "stats">
+  job: Pick<PoolJob, "id" | "stats" | "jobType" | "startedAt">
 ): Promise<ScrapeRunResult> {
+  const beforeStats = job.stats as Record<string, unknown> | null;
   const stats = job.stats as unknown as ScrapeStats;
   try {
     const { done, stats: updated } = await runScrapeTranche({
@@ -52,17 +55,22 @@ export async function runScrapeJobTranche(
       stopRequested: () => stopRequestedFor(job.id),
     });
     const stopped = await stopRequestedFor(job.id);
-    const finalStatus: ScrapeRunResult["finalStatus"] = stopped
-      ? "stopped"
-      : done
-        ? "completed"
-        : "running"; // not done yet — next cron tick resumes
+    const cfg = await getPoolConfig();
+    const { finalStatus, stuckReason } = finalizeTrancheStatus({
+      job,
+      beforeStats,
+      afterStats: updated as unknown as Record<string, unknown>,
+      cfg,
+      stopped,
+      done,
+    });
     await prisma.poolJob.update({
       where: { id: job.id },
       data: {
         status: finalStatus,
         stats:
           updated as unknown as import("@prisma/client").Prisma.InputJsonValue,
+        error: stuckReason ?? undefined,
         // only stamp endedAt when the job is actually terminal
         endedAt: finalStatus === "running" ? null : new Date(),
       },
