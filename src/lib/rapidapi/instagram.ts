@@ -1,6 +1,14 @@
 import { getRapidApiKey } from "@/lib/config";
+import { waitForIgSlot } from "./rate-limit";
 
 const HOST = "instagram-scraper-20251.p.rapidapi.com";
+
+// How long to back off on an upstream 429 before retrying. Doubles
+// each attempt, caps at 3 retries total. The rate limiter should
+// make this extremely rare — this is a safety net for burst edge
+// cases or plan-level quota drift.
+const RATE_LIMIT_BACKOFF_MS = 2000;
+const MAX_429_RETRIES = 3;
 
 export type InstagramFollower = {
   id: string;
@@ -16,9 +24,15 @@ export type InstagramFollowersResponse = {
   sample: InstagramFollower[];
 };
 
-async function call(path: string): Promise<unknown> {
+async function call(path: string, attempt = 0): Promise<unknown> {
   const key = await getRapidApiKey();
   if (!key) throw new Error("RapidAPI key not configured");
+
+  // Rate-limit gate — queues up to 85 IG calls per rolling 60s
+  // across the whole Vercel invocation. Shared by every caller of
+  // this client (scraper / health check / engagement extract + fill
+  // / rechecks / seeds health check).
+  await waitForIgSlot();
 
   const res = await fetch(`https://${HOST}${path}`, {
     headers: {
@@ -27,6 +41,17 @@ async function call(path: string): Promise<unknown> {
     },
     cache: "no-store",
   });
+
+  // 429 fallback — should be almost impossible now that every call
+  // passes through the limiter, but if the upstream bursts faster
+  // than our tracker (e.g. clock skew, parallel Vercel invocations
+  // sharing the same RapidAPI key), wait + retry with exponential
+  // backoff before surfacing a 429 as a stuck-job trigger.
+  if (res.status === 429 && attempt < MAX_429_RETRIES) {
+    const waitMs = RATE_LIMIT_BACKOFF_MS * Math.pow(2, attempt);
+    await new Promise((r) => setTimeout(r, waitMs));
+    return call(path, attempt + 1);
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");

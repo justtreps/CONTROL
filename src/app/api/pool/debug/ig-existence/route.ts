@@ -127,6 +127,11 @@ async function igOembed(username: string): Promise<Probe> {
 
 async function rapidUserinfoById(userId: string, key: string): Promise<Probe> {
   try {
+    // Route through the IG client's rate-limit gate even on debug
+    // paths so a curl-debug burst doesn't trip the MEGA-plan quota
+    // while real jobs are running.
+    const { waitForIgSlot } = await import("@/lib/rapidapi/rate-limit");
+    await waitForIgSlot();
     const res = await fetch(
       `https://instagram-scraper-20251.p.rapidapi.com/userinfo/?username_or_id=${encodeURIComponent(userId)}`,
       {
