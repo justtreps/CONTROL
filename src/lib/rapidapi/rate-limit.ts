@@ -32,11 +32,28 @@ let redisAvailable: boolean | null = null; // null = not probed yet
 // throwing) without exposing the secrets themselves.
 let fallbackReason: string | null = null;
 
+// Trim whitespace + strip surrounding quote pairs (' or "). Caught
+// a prod bug where UPSTASH_REDIS_REST_URL was stored with literal
+// double-quotes around it, so `new URL(...)` rejected it even
+// though the value started with https://.
+function sanitizeEnv(v: string | undefined): string | undefined {
+  if (!v) return v;
+  let out = v.trim();
+  while (
+    out.length >= 2 &&
+    ((out.startsWith('"') && out.endsWith('"')) ||
+      (out.startsWith("'") && out.endsWith("'")))
+  ) {
+    out = out.slice(1, -1).trim();
+  }
+  return out;
+}
+
 function getRedis(): Redis | null {
   if (redisAvailable === false) return null;
   if (redisClient) return redisClient;
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = sanitizeEnv(process.env.UPSTASH_REDIS_REST_URL);
+  const token = sanitizeEnv(process.env.UPSTASH_REDIS_REST_TOKEN);
   if (!url || !token) {
     if (redisAvailable === null) {
       redisAvailable = false;
