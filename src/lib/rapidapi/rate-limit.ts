@@ -35,17 +35,26 @@ function getRedis(): Redis | null {
   if (!url || !token) {
     if (redisAvailable === null) {
       redisAvailable = false;
-      // Warn exactly once per process so we notice the fallback but
-      // don't spam logs on every call.
       console.warn(
         "[ig-ratelimit] UPSTASH_REDIS_REST_URL/_TOKEN not set — falling back to per-process in-memory limiter. Cross-worker quota is NOT enforced."
       );
     }
     return null;
   }
-  redisClient = new Redis({ url, token });
-  redisAvailable = true;
-  return redisClient;
+  try {
+    redisClient = new Redis({ url, token });
+    redisAvailable = true;
+    return redisClient;
+  } catch (e) {
+    // Bad URL / malformed token would throw here. Flip the flag so
+    // we don't keep retrying the constructor on every call.
+    redisAvailable = false;
+    console.warn(
+      "[ig-ratelimit] Redis constructor threw, falling back to in-memory:",
+      (e as Error).message.slice(0, 120)
+    );
+    return null;
+  }
 }
 
 // ── Lua script: atomic acquire ──────────────────────────────────────
