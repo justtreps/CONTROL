@@ -29,6 +29,7 @@ type Props = {
 export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
   const poolApiValue = activePool === "follower" ? "follower" : "engagement";
   const poolLabel = activePool === "follower" ? "ABONNÉS" : "ENGAGEMENT";
+  const isEngagement = activePool === "engagement";
   const router = useRouter();
   const { show, hide } = useLoading();
   const toast = usePoolToast();
@@ -41,6 +42,8 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
   >("both");
   const [scrapeCount, setScrapeCount] = useState(1000);
   const [scrapeRunning, setScrapeRunning] = useState(false);
+
+  const [extractRunning, setExtractRunning] = useState(false);
 
   const [healthPlatform, setHealthPlatform] = useState<
     "instagram" | "tiktok" | "both"
@@ -100,6 +103,36 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
       setTimeout(() => {
         hide();
         setScrapeRunning(false);
+      }, 600);
+    }
+  }
+
+  async function runExtract() {
+    if (extractRunning) return;
+    setExtractRunning(true);
+    show();
+    try {
+      const res = await fetch("/api/pool/engagement-extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: scrapePlatform,
+          count: scrapeCount,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.push("ok", `EXTRACT #${data.jobId} LANCÉ`);
+        router.refresh();
+      } else {
+        toast.push("err", data.error ?? "ÉCHEC");
+      }
+    } catch {
+      toast.push("err", "ERREUR RÉSEAU");
+    } finally {
+      setTimeout(() => {
+        hide();
+        setExtractRunning(false);
       }, 600);
     }
   }
@@ -194,23 +227,34 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
           </div>
         </div>
 
-        {/* SCRAPE — primary action */}
+        {/* SCRAPE / EXTRACT — primary action (different in engagement mode) */}
         <div className="lg:col-span-4 p-6 md:p-8 bg-[#0D0D0D] lg:border-r border-[#666666]/20">
           <div className="flex items-center justify-between mb-4">
             <span className="font-mono text-xs text-[#FF3300] tracking-widest">
               02
             </span>
             <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-              AJOUTER DES COMPTES
+              {isEngagement ? "AJOUTER DES POSTS" : "AJOUTER DES COMPTES"}
             </span>
           </div>
           <h3 className="brand font-display text-2xl md:text-3xl uppercase tracking-tight text-white mb-3">
-            Scraper.
+            {isEngagement ? "Extraire." : "Scraper."}
           </h3>
           <p className="font-mono text-[11px] text-[#666666] tracking-wide normal-case mb-5 leading-relaxed">
-            Lance un job qui va remplir la r&eacute;serve{" "}
-            <span className="text-white">{poolLabel.toLowerCase()}</span> avec
-            de nouveaux comptes.
+            {isEngagement ? (
+              <>
+                Exploite d&apos;abord le{" "}
+                <span className="text-white">pool abonnés existant</span>{" "}
+                (1 appel API / compte, très cheap). Bouton secondaire si
+                épuisé : scrape via seeds (2 appels / compte).
+              </>
+            ) : (
+              <>
+                Lance un job qui va remplir la r&eacute;serve{" "}
+                <span className="text-white">{poolLabel.toLowerCase()}</span>{" "}
+                avec de nouveaux comptes.
+              </>
+            )}
           </p>
           <div className="flex flex-col gap-3">
             <LabelSelect
@@ -224,7 +268,7 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
               ]}
             />
             <LabelInput
-              label="COMBIEN DE COMPTES"
+              label={isEngagement ? "COMBIEN DE POSTS" : "COMBIEN DE COMPTES"}
               type="number"
               min={1}
               max={10000}
@@ -233,17 +277,48 @@ export function PoolUnifiedActions({ activePool, initialConfig }: Props) {
                 setScrapeCount(Math.max(1, Number(e.target.value) || 1000))
               }
             />
-            <button
-              type="button"
-              onClick={runScrape}
-              disabled={scrapeRunning}
-              className="interactive group relative w-full border border-[#FF3300] bg-[#FF3300] text-black py-4 px-5 flex justify-between items-center text-left disabled:opacity-60 mt-1"
-            >
-              <span className="font-mono text-xs tracking-widest">
-                {scrapeRunning ? "[ LANCEMENT... ]" : "[ LANCER LE SCRAPE ]"}
-              </span>
-              <span className="font-mono text-xs">→</span>
-            </button>
+            {isEngagement ? (
+              <>
+                <button
+                  type="button"
+                  onClick={runExtract}
+                  disabled={extractRunning}
+                  className="interactive group relative w-full border border-[#FF3300] bg-[#FF3300] text-black py-4 px-5 flex justify-between items-center text-left disabled:opacity-60 mt-1"
+                >
+                  <span className="font-mono text-xs tracking-widest">
+                    {extractRunning
+                      ? "[ LANCEMENT... ]"
+                      : "[ EXTRAIRE POSTS DU POOL ABONNÉS ]"}
+                  </span>
+                  <span className="font-mono text-xs">→</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={runScrape}
+                  disabled={scrapeRunning}
+                  className="interactive group relative w-full border border-[#666666]/50 bg-transparent text-[#666666] hover:border-white hover:text-white py-3 px-5 flex justify-between items-center text-left disabled:opacity-60 transition-colors"
+                >
+                  <span className="font-mono text-xs tracking-widest">
+                    {scrapeRunning
+                      ? "[ LANCEMENT... ]"
+                      : "[ SCRAPER VIA SEEDS ]"}
+                  </span>
+                  <span className="font-mono text-xs">→</span>
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={runScrape}
+                disabled={scrapeRunning}
+                className="interactive group relative w-full border border-[#FF3300] bg-[#FF3300] text-black py-4 px-5 flex justify-between items-center text-left disabled:opacity-60 mt-1"
+              >
+                <span className="font-mono text-xs tracking-widest">
+                  {scrapeRunning ? "[ LANCEMENT... ]" : "[ LANCER LE SCRAPE ]"}
+                </span>
+                <span className="font-mono text-xs">→</span>
+              </button>
+            )}
           </div>
         </div>
 

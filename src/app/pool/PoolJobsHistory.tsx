@@ -50,6 +50,7 @@ const TYPE_LABEL_FR: Record<string, string> = {
   scrape: "SCRAPE",
   health_check: "VÉRIF.",
   cleanup: "NETTOYAGE",
+  engagement_extract: "EXTRACT",
 };
 
 const FILTER_CLS =

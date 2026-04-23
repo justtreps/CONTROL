@@ -20,6 +20,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const platform = url.searchParams.get("platform") ?? undefined;
   const status = url.searchParams.get("status") ?? undefined;
+  const source = url.searchParams.get("source") ?? undefined;
   const q = url.searchParams.get("q") ?? "";
   const country = url.searchParams.get("country") ?? undefined;
   const page = Math.max(1, Number(url.searchParams.get("page") ?? 1) || 1);
@@ -36,6 +37,7 @@ export async function GET(req: Request) {
   const where: import("@prisma/client").Prisma.TestPostWhereInput = {};
   if (platform && platform !== "all") where.platform = platform;
   if (status && status !== "all") where.status = status;
+  if (source && source !== "all") where.scrapeSource = source;
   if (country && country !== "all") {
     if (country === "unknown") {
       where.testAccount = { detectedCountry: null };
@@ -91,6 +93,7 @@ export async function GET(req: Request) {
       detectedCountry: r.testAccount.detectedCountry,
       countryConfidence: r.testAccount.countryConfidence,
       invalidReason: r.invalidReason,
+      scrapeSource: r.scrapeSource,
     })),
     total,
     page,

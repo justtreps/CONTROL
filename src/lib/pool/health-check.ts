@@ -205,6 +205,9 @@ async function processOneAccount({
           lastFollowerCount: oracle.followerCount,
           lastMediaCount: oracle.mediaCount,
           lastFollowingCount: oracle.followingCount,
+          // Oracle just ran — counts are trustworthy for engagement
+          // extraction regardless of the outcome here.
+          hasPostsInfo: true,
           active: false,
           ...(renamed ? { username: oracle.username } : {}),
         }
@@ -213,6 +216,7 @@ async function processOneAccount({
           lastFollowerCount: oracle.followerCount,
           lastMediaCount: oracle.mediaCount,
           lastFollowingCount: oracle.followingCount,
+          hasPostsInfo: true,
           ...(renamed ? { username: oracle.username } : {}),
         },
   });

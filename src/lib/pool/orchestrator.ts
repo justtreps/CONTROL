@@ -75,6 +75,9 @@ export async function runStaleJobWatchdog(): Promise<number> {
     const addedA = s.addedA ?? 0;
     const addedB = s.addedB ?? 0;
 
+    const addedPosts = s.addedPosts ?? 0;
+    const accountsProcessed = s.accountsProcessed ?? 0;
+
     // Progress heuristic per job type. Any non-zero progress signal
     // means the worker ran at least one iteration — leave it alone
     // (the normal runners will either finish it or pick it up again
@@ -84,7 +87,9 @@ export async function runStaleJobWatchdog(): Promise<number> {
         ? checked === 0 && callsUsed === 0
         : j.jobType === "scrape"
           ? addedA + addedB === 0 && callsUsed === 0
-          : false; // cleanup jobs are fast — unknown types: leave alone
+          : j.jobType === "engagement_extract"
+            ? addedPosts === 0 && accountsProcessed === 0 && callsUsed === 0
+            : false; // cleanup jobs are fast — unknown types: leave alone
 
     if (!isNoProgress) continue;
 
@@ -119,17 +124,15 @@ export async function runOrchestratorTick(): Promise<OrchestratorResult> {
   if (!toggles.poolScrapeEnabled) disabledTypes.push("scrape");
   if (!toggles.poolHealthcheckEnabled) disabledTypes.push("health_check");
 
-  // Both health_check AND scrape now run directly via their own
-  // cron endpoints (300s budget, resumable across ticks) after we
-  // measured the orchestrator's 8s per 60s budget capping throughput
-  // at 13% duty cycle. We exclude both jobType values here so the
-  // orchestrator doesn't double-process a row that the direct-run
-  // crons are already handling. Only 'cleanup' still flows through
-  // here (and it's cheap).
+  // health_check, scrape AND engagement_extract all run via dedicated
+  // 300s runners (pool-*-runner crons). Exclude them here so the 8s
+  // orchestrator doesn't double-process a row the direct-run cron is
+  // already handling. Only 'cleanup' still flows through here.
   const excluded = new Set<string>([
     ...disabledTypes,
     "health_check",
     "scrape",
+    "engagement_extract",
   ]);
 
   // Pick the oldest non-terminal job whose subsystem is still enabled.

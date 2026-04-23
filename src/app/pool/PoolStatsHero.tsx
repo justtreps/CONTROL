@@ -63,6 +63,8 @@ export function PoolStatsHero({ initialStats, activePool }: Props) {
               we're looking at; mixing numbers here would muddy it. */}
           <ScopedPoolBlock stats={stats} activePool={activePool} />
 
+          {activePool === "engagement" && <ExtractCapacity stats={stats} />}
+
           <CountryBreakdown stats={stats} activePool={activePool} />
 
           <div className="flex flex-col gap-2 pt-4 border-t border-[#666666]/20">
@@ -140,6 +142,28 @@ function PoolSummary({
       <div className={`${accent ? "text-[#FF3300]" : "text-white"}`}>{title}</div>
       <Row label="IG" value={igCount.toLocaleString("en-US")} accent />
       <Row label="TT" value={ttCount.toLocaleString("en-US")} accent />
+    </div>
+  );
+}
+
+function ExtractCapacity({ stats }: { stats: PoolStats }) {
+  const e = stats.engagementExtract;
+  if (!e) return null;
+  return (
+    <div className="flex flex-col gap-1 pt-4 border-t border-[#666666]/20">
+      <div className="text-[#666666]">[ POOL ABONNÉS EXPLOITABLE ]</div>
+      <div className="flex items-center justify-between">
+        <span className="text-[#666666]">COMPTES DISPO POUR EXTRACT</span>
+        <span className="text-white tabular-nums">
+          {e.exploitable.toLocaleString("en-US")}
+        </span>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[#666666]">ÉPUISÉS (30J)</span>
+        <span className="text-[#666666] tabular-nums">
+          {e.exhausted.toLocaleString("en-US")}
+        </span>
+      </div>
     </div>
   );
 }

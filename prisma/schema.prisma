@@ -94,6 +94,22 @@ model TestAccount {
   lastMediaCount         Int?
   lastFollowingCount     Int?
 
+  // ── Engagement-extraction metadata ───────────────────────────────
+  // Set to true once we've had a trusted oracle read on this account —
+  // the follower scraper already calls the oracle per candidate so
+  // lastMediaCount is fresh and can drive the phase-1 extraction flow
+  // without a second RapidAPI roundtrip. Legacy rows default to false
+  // until the next health-check refresh sets it.
+  hasPostsInfo           Boolean   @default(false)
+  // When did we last run /user/posts against this account for the
+  // engagement pool? Null = never. Extract flow re-picks after 30d.
+  engagementCheckedAt    DateTime?
+  engagementPostsFound   Int?
+  // True when the last extract pass returned zero qualifying posts —
+  // skip on future passes until the parent is re-checked (the 30d
+  // revisit window clears this flag).
+  engagementExhausted    Boolean   @default(false)
+
   // 'big_account_followers' | 'random_username' | 'manual'
   scrapeSource           String?
   scrapeSeedAccount      String?
@@ -163,11 +179,20 @@ model TestPost {
   firstSeenAt            DateTime  @default(now())
   lastCheckedAt          DateTime  @default(now())
 
+  // Where did this post come from?
+  //   'from_follower_pool' — phase-1 extract: we already had the
+  //                          parent account in the follower pool,
+  //                          1 RapidAPI call to fetch its posts.
+  //   'seeds'              — phase-2 seed scrape: 2 calls (oracle
+  //                          on the candidate + posts).
+  scrapeSource           String    @default("seeds")
+
   @@unique([testAccountId, mediaId])
   @@index([platform, status])
   @@index([status, assignedAt])
   @@index([platform, status, firstSeenAt])
   @@index([status, lastCheckedAt])
+  @@index([scrapeSource, status])
 }
 
 // Single-row config for the pool system (id=1). Editable from the /pool UI.

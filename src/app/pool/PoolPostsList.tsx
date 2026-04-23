@@ -25,6 +25,12 @@ type Post = {
   detectedCountry: string | null;
   countryConfidence: string;
   invalidReason: string | null;
+  scrapeSource: string;
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  from_follower_pool: "POOL ABONNÉS",
+  seeds: "SEEDS DIRECTS",
 };
 
 type ListResponse = {
@@ -59,6 +65,7 @@ const FILTER =
 export function PoolPostsList() {
   const [platform, setPlatform] = useState("all");
   const [status, setStatus] = useState("all");
+  const [source, setSource] = useState("all");
   const [country, setCountry] = useState("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState("firstSeenAt");
@@ -75,6 +82,7 @@ export function PoolPostsList() {
       const params = new URLSearchParams({
         platform,
         status,
+        source,
         country,
         q,
         sort,
@@ -90,7 +98,7 @@ export function PoolPostsList() {
     } finally {
       setLoading(false);
     }
-  }, [platform, status, country, q, sort, order, page, limit]);
+  }, [platform, status, source, country, q, sort, order, page, limit]);
 
   useEffect(() => {
     refresh();
@@ -98,7 +106,7 @@ export function PoolPostsList() {
 
   useEffect(() => {
     setPage(1);
-  }, [platform, status, country, q, sort, order]);
+  }, [platform, status, source, country, q, sort, order]);
 
   return (
     <section className="w-full">
@@ -137,6 +145,16 @@ export function PoolPostsList() {
               <option value="assigned">ASSIGNED</option>
               <option value="consumed">CONSUMED</option>
               <option value="invalid">INVALID</option>
+            </select>
+            <select
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              className={FILTER}
+              aria-label="Source"
+            >
+              <option value="all">TOUTES SOURCES</option>
+              <option value="from_follower_pool">POOL ABONNÉS</option>
+              <option value="seeds">SEEDS DIRECTS</option>
             </select>
             <select
               value={country}
@@ -188,6 +206,7 @@ export function PoolPostsList() {
                   <th className="text-left px-3 py-3 font-normal">Compte parent</th>
                   <th className="text-left px-3 py-3 font-normal hidden sm:table-cell">Plat.</th>
                   <th className="text-left px-3 py-3 font-normal hidden md:table-cell">Pays</th>
+                  <th className="text-left px-3 py-3 font-normal hidden lg:table-cell">Source</th>
                   <th className="text-right px-3 py-3 font-normal">Likes nat.</th>
                   <th className="text-left px-3 py-3 font-normal hidden md:table-cell">Date post</th>
                   <th className="text-left px-3 py-3 font-normal">Status</th>
@@ -244,6 +263,9 @@ export function PoolPostsList() {
                       ) : (
                         <span className="text-[#666666]/50">—</span>
                       )}
+                    </td>
+                    <td className="px-3 py-3 font-mono text-[10px] text-[#666666] uppercase tracking-widest hidden lg:table-cell whitespace-nowrap">
+                      {SOURCE_LABEL[r.scrapeSource] ?? r.scrapeSource.toUpperCase()}
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
                       {r.naturalLikesCount}

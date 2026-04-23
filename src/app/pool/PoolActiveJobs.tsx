@@ -25,15 +25,27 @@ type HealthJobStats = {
   poolType?: "follower" | "engagement";
 };
 
+type ExtractJobStats = {
+  platform: "instagram" | "tiktok" | "both";
+  target: number;
+  addedPosts: number;
+  accountsProcessed: number;
+  accountsExhausted: number;
+  callsUsed: number;
+  oracleBackfills: number;
+  errors: string[];
+  poolType?: "follower" | "engagement";
+};
+
 type Job = {
   id: number;
-  jobType: "scrape" | "health_check" | "cleanup";
+  jobType: "scrape" | "health_check" | "cleanup" | "engagement_extract";
   platform: string | null;
   trigger: string;
   status: string;
   startedAt: string;
   endedAt: string | null;
-  stats: ScrapeJobStats | HealthJobStats | null;
+  stats: ScrapeJobStats | HealthJobStats | ExtractJobStats | null;
   stopRequested: boolean;
   error: string | null;
 };
@@ -159,6 +171,10 @@ function JobRow({
     } else if (job.jobType === "health_check") {
       const s = job.stats as HealthJobStats;
       progress = `${s.checked} CHECKED · ${s.invalidated} INVALID`;
+      calls = s.callsUsed.toLocaleString("en-US");
+    } else if (job.jobType === "engagement_extract") {
+      const s = job.stats as ExtractJobStats;
+      progress = `${s.addedPosts.toLocaleString("en-US")} / ${s.target.toLocaleString("en-US")} POSTS · ${s.accountsProcessed} COMPTES · ${s.accountsExhausted} ÉPUISÉS`;
       calls = s.callsUsed.toLocaleString("en-US");
     }
   }

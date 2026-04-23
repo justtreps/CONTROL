@@ -766,6 +766,10 @@ async function validateAndUpsertIgCandidate({
         lastFollowerCount: oracle.followerCount,
         lastMediaCount: oracle.mediaCount,
         lastFollowingCount: oracle.followingCount,
+        // Oracle just ran — lastMediaCount is fresh, mark the account
+        // eligible for the phase-1 engagement extract without a
+        // second RapidAPI roundtrip.
+        hasPostsInfo: true,
         scrapeSource: "big_account_followers",
         scrapeSeedAccount: seed.username,
       },
@@ -785,6 +789,7 @@ async function validateAndUpsertIgCandidate({
           postedAt: p.postedAt,
           naturalLikesCount: p.likeCount,
           status: "available",
+          scrapeSource: "seeds",
         })),
         skipDuplicates: true,
       });
@@ -1019,6 +1024,8 @@ async function validateAndUpsertTtCandidate({
         lastFollowerCount: oracle.followerCount,
         lastMediaCount: oracle.mediaCount,
         lastFollowingCount: oracle.followingCount,
+        // Oracle ran — phase-1 extract can skip the re-fetch.
+        hasPostsInfo: true,
         scrapeSource: "big_account_followers",
         scrapeSeedAccount: seed.username,
       },
@@ -1038,6 +1045,7 @@ async function validateAndUpsertTtCandidate({
           postedAt: p.postedAt,
           naturalLikesCount: p.likeCount,
           status: "available",
+          scrapeSource: "seeds",
         })),
         skipDuplicates: true,
       });

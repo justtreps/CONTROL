@@ -37,6 +37,16 @@ export type PoolStats = {
     follower: Array<{ country: string | null; count: number }>;
     engagement: Array<{ country: string | null; count: number }>;
   };
+  // Phase-1 extract capacity. exploitable = follower accounts that
+  // qualify for the next extract pass (status != invalid, lastMedia
+  // Count >= 1, engagementExhausted=false, engagementCheckedAt null
+  // OR > 30d ago). exhausted = accounts marked engagementExhausted
+  // in the last 30d (they returned 0 valid posts and won't be
+  // revisited yet).
+  engagementExtract: {
+    exploitable: number;
+    exhausted: number;
+  };
 };
 
 async function accountStatusBreakdown(
@@ -129,6 +139,7 @@ async function engagementCountryBreakdown(): Promise<
 }
 
 export async function getPoolStats(): Promise<PoolStats> {
+  const revisitCutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000);
   const [
     cfg,
     igBreakdown,
@@ -141,6 +152,8 @@ export async function getPoolStats(): Promise<PoolStats> {
     engagementCountries,
     lastScrape,
     activeJobs,
+    exploitable,
+    exhausted,
   ] = await Promise.all([
     getPoolConfig(),
     accountStatusBreakdown("instagram"),
@@ -159,6 +172,25 @@ export async function getPoolStats(): Promise<PoolStats> {
     prisma.poolJob.count({
       where: { status: { in: ["pending", "running"] } },
     }),
+    prisma.testAccount.count({
+      where: {
+        accountType: "follower_test",
+        status: { not: "invalid" },
+        lastMediaCount: { gte: 1 },
+        engagementExhausted: false,
+        OR: [
+          { engagementCheckedAt: null },
+          { engagementCheckedAt: { lt: revisitCutoff } },
+        ],
+      },
+    }),
+    prisma.testAccount.count({
+      where: {
+        accountType: "follower_test",
+        engagementExhausted: true,
+        engagementCheckedAt: { gte: revisitCutoff },
+      },
+    }),
   ]);
 
   return {
@@ -174,6 +206,7 @@ export async function getPoolStats(): Promise<PoolStats> {
       follower: followerCountries,
       engagement: engagementCountries,
     },
+    engagementExtract: { exploitable, exhausted },
   };
 }
 
