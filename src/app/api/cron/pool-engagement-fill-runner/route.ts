@@ -8,7 +8,7 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { getPoolConfig } from "@/lib/pool/config";
-import { finalizeTrancheStatus, startJobHeartbeat } from "@/lib/pool/job-health";
+import { finalizeTrancheStatus, startJobHeartbeat, pickJobForRunner } from "@/lib/pool/job-health";
 import {
   runEngagementFillTranche,
   type FillStats,
@@ -36,14 +36,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, skipped: "kill_switch" });
   }
 
-  const job = await prisma.poolJob.findFirst({
-    where: {
-      jobType: "engagement_fill",
-      status: { in: ["pending", "running"] },
-    },
-    orderBy: { startedAt: "asc" },
-  });
-
+  const job = await pickJobForRunner("engagement_fill");
   if (!job) {
     return NextResponse.json({ ok: true, skipped: "no_pending_fill" });
   }

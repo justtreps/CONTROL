@@ -78,27 +78,33 @@ export async function POST(req: Request) {
     },
   });
 
-  // Fire-and-forget: kick off a new Vercel invocation to run the
-  // 280s tranche. We don't await the promise — the initial TCP
-  // handshake happens synchronously in the JS event loop, and
-  // Vercel routes the request to a fresh function regardless of
-  // our lifetime. The scrape-runner cron is the safety net if this
-  // dispatch misfires.
+  // Dual dispatch — fire both the targeted execute AND the runner in
+  // parallel. Vercel's keepalive fire-and-forget occasionally drops
+  // (observed ~4-5 min stalls until the 5-min cron noticed). With
+  // two independent dispatches, at least one usually lands within
+  // seconds. The runner picks up only jobs not being actively
+  // hearted (see pickJobForRunner) so it won't run a second tranche
+  // against the same job if the execute dispatch already started.
   const origin = new URL(req.url).origin;
+  const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
   const executeUrl = `${origin}/api/cron/pool-scrape-execute?jobId=${job.id}`;
-  void fetch(executeUrl, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` },
-    // keepalive tells the runtime we want this request to survive
-    // beyond the current function's death (Vercel respects it for
-    // outbound fetches).
-    keepalive: true,
-  }).catch((e) => {
-    console.error(
-      `[scrape] failed to dispatch execute for job#${job.id}:`,
-      (e as Error).message
-    );
-  });
+  const runnerUrl = `${origin}/api/cron/pool-scrape-runner`;
+  void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
+    (e) => {
+      console.error(
+        `[scrape] execute dispatch failed for job#${job.id}:`,
+        (e as Error).message
+      );
+    }
+  );
+  void fetch(runnerUrl, { method: "POST", headers: auth, keepalive: true }).catch(
+    (e) => {
+      console.error(
+        `[scrape] runner backup dispatch failed for job#${job.id}:`,
+        (e as Error).message
+      );
+    }
+  );
 
   return NextResponse.json({
     ok: true,

@@ -71,18 +71,28 @@ export async function POST(req: Request) {
     },
   });
 
+  // Dual dispatch — execute + runner in parallel. pickJobForRunner
+  // on the runner side prevents double-execution.
   const origin = new URL(req.url).origin;
+  const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
   const executeUrl = `${origin}/api/cron/pool-engagement-extract-execute?jobId=${job.id}`;
-  void fetch(executeUrl, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` },
-    keepalive: true,
-  }).catch((e) => {
-    console.error(
-      `[engagement-extract] failed to dispatch execute for job#${job.id}:`,
-      (e as Error).message
-    );
-  });
+  const runnerUrl = `${origin}/api/cron/pool-engagement-extract-runner`;
+  void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
+    (e) => {
+      console.error(
+        `[engagement-extract] execute dispatch failed for job#${job.id}:`,
+        (e as Error).message
+      );
+    }
+  );
+  void fetch(runnerUrl, { method: "POST", headers: auth, keepalive: true }).catch(
+    (e) => {
+      console.error(
+        `[engagement-extract] runner backup dispatch failed for job#${job.id}:`,
+        (e as Error).message
+      );
+    }
+  );
 
   return NextResponse.json({
     ok: true,

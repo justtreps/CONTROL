@@ -93,20 +93,31 @@ export async function POST(req: Request) {
     },
   });
 
-  // Fire-and-forget to the execute worker (separate Vercel invocation,
-  // 300s maxDuration).
+  // Dual dispatch — same rationale as /api/pool/scrape: keepalive
+  // fire-and-forget occasionally drops, so we fire the runner in
+  // parallel as a backup. The runner skips jobs being actively
+  // hearted (pickJobForRunner) to avoid running two tranches on the
+  // same row.
   const origin = new URL(req.url).origin;
+  const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
   const executeUrl = `${origin}/api/cron/pool-health-check-execute?jobId=${job.id}`;
-  void fetch(executeUrl, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` },
-    keepalive: true,
-  }).catch((e) => {
-    console.error(
-      `[health-check] failed to dispatch execute for job#${job.id}:`,
-      (e as Error).message
-    );
-  });
+  const runnerUrl = `${origin}/api/cron/pool-health-check-runner`;
+  void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
+    (e) => {
+      console.error(
+        `[health-check] execute dispatch failed for job#${job.id}:`,
+        (e as Error).message
+      );
+    }
+  );
+  void fetch(runnerUrl, { method: "POST", headers: auth, keepalive: true }).catch(
+    (e) => {
+      console.error(
+        `[health-check] runner backup dispatch failed for job#${job.id}:`,
+        (e as Error).message
+      );
+    }
+  );
 
   return NextResponse.json({
     ok: true,

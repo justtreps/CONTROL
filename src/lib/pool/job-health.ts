@@ -247,6 +247,57 @@ export function startJobHeartbeat({
   };
 }
 
+// Runner-side job selection that cooperates with the live heartbeat
+// so a dual-dispatched runner (execute + runner fired in parallel
+// from the manual trigger) doesn't stomp on an already-running
+// worker. Returns null when every candidate is being actively
+// hearted — meaning the execute dispatch landed and the runner is
+// redundant this tick.
+//
+// Selection rules, applied in startedAt-asc order:
+//   pending                      → take over (no worker started yet)
+//   running, no heartbeat yet,
+//     age < 10s                  → skip (give execute a grace window)
+//   running, fresh heartbeat     → skip (live worker)
+//     (lastProgressAt < 15s ago)
+//   running, stale / missing
+//     heartbeat + age ≥ 10s      → take over (execute crashed or
+//                                 never dispatched)
+export async function pickJobForRunner(
+  jobType: string
+): Promise<PoolJob | null> {
+  const candidates = await prisma.poolJob.findMany({
+    where: {
+      jobType,
+      status: { in: ["pending", "running"] },
+    },
+    orderBy: { startedAt: "asc" },
+    take: 5,
+  });
+  const now = Date.now();
+  const FRESH_HEARTBEAT_MS = 15_000;
+  const FRESH_CREATION_MS = 10_000;
+
+  for (const c of candidates) {
+    if (c.status === "pending") return c;
+    const s = c.stats as Record<string, unknown> | null;
+    const lastProgressAt = s?.lastProgressAt as string | undefined;
+    const lastMs = lastProgressAt
+      ? new Date(lastProgressAt).getTime()
+      : null;
+    if (lastMs !== null && now - lastMs < FRESH_HEARTBEAT_MS) {
+      // Another worker is actively heartbeating — leave it alone.
+      continue;
+    }
+    if (lastMs === null && now - c.startedAt.getTime() < FRESH_CREATION_MS) {
+      // Brand new, execute might still be spinning up — grace window.
+      continue;
+    }
+    return c;
+  }
+  return null;
+}
+
 // Shared finalization helper used by every tranche worker. Given the
 // input job + before/after snapshots, it:
 //   - stamps lastProgressAt on stats

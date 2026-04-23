@@ -22,6 +22,7 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { runScrapeJobTranche } from "@/lib/pool/scrape-runner";
+import { pickJobForRunner } from "@/lib/pool/job-health";
 
 export const maxDuration = 300;
 
@@ -35,15 +36,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, skipped: "kill_switch" });
   }
 
-  // Pick the oldest scrape job that still needs work. `running`
-  // rows are resumes of a previous tick that didn't reach done.
-  const job = await prisma.poolJob.findFirst({
-    where: {
-      jobType: "scrape",
-      status: { in: ["pending", "running"] },
-    },
-    orderBy: { startedAt: "asc" },
-  });
+  // Heartbeat-aware pick — skips jobs currently being actively worked
+  // on by another invocation (execute dispatch that landed). Only
+  // picks up pending rows, stale/missing-heartbeat running rows, or
+  // running rows older than the grace window. Keeps the runner as a
+  // true backup when dual-dispatched from /api/pool/scrape.
+  const job = await pickJobForRunner("scrape");
 
   if (!job) {
     return NextResponse.json({ ok: true, skipped: "no_pending_scrape" });
