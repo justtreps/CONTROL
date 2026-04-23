@@ -82,6 +82,7 @@ export function PoolActiveJobs() {
   const [rows, setRows] = useState<Job[]>([]);
   const [stopping, setStopping] = useState<Record<number, boolean>>({});
   const [relaunching, setRelaunching] = useState<Record<number, boolean>>({});
+  const [deleting, setDeleting] = useState<Record<number, boolean>>({});
 
   const fetchActive = useCallback(async () => {
     try {
@@ -153,6 +154,28 @@ export function PoolActiveJobs() {
     }
   }
 
+  async function remove(jobId: number) {
+    if (deleting[jobId]) return;
+    setDeleting((s) => ({ ...s, [jobId]: true }));
+    try {
+      const res = await fetch(`/api/pool/jobs/${jobId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.push("ok", `JOB #${jobId} SUPPRIMÉ`);
+        // Optimistic: drop the row locally so the operator sees it
+        // vanish instantly instead of waiting for the next 5s poll.
+        setRows((rs) => rs.filter((x) => x.id !== jobId));
+        router.refresh();
+      } else {
+        toast.push("err", data.error ?? `SUPPRESSION #${jobId} ÉCHEC`);
+      }
+    } catch {
+      toast.push("err", "ERREUR RÉSEAU");
+    } finally {
+      setDeleting((s) => ({ ...s, [jobId]: false }));
+    }
+  }
+
   if (rows.length === 0) return null;
 
   return (
@@ -174,8 +197,10 @@ export function PoolActiveJobs() {
               job={job}
               stopping={Boolean(stopping[job.id])}
               relaunching={Boolean(relaunching[job.id])}
+              deleting={Boolean(deleting[job.id])}
               onStop={() => stop(job.id)}
               onRelaunch={() => relaunch(job.id)}
+              onDelete={() => remove(job.id)}
               divider={idx > 0}
             />
           ))}
@@ -189,15 +214,19 @@ function JobRow({
   job,
   stopping,
   relaunching,
+  deleting,
   onStop,
   onRelaunch,
+  onDelete,
   divider,
 }: {
   job: Job;
   stopping: boolean;
   relaunching: boolean;
+  deleting: boolean;
   onStop: () => void;
   onRelaunch: () => void;
+  onDelete: () => void;
   divider: boolean;
 }) {
   const poolType = (job.stats as { poolType?: "follower" | "engagement" } | null)
@@ -311,20 +340,34 @@ function JobRow({
             <button
               type="button"
               onClick={onRelaunch}
-              disabled={relaunching}
+              disabled={relaunching || deleting}
               className="interactive border border-white bg-white text-black hover:bg-[#FF3300] hover:border-[#FF3300] transition-colors px-3 py-1 disabled:opacity-50"
             >
               {relaunching ? "[ RELANCE... ]" : "[ RELANCER ]"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onStop}
-            disabled={stopping || job.stopRequested || isStuck}
-            className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1 disabled:opacity-50"
-          >
-            [ STOP ]
-          </button>
+          {isStuck ? (
+            // Stuck rows are already terminal — no cooperative worker
+            // to signal. "Delete" hard-removes the PoolJob row so the
+            // operator can clear the active-list bloat.
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={deleting || relaunching}
+              className="interactive border border-[#FF3300] bg-[#FF3300] text-black hover:bg-[#CC2900] hover:border-[#CC2900] transition-colors px-3 py-1 disabled:opacity-50"
+            >
+              {deleting ? "[ SUPPRESSION... ]" : "[ SUPPRIMER ]"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onStop}
+              disabled={stopping || job.stopRequested}
+              className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1 disabled:opacity-50"
+            >
+              [ STOP ]
+            </button>
+          )}
         </div>
       </div>
     </div>
