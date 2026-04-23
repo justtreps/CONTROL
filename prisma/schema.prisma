@@ -273,6 +273,15 @@ model PoolConfig {
   engagementLikesMaxPerPost        Int      @default(20)
   engagementFreshnessMaxDays       Int      @default(30)
 
+  // BulkMedya catalog sync cadence. The Vercel cron fires every hour
+  // (0 * * * *) but the endpoint gates on this field + lastServices
+  // SyncAt — sync actually runs only when the elapsed time since the
+  // last successful run ≥ servicesSyncFrequencyHours. Default 1 =
+  // every hour (no gating).
+  servicesSyncFrequencyHours       Int       @default(1)
+  lastServicesSyncAt               DateTime?
+  lastServicesSyncResult           Json?
+
   updatedAt                        DateTime @updatedAt
 }
 

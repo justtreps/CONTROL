@@ -30,6 +30,9 @@ type Cfg = {
   engagementPostsMin: number;
   engagementLikesMaxPerPost: number;
   engagementFreshnessMaxDays: number;
+  servicesSyncFrequencyHours: number;
+  lastServicesSyncAt: string | null;
+  lastServicesSyncResult: Record<string, number> | null;
 };
 
 // "Paramètres techniques" — scoped to the active pool at the top.
@@ -81,6 +84,13 @@ export function PoolSettings({
           compact
         >
           <HealthCheckBody initial={initialConfig} />
+        </Collapsible>
+        <Collapsible
+          label="SYNCHRONISATION SERVICES BULKMEDYA"
+          hint="fréquence de la sync du catalogue · partagé"
+          compact
+        >
+          <ServicesSyncBody initial={initialConfig} />
         </Collapsible>
       </div>
     </div>
@@ -455,4 +465,103 @@ function EngagementBody({ initial }: { initial: Cfg }) {
       />
     </div>
   );
+}
+
+// ── Accordion — SERVICES SYNC (frequency + last-run readout) ───────
+function ServicesSyncBody({ initial }: { initial: Cfg }) {
+  const { patch, saving } = usePatchConfig();
+  const [freq, setFreq] = useState(
+    initial.servicesSyncFrequencyHours ?? 1
+  );
+
+  const lastRun = initial.lastServicesSyncAt
+    ? formatRelative(initial.lastServicesSyncAt)
+    : null;
+  const r = initial.lastServicesSyncResult ?? null;
+
+  return (
+    <div className="p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <p className="font-mono text-[11px] text-[#666666] normal-case leading-relaxed">
+        Le cron Vercel se déclenche chaque heure. Cette fréquence contrôle
+        si le run effectif a lieu ou s&apos;il est <em>skipped</em>. Ex:
+        valeur 6h = 1 sync tous les 6h même si le cron fire toutes les
+        heures.
+      </p>
+      <label className="flex flex-col gap-1">
+        <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+          FRÉQUENCE SYNC SERVICES (HEURES)
+        </span>
+        <select
+          value={freq}
+          onChange={(e) => setFreq(Number(e.target.value))}
+          className={INPUT_CLS}
+        >
+          <option value={1}>1H — chaque heure</option>
+          <option value={3}>3H</option>
+          <option value={6}>6H</option>
+          <option value={12}>12H</option>
+          <option value={24}>24H — une fois par jour</option>
+        </select>
+      </label>
+
+      <div className="flex flex-col gap-2 pt-3 border-t border-[#666666]/20 font-mono text-[11px] tracking-widest uppercase">
+        <div className="flex items-center justify-between">
+          <span className="text-[#666666]">DERNIER RUN</span>
+          <span className={lastRun ? "text-white" : "text-[#666666]"}>
+            {lastRun ?? "— jamais"}
+          </span>
+        </div>
+        {r && (
+          <>
+            <div className="flex items-center justify-between">
+              <span className="text-[#666666]">FETCHED / KEPT</span>
+              <span className="text-white tabular-nums">
+                {(r.total ?? 0).toLocaleString("en-US")} /{" "}
+                {((r.created ?? 0) + (r.updated ?? 0)).toLocaleString("en-US")}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[#666666]">CREATED · UPDATED</span>
+              <span className="text-[#FF3300] tabular-nums">
+                +{(r.created ?? 0).toLocaleString("en-US")}
+                <span className="text-[#666666]"> · </span>
+                {(r.updated ?? 0).toLocaleString("en-US")}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[#666666]">DEACTIVATED · SKIPPED</span>
+              <span className="text-[#666666] tabular-nums">
+                {(r.deactivated ?? 0).toLocaleString("en-US")}
+                <span> · </span>
+                {(r.skippedOutOfScope ?? 0).toLocaleString("en-US")}
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <SaveButton
+        saving={saving}
+        onClick={() =>
+          patch({
+            servicesSyncFrequencyHours: freq as 1 | 3 | 6 | 12 | 24,
+          })
+        }
+      />
+    </div>
+  );
+}
+
+// Same helper shape as the Hero's formatRelative — duplicated inline
+// to avoid cross-file state coupling in this client component.
+function formatRelative(iso: string | null): string {
+  if (!iso) return "—";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60_000);
+  if (min < 1) return "JUST NOW";
+  if (min < 60) return `${min}M AGO`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}H AGO`;
+  const d = Math.floor(h / 24);
+  return `${d}D AGO`;
 }

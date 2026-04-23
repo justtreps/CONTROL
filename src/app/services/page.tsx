@@ -58,6 +58,7 @@ export default async function ServicesPage({
       .map((sc) => sc.currentScore);
     return {
       id: s.id,
+      bulkmedyaId: s.bulkmedyaId,
       name: s.name,
       category: s.category,
       platform: s.platform,
@@ -176,7 +177,7 @@ export default async function ServicesPage({
             className="group relative block p-6 md:p-12 bg-[#030303] hover:bg-[#0D0D0D] transition-colors duration-500 interactive border-b border-[#666666]/20"
           >
             <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4">
-              [ {top.platform} / {top.serviceType} ]
+              [ {top.platform} / {top.serviceType} · #{top.bulkmedyaId} ]
             </div>
             <div className="brand font-display text-xl md:text-2xl uppercase tracking-tight text-white break-words mb-4">
               {top.name}

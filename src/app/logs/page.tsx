@@ -79,7 +79,7 @@ export default async function LogsPage({
   );
   const services = await prisma.service.findMany({
     where: { id: { in: serviceIds } },
-    select: { id: true, name: true, platform: true },
+    select: { id: true, bulkmedyaId: true, name: true, platform: true },
   });
   const serviceById = new Map(services.map((s) => [s.id, s]));
 
@@ -213,13 +213,18 @@ export default async function LogsPage({
                       </td>
                       <td className="px-3 py-3 max-w-xs">
                         {service ? (
-                          <Link
-                            href={`/services/${service.id}`}
-                            className="interactive brand font-display text-sm uppercase tracking-tight text-white hover:text-[#FF3300] truncate block transition-colors"
-                            title={service.name}
-                          >
-                            {service.name}
-                          </Link>
+                          <div className="flex flex-col min-w-0">
+                            <Link
+                              href={`/services/${service.id}`}
+                              className="interactive brand font-display text-sm uppercase tracking-tight text-white hover:text-[#FF3300] truncate block transition-colors"
+                              title={`${service.name} [#${service.bulkmedyaId}]`}
+                            >
+                              {service.name}
+                            </Link>
+                            <span className="font-mono text-[10px] text-[#FF3300]/80 tracking-widest">
+                              #{service.bulkmedyaId}
+                            </span>
+                          </div>
                         ) : (
                           <span className="font-mono text-xs text-[#666666]">—</span>
                         )}

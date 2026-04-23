@@ -164,6 +164,12 @@ export default async function PoolPage({
             engagementPostsMin: config.engagementPostsMin,
             engagementLikesMaxPerPost: config.engagementLikesMaxPerPost,
             engagementFreshnessMaxDays: config.engagementFreshnessMaxDays,
+            servicesSyncFrequencyHours: config.servicesSyncFrequencyHours,
+            lastServicesSyncAt:
+              config.lastServicesSyncAt?.toISOString() ?? null,
+            lastServicesSyncResult: config.lastServicesSyncResult as
+              | Record<string, number>
+              | null,
           }}
         />
       </div>

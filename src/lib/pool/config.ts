@@ -3,7 +3,7 @@
 // run before the rest of the pool system.
 
 import { prisma } from "@/lib/prisma";
-import type { PoolConfig } from "@prisma/client";
+import type { Prisma, PoolConfig } from "@prisma/client";
 
 export async function getPoolConfig(): Promise<PoolConfig> {
   const cfg = await prisma.poolConfig.findUnique({ where: { id: 1 } });
@@ -12,7 +12,7 @@ export async function getPoolConfig(): Promise<PoolConfig> {
 }
 
 export async function updatePoolConfig(
-  patch: Partial<Omit<PoolConfig, "id" | "updatedAt">>
+  patch: Prisma.PoolConfigUpdateInput
 ): Promise<PoolConfig> {
   await getPoolConfig(); // ensure row exists
   return prisma.poolConfig.update({

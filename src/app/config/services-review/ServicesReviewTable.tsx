@@ -6,6 +6,7 @@ import { isTestableService, whyNotTestable } from "@/lib/services/testable";
 
 type Row = {
   id: number;
+  bulkmedyaId: number;
   name: string;
   platform: string;
   serviceType: string;
@@ -83,7 +84,12 @@ export function ServicesReviewTable({ initial }: { initial: Row[] }) {
                 className="border-b border-[#666666]/20 hover:bg-[#0D0D0D]"
               >
                 <td className="px-4 py-3 font-mono text-xs text-white max-w-md truncate">
-                  {r.name}
+                  <div className="truncate" title={`${r.name} [#${r.bulkmedyaId}]`}>
+                    {r.name}
+                  </div>
+                  <div className="font-mono text-[10px] text-[#FF3300]/80 tracking-widest mt-1">
+                    #{r.bulkmedyaId}
+                  </div>
                 </td>
                 <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
                   {r.platform}

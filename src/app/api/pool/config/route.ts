@@ -34,6 +34,13 @@ const patchSchema = z
     engagementPostsMin: z.number().int().min(0).optional(),
     engagementLikesMaxPerPost: z.number().int().min(0).optional(),
     engagementFreshnessMaxDays: z.number().int().min(0).optional(),
+    servicesSyncFrequencyHours: z
+      .number()
+      .int()
+      .refine((v) => [1, 3, 6, 12, 24].includes(v), {
+        message: "must be 1, 3, 6, 12 or 24",
+      })
+      .optional(),
   })
   .strict();
 

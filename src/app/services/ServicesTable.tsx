@@ -7,6 +7,7 @@ import { Sparkline } from "@/components/Sparkline";
 
 export type ServiceRow = {
   id: number;
+  bulkmedyaId: number;
   name: string;
   category: string;
   platform: string;
@@ -185,7 +186,7 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
                   <Link
                     href={`/services/${r.id}`}
                     className="block brand font-display text-sm uppercase tracking-tight text-white truncate"
-                    title={r.name}
+                    title={`${r.name} [#${r.bulkmedyaId}]`}
                   >
                     {r.name}
                   </Link>
@@ -193,6 +194,8 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
                     className="font-mono text-xs text-[#666666] tracking-widest uppercase truncate mt-1"
                     title={r.category}
                   >
+                    <span className="text-[#FF3300]/80">#{r.bulkmedyaId}</span>
+                    <span className="mx-2 text-[#666666]/40">·</span>
                     {r.category}
                   </div>
                   <div className="flex items-center gap-2 mt-2 flex-wrap">

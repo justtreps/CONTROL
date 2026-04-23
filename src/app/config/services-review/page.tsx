@@ -17,6 +17,7 @@ export default async function ServicesReviewPage() {
     orderBy: [{ platform: "asc" }, { name: "asc" }],
     select: {
       id: true,
+      bulkmedyaId: true,
       name: true,
       platform: true,
       serviceType: true,

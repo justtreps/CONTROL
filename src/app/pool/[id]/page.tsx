@@ -40,7 +40,15 @@ export default async function PoolAccountPage({
         orderBy: { placedAt: "desc" },
         take: 10,
         include: {
-          service: { select: { id: true, name: true, platform: true, serviceType: true } },
+          service: {
+            select: {
+              id: true,
+              bulkmedyaId: true,
+              name: true,
+              platform: true,
+              serviceType: true,
+            },
+          },
         },
       },
     },
@@ -211,12 +219,16 @@ export default async function PoolAccountPage({
                       <Link
                         href={`/services/${o.service.id}`}
                         className="interactive brand font-display text-sm uppercase tracking-tight text-white hover:text-[#FF3300] truncate block transition-colors"
-                        title={o.service.name}
+                        title={`${o.service.name} [#${o.service.bulkmedyaId}]`}
                       >
                         {o.service.name}
                       </Link>
                       <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mt-1">
-                        [ {o.service.platform} / {o.service.serviceType} ]
+                        <span className="text-[#FF3300]/80">
+                          #{o.service.bulkmedyaId}
+                        </span>
+                        <span className="mx-2 text-[#666666]/40">·</span>
+                        {o.service.platform} / {o.service.serviceType}
                       </div>
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
