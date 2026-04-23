@@ -190,22 +190,42 @@ async function acquireWithBackoff(): Promise<void> {
 }
 
 // Debug helper — returns the current window size so we can inspect
-// live quota usage if needed.
+// live quota usage. If the Upstash call throws (SDK typing quirk,
+// network hiccup, etc.) we degrade to the in-memory count rather
+// than returning a 500 to the polling UI.
 export async function ig429SnapshotForDebug(): Promise<{
   backend: "upstash" | "in-memory";
   inFlightWindowSize: number;
   maxPerWindow: number;
+  error?: string;
 }> {
   const redis = getRedis();
   if (redis) {
-    const cutoff = Date.now() - WINDOW_MS;
-    await redis.zremrangebyscore(REDIS_KEY, "-inf", `(${cutoff}`);
-    const count = (await redis.zcard(REDIS_KEY)) ?? 0;
-    return {
-      backend: "upstash",
-      inFlightWindowSize: count,
-      maxPerWindow: MAX_REQUESTS_PER_WINDOW,
-    };
+    try {
+      const cutoff = Date.now() - WINDOW_MS;
+      // Inclusive prune — remove anything with score ≤ cutoff. This
+      // drops rows at the exact boundary (which are 60s-old to the
+      // millisecond, semantically expired for our use case) and
+      // avoids the SDK's typing quirks around the "(" exclusive
+      // prefix string.
+      await redis.zremrangebyscore(REDIS_KEY, 0, cutoff);
+      const count = (await redis.zcard(REDIS_KEY)) ?? 0;
+      return {
+        backend: "upstash",
+        inFlightWindowSize: count,
+        maxPerWindow: MAX_REQUESTS_PER_WINDOW,
+      };
+    } catch (e) {
+      // Surface the reason so the UI can show it + fall through to
+      // the in-memory count for a best-effort read.
+      pruneInMemory(Date.now());
+      return {
+        backend: "in-memory",
+        inFlightWindowSize: windowTimestamps.length,
+        maxPerWindow: MAX_REQUESTS_PER_WINDOW,
+        error: `upstash snapshot failed: ${(e as Error).message.slice(0, 120)}`,
+      };
+    }
   }
   pruneInMemory(Date.now());
   return {

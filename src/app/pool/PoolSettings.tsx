@@ -712,6 +712,7 @@ type RateLimiterSnapshot = {
   backend: "upstash" | "in-memory";
   inFlightWindowSize: number;
   maxPerWindow: number;
+  error?: string;
 };
 
 function RateLimiterBody() {
@@ -842,9 +843,9 @@ function RateLimiterBody() {
         </span>
       </div>
 
-      {error && (
-        <div className="font-mono text-[10px] text-[#FF3300] tracking-widest uppercase normal-case border border-[#FF3300]/40 px-3 py-2">
-          ERREUR POLL : {error}
+      {(error || snap?.error) && (
+        <div className="font-mono text-[10px] text-[#FF3300] tracking-widest uppercase normal-case border border-[#FF3300]/40 px-3 py-2 break-words">
+          {error ? `ERREUR POLL : ${error}` : snap?.error}
         </div>
       )}
 
