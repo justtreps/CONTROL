@@ -33,6 +33,7 @@ const ALL_KEYS: Array<keyof TogglePatch> = [
   "testBotEnabled",
   "scoringEngineEnabled",
   "adaptivePollingEnabled",
+  "workflowExecutorEnabled",
 ];
 
 export async function stopAll(): Promise<SystemToggle> {

@@ -18,6 +18,7 @@ const patchSchema = z
     testBotEnabled: z.boolean().optional(),
     scoringEngineEnabled: z.boolean().optional(),
     adaptivePollingEnabled: z.boolean().optional(),
+    workflowExecutorEnabled: z.boolean().optional(),
   })
   .strict();
 

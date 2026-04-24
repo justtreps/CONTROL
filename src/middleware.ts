@@ -18,6 +18,7 @@ const PUBLIC_PATHS = [
   "/api/pool/backfill-last-tested",
   "/api/catalogue/seed",
   "/api/catalogue/rematch",
+  "/api/workflows/seed",
 ];
 
 export async function middleware(req: NextRequest) {

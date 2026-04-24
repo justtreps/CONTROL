@@ -85,6 +85,7 @@ export default async function PoolPage({
             testBotEnabled: toggles.testBotEnabled,
             scoringEngineEnabled: toggles.scoringEngineEnabled,
             adaptivePollingEnabled: toggles.adaptivePollingEnabled,
+            workflowExecutorEnabled: toggles.workflowExecutorEnabled,
           }}
         />
 

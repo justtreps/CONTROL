@@ -649,5 +649,69 @@ model SystemToggle {
   // T+6h / T+24h / T+7d) driven by lib/scraper.ts. Kill switch for
   // the operator in case the adaptive poller misbehaves in prod.
   adaptivePollingEnabled   Boolean  @default(true)
+  // Runs the workflow executor cron. DEFAULT FALSE so a fresh
+  // deploy never races the legacy individual crons — the operator
+  // opts in once the 8 seeded workflows are verified (see
+  // lib/workflows/executor.ts). Legacy crons stay running in
+  // parallel; a follow-up migration commit will disable them once
+  // the workflow engine proves stable.
+  workflowExecutorEnabled  Boolean  @default(false)
   updatedAt                DateTime @updatedAt
+}
+
+// Visual workflow orchestrator. Each Workflow is a DAG of nodes
+// stored as JSON (see lib/workflows/nodes.ts for the Node type).
+// The master cron /api/cron/workflow-executor picks up cron-triggered
+// workflows whose schedule matches + any paused WorkflowRun that's
+// ready to resume, and advances them one node at a time.
+model Workflow {
+  id             Int      @id @default(autoincrement())
+  slug           String   @unique
+  displayName    String
+  description    String?
+  category       String   // 'health' | 'pool' | 'scoring' | 'sync' | 'catalogue' | 'custom'
+  triggerType    String   // 'manual' | 'cron' | 'event'
+  cronExpression String?  // 5-field cron when triggerType='cron'
+  eventType      String?  // event name when triggerType='event'
+  isActive       Boolean  @default(true)
+  // Nodes as a JSON array. Shape:
+  //   [{ id: "n1", type: "TRIGGER", config: {...}, nextNodeId: "n2" }, ...]
+  // See lib/workflows/nodes.ts for exhaustive node types + config
+  // schemas. JSON-as-config pattern lets new node types ship without
+  // schema churn; validation happens at executor-dispatch time.
+  nodes          Json     @default("[]")
+  lastRunAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  runs           WorkflowRun[]
+
+  @@index([isActive, triggerType])
+  @@index([category])
+}
+
+model WorkflowRun {
+  id             Int      @id @default(autoincrement())
+  workflow       Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId     Int
+  startedAt      DateTime @default(now())
+  finishedAt     DateTime?
+  // 'running'   — in-flight on a node
+  // 'completed' — reached the end of the graph cleanly
+  // 'failed'    — a node threw; see logs for the stack
+  // 'paused'    — stuck on a WAIT node; resumedAt will fire it again
+  status         String   @default("running")
+  currentNodeId  String?
+  // Live variable bag passed between nodes (eg. FETCH_POOL stashes
+  // its rows here so the next FILTER/LOOP can read them).
+  context        Json     @default("{}")
+  // Append-only log of { nodeId, at, level, message } entries.
+  // Surface in the UI history drawer.
+  logs           Json     @default("[]")
+  resumedAt      DateTime?
+  // Triggered by: 'cron' | 'manual' | 'event' | 'retry'
+  trigger        String   @default("cron")
+
+  @@index([workflowId, startedAt])
+  @@index([status])
 }

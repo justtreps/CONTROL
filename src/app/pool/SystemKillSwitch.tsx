@@ -11,6 +11,7 @@ type Toggles = {
   testBotEnabled: boolean;
   scoringEngineEnabled: boolean;
   adaptivePollingEnabled: boolean;
+  workflowExecutorEnabled: boolean;
 };
 
 type Row = {
@@ -29,6 +30,11 @@ const ROWS: Row[] = [
     key: "adaptivePollingEnabled",
     label: "POLLING ADAPTATIF",
     hint: "testbot-poll · 5min↔4h (off = 30min fixe)",
+  },
+  {
+    key: "workflowExecutorEnabled",
+    label: "WORKFLOW EXECUTOR",
+    hint: "/api/cron/workflow-executor (bascule vers /workflows)",
   },
 ];
 
