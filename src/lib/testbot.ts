@@ -10,6 +10,7 @@ import {
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
+import { markTesting } from "@/lib/catalogue/lifecycle";
 import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -451,6 +452,10 @@ export async function attemptPlaceOrder({
         nextPollAt: new Date(Date.now() + 12 * 60 * 60_000),
       },
     });
+
+    // Lifecycle transition: NEW → TESTING. No-op if the candidacy
+    // has already advanced past NEW (retest / re-qualification).
+    await markTesting(service.id);
 
     // Stamp the service's lastTestedAt so the /config/services-review
     // obsolescence filter has a fresh signal. Denormalised max of

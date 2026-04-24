@@ -118,6 +118,19 @@ model ProductServiceCandidate {
   currentScore    Float?
   rank            Int?
 
+  // Lifecycle state — see lib/catalogue/lifecycle.ts for the full
+  // machine. Stored per product×service so a service that qualifies
+  // for ig-followers can still be DEAD on ig-likes if the two
+  // services diverge. In practice the kill is service-wide (all
+  // candidacies flip together) but the column supports per-product
+  // nuance without a schema change.
+  //   NEW       — never tested, awaits first campaign placement
+  //   TESTING   — has a running TestOrder, waiting on completion
+  //   QUALIFIED — most recent completed test delivered >0 + score≥40
+  //   MONITORED — qualified + in the daily retest loop
+  //   DEAD      — 2 consecutive 0-delivery terminal tests, auto-killed
+  lifecycleStatus String   @default("NEW")
+
   // Geo detected by the matcher after stripping emoji / country
   // suffixes from the service name. null = global service.
   targetCountry   String?
@@ -658,6 +671,16 @@ model SystemToggle {
   routingApiEnabled        Boolean  @default(true)
   testBotEnabled           Boolean  @default(true)
   scoringEngineEnabled     Boolean  @default(true)
+  // Daily 1 h retest of MONITORED candidates — keeps the 0-100
+  // score fresh so routing doesn't drift on stale data.
+  dailyRetestEnabled       Boolean  @default(true)
+  // 2 consecutive zero-delivery tests → auto-kill the service.
+  // Kill switch for when the operator wants to debug without
+  // losing catalogue rows.
+  autoKillDeadServicesEnabled Boolean @default(true)
+  // Daily BulkMedya catalogue sync (midnight UTC) — picks up new
+  // services + deactivates removed ones.
+  dailySyncEnabled         Boolean  @default(true)
   // Runs the workflow executor cron. DEFAULT FALSE so a fresh
   // deploy never races the legacy individual crons — the operator
   // opts in once the 8 seeded workflows are verified (see

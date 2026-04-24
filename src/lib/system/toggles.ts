@@ -36,6 +36,9 @@ const ENABLED_KEYS: Array<keyof TogglePatch> = [
   "testBotEnabled",
   "scoringEngineEnabled",
   "workflowExecutorEnabled",
+  "dailyRetestEnabled",
+  "autoKillDeadServicesEnabled",
+  "dailySyncEnabled",
 ];
 
 // dryRunMode is inverted (true means simulation / safe). Handled

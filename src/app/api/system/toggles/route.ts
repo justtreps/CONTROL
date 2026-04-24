@@ -19,6 +19,9 @@ const patchSchema = z
     testBotEnabled: z.boolean().optional(),
     scoringEngineEnabled: z.boolean().optional(),
     workflowExecutorEnabled: z.boolean().optional(),
+    dailyRetestEnabled: z.boolean().optional(),
+    autoKillDeadServicesEnabled: z.boolean().optional(),
+    dailySyncEnabled: z.boolean().optional(),
     dryRunMode: z.boolean().optional(),
   })
   .strict();

@@ -412,6 +412,12 @@ async function build() {
   // ── Scoring campaign (if any active) ──────────────────────────
   const campaign = await getActiveCampaign();
 
+  // ── Catalogue lifecycle (NEW/TESTING/QUALIFIED/MONITORED/DEAD) ─
+  // De-duped per service so the totals reflect "how many
+  // services are in each state", not "how many candidacy rows".
+  const { lifecycleCounts } = await import("@/lib/catalogue/lifecycle");
+  const catalogueLifecycle = await lifecycleCounts();
+
   return {
     generatedAt: new Date().toISOString(),
     globalStats,
@@ -425,6 +431,7 @@ async function build() {
     recentEvents,
     heatmap,
     campaign,
+    catalogueLifecycle,
   };
 }
 

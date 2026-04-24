@@ -714,6 +714,117 @@ export const detectDryRunOffWithTestbot: Detector = async () => {
 
 // ── Registry ───────────────────────────────────────────────────
 
+// ── CATALOGUE LIFECYCLE ────────────────────────────────────────
+
+// service_killed_no_delivery — surfaces services auto-killed by
+// the lifecycle hook (2 consecutive 0-delivery tests). The poller
+// writes the Alert row directly when it kills, so this detector
+// just keeps it active + refreshes lastTriggeredAt. Auto-resolves
+// when the operator revives the service (lifecycleStatus leaves
+// DEAD).
+export const detectServiceKilledNoDelivery: Detector = async () => {
+  const killed = await prisma.productServiceCandidate.findMany({
+    where: { lifecycleStatus: "DEAD" },
+    distinct: ["serviceId"],
+    select: {
+      serviceId: true,
+      service: { select: { name: true, platform: true } },
+    },
+    take: 50,
+  });
+  const out: DetectorResult[] = [];
+  for (const k of killed) {
+    out.push({
+      code: `service_killed_no_delivery:${k.serviceId}`,
+      category: "catalogue",
+      severity: "warning",
+      title: `Service #${k.serviceId} (${k.service.platform}) désactivé — 2 tests sans livraison`,
+      description: `"${k.service.name.slice(0, 80)}" a été auto-killé par le lifecycle coordinator.`,
+      explanation: `Deux TestOrder consécutifs terminés avec deliveredQty=0 sur ce service. Le lifecycle hook a flip service.active=false + lifecycleStatus=DEAD sur toutes ses candidacies ProductServiceCandidate pour sortir la ligne du routage + du pool retest.`,
+      impact:
+        "Le service n'apparaît plus dans le routage ni le retest quotidien. Si d'autres services du même produit sont QUALIFIED, le catalogue reste couvert.",
+      suggestedAction:
+        "Ouvrir /config/catalogue pour examiner la ligne. Cliquer REVIVE si le fournisseur a été relancé et qu'on veut retester.",
+      actionType: "link",
+      actionPayload: { href: "/config/catalogue" },
+      relatedEntityType: "service",
+      relatedEntityId: k.serviceId,
+    });
+  }
+  return out;
+};
+
+// product_qualified_services_low — warn when a MyBoost product
+// has < 5 QUALIFIED / MONITORED services routable. Early signal
+// that we need a new scrape or that too many services died at
+// once.
+export const detectProductQualifiedServicesLow: Detector = async () => {
+  const products = await prisma.myBoostProduct.findMany({
+    where: { isActive: true },
+    select: { id: true, slug: true, displayName: true },
+  });
+  const out: DetectorResult[] = [];
+  for (const p of products) {
+    const healthy = await prisma.productServiceCandidate.count({
+      where: {
+        productId: p.id,
+        isEligible: true,
+        forceExcluded: false,
+        lifecycleStatus: { in: ["QUALIFIED", "MONITORED"] },
+      },
+    });
+    if (healthy >= 5) continue;
+    out.push({
+      code: `product_qualified_services_low:${p.slug}`,
+      category: "catalogue",
+      severity: "warning",
+      title: `${p.displayName} — seulement ${healthy} service(s) qualifié(s)`,
+      description: `Le produit ${p.slug} n'a que ${healthy} services QUALIFIED/MONITORED (seuil de confort 5). Le routage a peu de marge si l'un d'eux meurt.`,
+      explanation: `Les services QUALIFIED/MONITORED sont ceux qui ont passé le test initial (deliveredQty>0, score≥40). En dessous de 5, un seul auto-kill suffit à dégrader la redondance. Causes : services morts en série, catalogue BulkMedya qui s'appauvrit, ou tests initial qui échouent massivement (pool de comptes trop petit pour couvrir la geo).`,
+      impact:
+        `Si tous les services qualifiés du produit meurent, le routage renvoie des erreurs sur les commandes MyBoost ${p.displayName}.`,
+      suggestedAction:
+        "Ouvrir /config/catalogue et vérifier s'il y a des services ELIGIBLE en attente de test qualifiant. Si non, lancer une campagne scoring ciblée sur ce produit.",
+      actionType: "link",
+      actionPayload: { href: `/config/catalogue?product=${p.slug}` },
+      relatedEntityType: "myBoostProduct",
+      relatedEntityId: p.id,
+    });
+  }
+  return out;
+};
+
+// catalogue_new_services — info. The sync-services cron writes
+// the row directly when it picks up ≥1 new service. Detector
+// just keeps it active for one engine tick by re-emitting the
+// same code; when the sync stops firing the engine auto-resolves
+// on the next pass.
+export const detectCatalogueNewServices: Detector = async () => {
+  const existing = await prisma.alert.findFirst({
+    where: {
+      code: "catalogue_new_services",
+      status: { in: ["active", "acknowledged"] },
+    },
+  });
+  if (!existing) return [];
+  // Surface the row by re-emitting it. The engine's byCode dedupe
+  // + upsert keeps triggerCount stable across detector ticks.
+  return [
+    {
+      code: existing.code,
+      category: "catalogue",
+      severity: "info",
+      title: existing.title,
+      description: existing.description,
+      explanation: existing.explanation,
+      impact: existing.impact,
+      suggestedAction: existing.suggestedAction,
+      actionType: "link",
+      actionPayload: { href: "/config/catalogue" },
+    },
+  ];
+};
+
 // ── POOL CLEANUP ───────────────────────────────────────────────
 
 // pool_insufficient_after_cleanup — fires when the mass cleanup
@@ -805,6 +916,9 @@ export const DETECTORS: Detector[] = [
   detectPoolHighInvalidation,
   detectPoolInsufficientAfterCleanup,
   detectPoolCleanupInProgress,
+  detectServiceKilledNoDelivery,
+  detectProductQualifiedServicesLow,
+  detectCatalogueNewServices,
   detectSeedsExhausted,
   detectScrapeStale,
   detectJobStuck,

@@ -11,6 +11,9 @@ type Toggles = {
   testBotEnabled: boolean;
   scoringEngineEnabled: boolean;
   workflowExecutorEnabled: boolean;
+  dailyRetestEnabled: boolean;
+  autoKillDeadServicesEnabled: boolean;
+  dailySyncEnabled: boolean;
   dryRunMode: boolean;
 };
 
@@ -38,6 +41,21 @@ const ROWS: Row[] = [
     inverted: true,
   },
   { key: "scoringEngineEnabled", label: "SCORING ENGINE", hint: "/api/cron/scoring" },
+  {
+    key: "dailyRetestEnabled",
+    label: "DAILY RETEST",
+    hint: "retest 1×/jour des services MONITORED",
+  },
+  {
+    key: "autoKillDeadServicesEnabled",
+    label: "AUTO KILL SERVICES MORTS",
+    hint: "désactive auto si 2 tests consécutifs livrent 0",
+  },
+  {
+    key: "dailySyncEnabled",
+    label: "DAILY SYNC BULKMEDYA",
+    hint: "sync catalogue à minuit UTC + alert nouveaux services",
+  },
   {
     key: "workflowExecutorEnabled",
     label: "WORKFLOW EXECUTOR",

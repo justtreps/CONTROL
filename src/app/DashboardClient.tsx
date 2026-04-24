@@ -87,6 +87,13 @@ type Stats = {
     placementRatePerHour: number;
     remaining: number;
   } | null;
+  catalogueLifecycle?: {
+    NEW: number;
+    TESTING: number;
+    QUALIFIED: number;
+    MONITORED: number;
+    DEAD: number;
+  };
 };
 type ServiceRow = {
   id: number;
@@ -231,6 +238,15 @@ export function DashboardClient({
             campaign={stats.campaign}
             onChanged={refresh}
           />
+        </Section>
+      )}
+
+      {/* Catalogue lifecycle — always shown once the schema has
+          lifecycle data. 5 buckets: NEW / TESTING / QUALIFIED /
+          MONITORED / DEAD. */}
+      {stats.catalogueLifecycle && (
+        <Section title="CYCLE DE VIE CATALOGUE">
+          <LifecycleCard counts={stats.catalogueLifecycle} />
         </Section>
       )}
 
@@ -1057,4 +1073,54 @@ function formatAge(iso: string): string {
   if (s < 3600) return `il y a ${Math.floor(s / 60)}min`;
   if (s < 86400) return `il y a ${Math.floor(s / 3600)}h`;
   return `il y a ${Math.floor(s / 86400)}j`;
+}
+
+function LifecycleCard({
+  counts,
+}: {
+  counts: {
+    NEW: number;
+    TESTING: number;
+    QUALIFIED: number;
+    MONITORED: number;
+    DEAD: number;
+  };
+}) {
+  const cells: Array<{ label: string; value: number; color: string; hint: string }> = [
+    { label: "NEW", value: counts.NEW, color: "#66CCFF", hint: "Jamais testé" },
+    { label: "TESTING", value: counts.TESTING, color: "#FFCC00", hint: "Test initial en cours" },
+    { label: "QUALIFIED", value: counts.QUALIFIED, color: "#00FF88", hint: "Score ≥ 40" },
+    { label: "MONITORED", value: counts.MONITORED, color: "#00CC66", hint: "Retest 1×/jour" },
+    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "Auto-killed" },
+  ];
+  const total = cells.reduce((a, c) => a + c.value, 0);
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-5 border-y border-[#666666]/20">
+      {cells.map((c, i) => {
+        const pct = total > 0 ? Math.round((c.value / total) * 100) : 0;
+        const bg = i % 2 === 0 ? "bg-[#030303]" : "bg-[#0D0D0D]";
+        const borderR =
+          i < cells.length - 1 ? "md:border-r border-[#666666]/20" : "";
+        return (
+          <div key={c.label} className={`${bg} ${borderR} p-5 md:p-6`}>
+            <div
+              className="font-mono text-[10px] tracking-widest uppercase mb-3"
+              style={{ color: c.color }}
+            >
+              {c.label}
+            </div>
+            <div className="brand font-display text-3xl md:text-5xl tabular-nums text-white">
+              {c.value}
+              <span className="text-[#666666] text-lg md:text-xl ml-2">
+                {pct}%
+              </span>
+            </div>
+            <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase mt-3">
+              {c.hint}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }

@@ -25,6 +25,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { fetchOracleFor } from "@/lib/pool/oracle";
+import { onTestCompleted } from "@/lib/catalogue/lifecycle";
 
 // ── Tuning knobs ────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
@@ -47,6 +48,7 @@ export type PollerResult = {
 
 type OrderRow = {
   id: number;
+  serviceId: number;
   targetQuantity: number;
   baselineCount: number;
   placedAt: Date;
@@ -75,6 +77,7 @@ export async function runPoller(): Promise<PollerResult> {
     },
     select: {
       id: true,
+      serviceId: true,
       targetQuantity: true,
       baselineCount: true,
       placedAt: true,
@@ -158,6 +161,21 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
         lastHealthCheckAt: new Date(),
         nextPollAt: null,
       },
+    });
+    // Drive the lifecycle state machine: this order either lifts
+    // the service to QUALIFIED/MONITORED (delivered > 0) or
+    // contributes to a kill signal (2 consecutive zeros). Failure
+    // here is tolerated — the next retest will re-trigger the
+    // same check.
+    await onTestCompleted({
+      serviceId: order.serviceId,
+      testOrderId: order.id,
+      deliveredQty,
+    }).catch((e) => {
+      result.errors.push({
+        orderId: order.id,
+        reason: `lifecycle_hook: ${(e as Error).message.slice(0, 80)}`,
+      });
     });
     result.ordersFinalised++;
     return;
