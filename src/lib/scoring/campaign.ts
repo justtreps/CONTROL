@@ -321,34 +321,59 @@ export async function runCampaignTick(): Promise<TickResult> {
       ? activeKeys[waveIdx % activeKeys.length]
       : null;
     const doPlace = async () => {
-      try {
-        const outcome = await attemptPlaceOrder({
-          service: svc as Service,
-          simulated,
-        });
-        if (outcome.kind === "placed") {
-          result.placed++;
-          placed.add(sid);
-        } else if (outcome.kind === "no_account") {
-          // Pool empty — don't mark placed so a later campaign
-          // re-queues it when the pool refills.
-          result.skipped++;
-        } else if (outcome.kind === "retry_private") {
+      // retry_private / oracle_error = the picked pool entity was
+      // dead (private, ghost, transient oracle hiccup). Don't burn
+      // the service on a bad pool pick — try again with a fresh
+      // entity up to MAX_RETRY_PRIVATE times. Only counts toward
+      // placement throughput if we run out of retries; otherwise
+      // recover silently.
+      const MAX_RETRY_PRIVATE = 3;
+      for (let attempt = 0; attempt <= MAX_RETRY_PRIVATE; attempt++) {
+        try {
+          const outcome = await attemptPlaceOrder({
+            service: svc as Service,
+            simulated,
+          });
+          if (outcome.kind === "placed") {
+            result.placed++;
+            placed.add(sid);
+            return;
+          }
+          if (outcome.kind === "no_account") {
+            // Pool empty — don't mark placed so a later campaign
+            // re-queues it when the pool refills.
+            result.skipped++;
+            return;
+          }
+          if (outcome.kind === "retry_private") {
+            // Bad pool entity (private / ghost). Loop to pick a
+            // fresh one — attemptPlaceOrder already invalidated the
+            // dead account so pickAndAssignAccount will skip it.
+            if (attempt < MAX_RETRY_PRIVATE) continue;
+            // Exhausted retries — finally abort.
+            result.aborted++;
+            placed.add(sid);
+            return;
+          }
+          // outcome.kind === "skip" — upstream error or BulkMedya
+          // rejection. Retry once on oracle_error transients only;
+          // BulkMedya rejections are terminal (service.died was
+          // emitted, don't hammer).
+          const skipReason = (outcome as { reason: string }).reason;
+          if (attempt < 1 && skipReason.startsWith("oracle_error")) continue;
           result.aborted++;
           placed.add(sid);
-        } else {
+          return;
+        } catch (e) {
+          const msg = (e as Error).message.slice(0, 160);
+          console.warn(`[campaign] service#${sid} placement threw:`, msg);
+          // Transient network/RapidAPI error — retry once. Second
+          // throw gives up.
+          if (attempt < 1) continue;
           result.aborted++;
           placed.add(sid);
+          return;
         }
-      } catch (e) {
-        result.aborted++;
-        console.warn(
-          `[campaign] service#${sid} placement threw:`,
-          (e as Error).message.slice(0, 160)
-        );
-        // Mark placed anyway so we don't infinite-loop on one
-        // broken service.
-        placed.add(sid);
       }
     };
     if (key) {
