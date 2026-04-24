@@ -84,7 +84,6 @@ export default async function PoolPage({
             routingApiEnabled: toggles.routingApiEnabled,
             testBotEnabled: toggles.testBotEnabled,
             scoringEngineEnabled: toggles.scoringEngineEnabled,
-            adaptivePollingEnabled: toggles.adaptivePollingEnabled,
             workflowExecutorEnabled: toggles.workflowExecutorEnabled,
             dryRunMode: toggles.dryRunMode,
           }}

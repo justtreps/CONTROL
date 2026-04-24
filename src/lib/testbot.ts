@@ -10,7 +10,6 @@ import {
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
-import { initialPollingState } from "@/lib/testbot/poller";
 import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -445,12 +444,11 @@ export async function attemptPlaceOrder({
         dryRun: simulated,
         // Pre-test health check just succeeded (oracle was ok above).
         lastHealthCheckAt: new Date(),
-        // Seed the adaptive polling state — the /api/cron/testbot-poll
-        // runner picks this up on its next tick. Legacy scraper cron
-        // is deprecated; adaptive path is the single source of truth
-        // for mid-test measurements + auto-retry on dead targets.
-        pollingState:
-          initialPollingState() as unknown as import("@prisma/client").Prisma.InputJsonValue,
+        // Fixed 12h polling cadence — first poll fires 12h after
+        // placement. SMM delivery is paced in hours/days; earlier
+        // polls would burn RapidAPI for zero signal. See
+        // lib/testbot/poller.ts for the full flow.
+        nextPollAt: new Date(Date.now() + 12 * 60 * 60_000),
       },
     });
 

@@ -35,7 +35,6 @@ const ENABLED_KEYS: Array<keyof TogglePatch> = [
   "routingApiEnabled",
   "testBotEnabled",
   "scoringEngineEnabled",
-  "adaptivePollingEnabled",
   "workflowExecutorEnabled",
 ];
 

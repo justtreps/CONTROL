@@ -545,13 +545,20 @@ model TestOrder {
 
   // Last time the poller/testbot re-fetched the target via RapidAPI.
   // Pre-test health check stamps this just before placing the order;
-  // the adaptive poller stamps it on each poll.
+  // the poller stamps it on each tick.
   lastHealthCheckAt DateTime?
 
-  // Adaptive polling state. { nextPollAt, currentIntervalMs,
-  // consecutiveZeroDeltas }. Null → fallback fixed checkpoints
-  // (legacy path via lib/scraper.ts) still drives measurements for
-  // this row.
+  // Fixed-cadence polling schedule. Stamped at placement
+  // (placedAt + 12h) and bumped by the poller every tick. Null
+  // after the order finalises (status=completed|aborted_*) so the
+  // poller's `nextPollAt <= now` filter naturally skips terminal
+  // rows.
+  nextPollAt       DateTime?
+
+  // Legacy adaptive-polling state column — kept so pre-refactor
+  // rows still queryable via DB console, but the new poller writes
+  // nextPollAt directly and never touches this field. Drop in a
+  // follow-up migration once we're sure nothing reads it.
   pollingState     Json?
 
   // True when the testbot skipped the real BulkMedya placement
@@ -567,6 +574,7 @@ model TestOrder {
   @@index([status, placedAt])
   @@index([retriedFrom])
   @@index([dryRun, placedAt])
+  @@index([status, nextPollAt])
 }
 
 // Audit log of every adaptive-polling tick on a TestOrder. Scoring
@@ -650,12 +658,6 @@ model SystemToggle {
   routingApiEnabled        Boolean  @default(true)
   testBotEnabled           Boolean  @default(true)
   scoringEngineEnabled     Boolean  @default(true)
-  // When true, new TestOrders use the variable-interval adaptive
-  // poller (see lib/testbot/poller.ts). When false, they fall back
-  // to the legacy fixed checkpoints (T+5min / T+30min / T+1h /
-  // T+6h / T+24h / T+7d) driven by lib/scraper.ts. Kill switch for
-  // the operator in case the adaptive poller misbehaves in prod.
-  adaptivePollingEnabled   Boolean  @default(true)
   // Runs the workflow executor cron. DEFAULT FALSE so a fresh
   // deploy never races the legacy individual crons — the operator
   // opts in once the 8 seeded workflows are verified (see

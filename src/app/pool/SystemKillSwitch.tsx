@@ -10,7 +10,6 @@ type Toggles = {
   routingApiEnabled: boolean;
   testBotEnabled: boolean;
   scoringEngineEnabled: boolean;
-  adaptivePollingEnabled: boolean;
   workflowExecutorEnabled: boolean;
   dryRunMode: boolean;
 };
@@ -39,11 +38,6 @@ const ROWS: Row[] = [
     inverted: true,
   },
   { key: "scoringEngineEnabled", label: "SCORING ENGINE", hint: "/api/cron/scoring" },
-  {
-    key: "adaptivePollingEnabled",
-    label: "POLLING ADAPTATIF",
-    hint: "testbot-poll · 5min↔4h (off = 30min fixe)",
-  },
   {
     key: "workflowExecutorEnabled",
     label: "WORKFLOW EXECUTOR",

@@ -18,7 +18,6 @@ const patchSchema = z
     routingApiEnabled: z.boolean().optional(),
     testBotEnabled: z.boolean().optional(),
     scoringEngineEnabled: z.boolean().optional(),
-    adaptivePollingEnabled: z.boolean().optional(),
     workflowExecutorEnabled: z.boolean().optional(),
     dryRunMode: z.boolean().optional(),
   })
