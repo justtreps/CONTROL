@@ -1,3 +1,22 @@
+// Service-level scoring engine.
+//
+// RULE 1 (business): A service's currentScore stays null / gets
+//   reset until AT LEAST ONE TestOrder on the service has a
+//   Measurement proving RapidAPI observed real delivery
+//   (actualCount > baselineCount). Anything BulkMedya claims about
+//   "completed" is ignored — only what the oracle re-reads counts.
+//
+// RULE 2 (business): This file MUST NOT read BulkMedya status /
+//   progress / remains. Scoring inputs are strictly: TestOrder
+//   fields + Measurement (actualCount, realismScore) + time
+//   deltas. If a future refactor adds a BulkMedya call here, it is
+//   a regression — the comment above and the test below should
+//   catch it. (Verified: lib/bulkmedya.ts exports only placeOrder,
+//   fetchServices, syncServices — no getOrderStatus or similar.)
+//
+// If you need to surface BulkMedya state in the UI, do it in the
+// /logs page reading the field as audit-only. Never feed it back
+// into currentScore.
 import { prisma } from "@/lib/prisma";
 import { consumeCompletedAssignments } from "@/lib/pool/assign";
 import type { Measurement, TestOrder } from "@prisma/client";
@@ -117,7 +136,10 @@ export async function runScoringEngine(): Promise<ScoringResult> {
   });
 
   for (const { id: serviceId } of services) {
-    const orders = await prisma.testOrder.findMany({
+    // Pull MOVING_AVG_WINDOW × 3 so the RULE 1 filter below has
+    // enough raw orders to survive even on services where many
+    // tests ran but nothing was actually delivered yet.
+    const rawOrders = await prisma.testOrder.findMany({
       where: {
         serviceId,
         // Only count fully-completed tests in the moving average.
@@ -128,10 +150,30 @@ export async function runScoringEngine(): Promise<ScoringResult> {
       },
       include: { measurements: true },
       orderBy: { placedAt: "desc" },
-      take: MOVING_AVG_WINDOW,
+      take: MOVING_AVG_WINDOW * 3,
     });
 
+    // RULE 1 enforcement — keep only orders where at least one
+    // RapidAPI measurement shows actualCount strictly above
+    // baselineCount. No measured delivery → order is not eligible
+    // for scoring. BulkMedya status is intentionally ignored.
+    const orders = rawOrders
+      .filter((o) => {
+        const peak = Math.max(
+          o.baselineCount,
+          ...o.measurements.map((m) => m.actualCount)
+        );
+        return peak > o.baselineCount;
+      })
+      .slice(0, MOVING_AVG_WINDOW);
+
     if (orders.length === 0) {
+      // If a prior scoring run stamped a currentScore on this
+      // service but no order survives the RULE 1 filter anymore
+      // (data drift, re-scrape, whatever), reset the stale score
+      // so the /services + routing layer don't keep picking a
+      // service based on a hallucinated signal.
+      await resetStaleScore(serviceId);
       result.servicesSkipped++;
       continue;
     }
@@ -175,6 +217,25 @@ export async function runScoringEngine(): Promise<ScoringResult> {
   await recomputeRanks();
 
   return result;
+}
+
+// Called when the RULE 1 filter leaves zero scorable orders for a
+// service that previously had a currentScore. Nulls out the
+// denormalised currentScore on every candidate row so routing
+// stops treating the service as ranked. ServiceScore history is
+// append-only (currentScore is non-nullable in that table), so
+// we don't insert a placeholder — the absence of a fresh row is
+// the signal that the service fell out of the scored set. No-op
+// when there's nothing to reset.
+async function resetStaleScore(serviceId: number): Promise<void> {
+  const stale = await prisma.productServiceCandidate.count({
+    where: { serviceId, currentScore: { not: null } },
+  });
+  if (stale === 0) return;
+  await prisma.productServiceCandidate.updateMany({
+    where: { serviceId },
+    data: { currentScore: null, lastScoredAt: new Date() },
+  });
 }
 
 // Rewrites ProductServiceCandidate.rank for every active product.

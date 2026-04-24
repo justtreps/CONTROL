@@ -23,9 +23,14 @@ const FIELDS = [
 export function LogsFilters({
   platforms,
   current,
+  statusOptions,
 }: {
   platforms: string[];
   current: Current;
+  // When rendered inside /logs?view=testbot the status values are
+  // different (running/completed/aborted) from the RoutingDecision
+  // default (success/fail). Pass an override to swap the dropdown.
+  statusOptions?: Array<{ value: string; label: string }>;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -38,6 +43,8 @@ export function LogsFilters({
         else next.set(k, v);
       }
       next.delete("page");
+      // Preserve the view param so flipping a filter stays on the
+      // same tab (routing vs testbot).
       router.push(`/logs?${next.toString()}`);
     },
     [router, params]
@@ -79,9 +86,17 @@ export function LogsFilters({
           onChange={(e) => update({ status: e.target.value })}
           className={FILTER}
         >
-          <option value="all">TOUS</option>
-          <option value="success">SUCCÈS</option>
-          <option value="fail">ÉCHEC</option>
+          {(
+            statusOptions ?? [
+              { value: "all", label: "TOUS" },
+              { value: "success", label: "SUCCÈS" },
+              { value: "fail", label: "ÉCHEC" },
+            ]
+          ).map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
         </select>
       </FilterCell>
 

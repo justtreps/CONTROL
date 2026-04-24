@@ -24,11 +24,16 @@ export default async function LogsPage({
 }: {
   searchParams: { [k: string]: string | undefined };
 }) {
+  const view = searchParams.view === "testbot" ? "testbot" : "routing";
   const range = parseRange(searchParams.range);
   const platform = searchParams.platform ?? "all";
   const status = searchParams.status ?? "all";
   const mode = searchParams.mode ?? "all";
   const page = Math.max(1, Number(searchParams.page ?? 1) || 1);
+
+  if (view === "testbot") {
+    return <TestbotJournal searchParams={searchParams} />;
+  }
 
   const where: Prisma.RoutingDecisionWhereInput = {};
   if (range !== null) {
@@ -104,6 +109,8 @@ export default async function LogsPage({
   return (
     <>
       <DashboardHeader />
+
+      <ViewSwitcher current="routing" />
 
       {/* === Pattern C — Header === */}
       <section className="py-16 md:py-24 px-4 md:px-8">
@@ -337,4 +344,336 @@ function Pagination({
       </div>
     </div>
   );
+}
+
+// ── View switcher — routing (MyBoost /api/order traffic) vs
+// testbot (TestOrders placed by the scoring campaign). Lives at
+// the top of both views so operators can flip without guessing
+// the URL.
+function ViewSwitcher({ current }: { current: "routing" | "testbot" }) {
+  const tabs: Array<{ id: "routing" | "testbot"; label: string; href: string }> = [
+    { id: "routing", label: "ROUTAGE /api/order", href: "/logs" },
+    { id: "testbot", label: "TESTBOT (campagne scoring)", href: "/logs?view=testbot" },
+  ];
+  return (
+    <div className="px-4 md:px-8 pt-10">
+      <div className="max-w-7xl mx-auto flex gap-0 border border-[#666666]/20">
+        {tabs.map((t) => {
+          const active = t.id === current;
+          return (
+            <Link
+              key={t.id}
+              href={t.href}
+              className={`interactive flex-1 px-4 py-3 text-center font-mono text-[11px] tracking-widest uppercase transition-colors border-r border-[#666666]/20 last:border-r-0 ${
+                active
+                  ? "bg-[#FF3300] text-black"
+                  : "bg-[#030303] text-[#666666] hover:text-white"
+              }`}
+            >
+              {t.label}
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Testbot journal — real TestOrders placed by the scoring
+// campaign (live + terminal). Status is derived from OUR state
+// (status field + completedAt), never from BulkMedya. "Mesure
+// actuelle" reads the latest non-T+0 Measurement's actualCount so
+// the operator sees the RapidAPI-observed progress, not whatever
+// BulkMedya claims.
+async function TestbotJournal({
+  searchParams,
+}: {
+  searchParams: { [k: string]: string | undefined };
+}) {
+  const range = parseRange(searchParams.range);
+  const platformFilter = searchParams.platform ?? "all";
+  const statusFilter = searchParams.status ?? "all";
+  const modeFilter = searchParams.mode ?? "all";
+  const page = Math.max(1, Number(searchParams.page ?? 1) || 1);
+
+  const where: Prisma.TestOrderWhereInput = {};
+  if (range !== null) {
+    where.placedAt = { gte: new Date(Date.now() - range * 3600 * 1000) };
+  }
+  if (platformFilter !== "all") where.service = { platform: platformFilter };
+  if (statusFilter === "running") where.status = "running";
+  if (statusFilter === "completed") where.status = "completed";
+  if (statusFilter === "aborted") where.status = { startsWith: "aborted" };
+  if (modeFilter === "dry") where.dryRun = true;
+  if (modeFilter === "real") where.dryRun = false;
+
+  const last24h = new Date(Date.now() - 24 * 3600 * 1000);
+
+  const [rows, total, last24, last24Completed] = await Promise.all([
+    prisma.testOrder.findMany({
+      where,
+      include: {
+        service: {
+          select: { id: true, name: true, platform: true, bulkmedyaId: true },
+        },
+        measurements: {
+          orderBy: { checkedAt: "desc" },
+          take: 1,
+          where: { checkpoint: { not: "T+0" } },
+        },
+      },
+      orderBy: { placedAt: "desc" },
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+    prisma.testOrder.count({ where }),
+    prisma.testOrder.count({
+      where: { placedAt: { gte: last24h } },
+    }),
+    prisma.testOrder.count({
+      where: { placedAt: { gte: last24h }, status: "completed" },
+    }),
+  ]);
+
+  // Scoring readiness ratio — how many of the last-24h orders have
+  // at least one Measurement with actualCount > baselineCount. This
+  // is the % that would pass RULE 1 today.
+  const eligible24 = await prisma.testOrder.findMany({
+    where: { placedAt: { gte: last24h }, status: "completed" },
+    include: { measurements: true },
+    take: 500,
+  });
+  const scorable = eligible24.filter((o) => {
+    const peak = Math.max(
+      o.baselineCount,
+      ...o.measurements.map((m) => m.actualCount)
+    );
+    return peak > o.baselineCount;
+  }).length;
+  const scorablePct = eligible24.length > 0
+    ? Math.round((scorable / eligible24.length) * 100)
+    : null;
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const synthCards = [
+    { num: "01", label: "DERNIÈRES 24H", value: String(last24), suffix: "TESTS PLACÉS" },
+    {
+      num: "02",
+      label: "COMPLÉTÉS 24H",
+      value: String(last24Completed),
+      suffix: last24 > 0 ? `/ ${last24}` : "",
+    },
+    {
+      num: "03",
+      label: "SCORABLES RULE 1",
+      value: scorablePct !== null ? String(scorablePct) : "—",
+      suffix: scorablePct !== null ? "%" : "",
+    },
+  ];
+
+  return (
+    <>
+      <DashboardHeader />
+      <ViewSwitcher current="testbot" />
+
+      <section className="py-16 md:py-24 px-4 md:px-8">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12 border-b border-[#666666]/20 pb-12 md:pb-16">
+          <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-6 md:gap-8">
+            <div className="font-mono text-xs text-[#FF3300] tracking-widest">
+              [ JOURNAL TESTBOT | PLACEMENTS CAMPAGNE ]
+            </div>
+            <h1
+              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
+              style={{ fontSize: "clamp(2rem, 4.5vw, 4rem)" }}
+            >
+              Tests<br />Testbot.
+            </h1>
+            <div className="font-mono text-xs text-[#666666] tracking-widest tabular-nums">
+              {total} PLACEMENTS POUR CE FILTRE
+            </div>
+            <div className="font-mono text-[10px] text-[#666666]/60 tracking-widest uppercase max-w-sm leading-relaxed">
+              Le statut affiché vient de notre état interne — jamais de BulkMedya. La mesure actuelle est lue via RapidAPI.
+            </div>
+          </div>
+          <div className="md:col-span-8 min-w-0 flex flex-col justify-end pt-6 md:pt-0">
+            <LogsFilters
+              platforms={["instagram", "tiktok"]}
+              current={{
+                range: searchParams.range ?? "7d",
+                platform: platformFilter,
+                status: statusFilter,
+                mode: modeFilter,
+              }}
+              statusOptions={[
+                { value: "all", label: "Tous" },
+                { value: "running", label: "En cours" },
+                { value: "completed", label: "Complétés" },
+                { value: "aborted", label: "Abortés" },
+              ]}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="w-full">
+        <div className="font-mono text-xs text-[#666666] tracking-widest px-4 md:px-8 py-4 border-y border-[#666666]/20 bg-[#0D0D0D]">
+          [ SYNTHÈSE 24H ]
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 w-full border-b border-[#666666]/20">
+          {synthCards.map((c, i) => {
+            const bg = i % 2 === 0 ? "bg-[#030303]" : "bg-[#0D0D0D]";
+            const borderRight =
+              i < synthCards.length - 1
+                ? "md:border-r border-[#666666]/20"
+                : "";
+            return (
+              <div key={c.num} className={`p-6 md:p-12 ${bg} ${borderRight}`}>
+                <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4 md:mb-6">
+                  {c.num}. {c.label}
+                </div>
+                <div className="brand font-display text-4xl md:text-6xl tabular-nums text-white break-words">
+                  {c.value}
+                  {c.suffix && (
+                    <span className="text-[#666666] text-xl md:text-2xl ml-2">
+                      {c.suffix}
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="px-4 md:px-8 py-16 md:py-24">
+        <div className="max-w-7xl mx-auto relative border border-[#666666]/30 pb-20 md:pb-24">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-[#0D0D0D] text-[#666666] font-mono text-xs uppercase tracking-widest">
+                <tr className="border-b border-[#666666]/20">
+                  <th className="text-left px-4 py-3 font-normal">Placé</th>
+                  <th className="text-left px-3 py-3 font-normal">Plat.</th>
+                  <th className="text-left px-3 py-3 font-normal">Service</th>
+                  <th className="text-right px-3 py-3 font-normal">Qté cible</th>
+                  <th className="text-right px-3 py-3 font-normal">Baseline</th>
+                  <th className="text-right px-3 py-3 font-normal">Mesure</th>
+                  <th className="text-right px-3 py-3 font-normal">Livré</th>
+                  <th className="text-center px-3 py-3 font-normal">Statut</th>
+                  <th className="text-center px-3 py-3 font-normal">Mode</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const m = r.measurements[0];
+                  const actual = m?.actualCount ?? null;
+                  const delivered = actual !== null
+                    ? Math.max(0, actual - r.baselineCount)
+                    : null;
+                  const deliveredPct = delivered !== null && r.targetQuantity > 0
+                    ? Math.round((delivered / r.targetQuantity) * 100)
+                    : null;
+                  const statusColor = statusColorFor(r.status);
+                  return (
+                    <tr
+                      key={r.id}
+                      className="border-b border-[#666666]/20 hover:bg-[#0D0D0D] hover:border-l-2 hover:border-l-[#FF3300] transition-all duration-200"
+                    >
+                      <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-[#666666] tabular-nums">
+                        {r.placedAt.toISOString().replace("T", " ").slice(0, 19)}
+                      </td>
+                      <td className="px-3 py-3 font-mono text-xs text-[#666666] uppercase tracking-widest">
+                        {r.service.platform}
+                      </td>
+                      <td className="px-3 py-3 max-w-xs">
+                        <Link
+                          href={`/services/${r.service.id}`}
+                          className="interactive brand font-display text-sm uppercase tracking-tight text-white hover:text-[#FF3300] truncate block transition-colors"
+                          title={`${r.service.name} [#${r.service.bulkmedyaId}]`}
+                        >
+                          {r.service.name}
+                        </Link>
+                        <span className="font-mono text-[10px] text-[#FF3300]/80 tracking-widest">
+                          #{r.service.bulkmedyaId}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
+                        {r.targetQuantity}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono text-xs text-[#666666] tabular-nums">
+                        {r.baselineCount}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono text-xs text-[#666666] tabular-nums">
+                        {actual ?? "—"}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono text-xs tabular-nums">
+                        {delivered !== null ? (
+                          <span className={delivered > 0 ? "text-[#00FF88]" : "text-[#666666]"}>
+                            {delivered}
+                            {deliveredPct !== null && (
+                              <span className="text-[#666666] ml-1">
+                                ({deliveredPct}%)
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-[#666666]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <span
+                          className="font-mono text-xs tracking-widest uppercase"
+                          style={{ color: statusColor }}
+                        >
+                          {r.status.replace(/_/g, " ")}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <span
+                          className={`font-mono text-xs tracking-widest uppercase ${
+                            r.dryRun ? "text-[#FFCC00]" : "text-[#FF3300]"
+                          }`}
+                        >
+                          {r.dryRun ? "SIM" : "RÉEL"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {rows.length === 0 && (
+              <div className="px-4 py-16 text-center font-mono text-xs text-[#666666] tracking-widest uppercase">
+                AUCUN TEST POUR CES FILTRES.
+              </div>
+            )}
+          </div>
+
+          <div className="absolute bottom-4 left-4 flex flex-col gap-1 bg-[#030303]/80 p-3 backdrop-blur-sm pointer-events-none">
+            <span className="font-mono text-xs text-[#FF3300] tracking-widest">
+              [ ASSET: TESTBOT-LOG ]
+            </span>
+            <span className="font-mono text-xs text-white tracking-widest">
+              LIVE_MEASUREMENTS_01
+            </span>
+          </div>
+        </div>
+
+        {totalPages > 1 && (
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            searchParams={searchParams}
+          />
+        )}
+      </section>
+    </>
+  );
+}
+
+function statusColorFor(status: string): string {
+  if (status === "completed") return "#00FF88";
+  if (status === "running") return "#66CCFF";
+  if (status.startsWith("aborted")) return "#FF3300";
+  return "#666666";
 }
