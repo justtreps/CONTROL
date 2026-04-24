@@ -94,10 +94,21 @@ export type CampaignPlan = {
   campaignId: number;
   servicesQueued: number;
   estimatedCostUsd: number;
+  skippedExpensive: number;
+  skippedExpensiveCostUsd: number;
 };
+
+const DEFAULT_MAX_COST_PER_TEST_USD = 5;
 
 export async function launchCampaign(opts: {
   includeStaleOlderThanDays?: number; // 7 by default
+  // Hard safety cap on per-test cost (= ratePerK × minQuantity /
+  // 1000). BulkMedya has a handful of "ADS" services with
+  // minQuantity = 1 M units → $350+ per single test. Those skew
+  // the total + are inappropriate for mass scoring. Services above
+  // this cap are skipped; the response carries the count + what
+  // they would have added to the bill. Default $5.
+  maxCostPerTestUsd?: number;
 } = {}): Promise<CampaignPlan | { error: string }> {
   const existing = await prisma.scoringCampaign.findFirst({
     where: { status: { in: ["running", "paused"] } },
@@ -135,16 +146,24 @@ export async function launchCampaign(opts: {
       },
     },
   });
+  const maxCost = opts.maxCostPerTestUsd ?? DEFAULT_MAX_COST_PER_TEST_USD;
   const seen = new Set<number>();
   const svcList: Array<{
     id: number;
     minQuantity: number;
     ratePerK: number;
+    cost: number;
   }> = [];
+  const skipped: Array<{ id: number; cost: number }> = [];
   for (const c of cands) {
     if (!c.service || seen.has(c.service.id)) continue;
     seen.add(c.service.id);
-    svcList.push(c.service);
+    const cost = (c.service.ratePerK * c.service.minQuantity) / 1000;
+    if (cost > maxCost) {
+      skipped.push({ id: c.service.id, cost });
+      continue;
+    }
+    svcList.push({ ...c.service, cost });
   }
 
   if (svcList.length === 0) {
@@ -152,12 +171,9 @@ export async function launchCampaign(opts: {
   }
 
   const estimatedCostUsd =
-    Math.round(
-      svcList.reduce(
-        (a, s) => a + (s.ratePerK * s.minQuantity) / 1000,
-        0
-      ) * 100
-    ) / 100;
+    Math.round(svcList.reduce((a, s) => a + s.cost, 0) * 100) / 100;
+  const skippedExpensiveCostUsd =
+    Math.round(skipped.reduce((a, s) => a + s.cost, 0) * 100) / 100;
 
   const campaign = await prisma.scoringCampaign.create({
     data: {
@@ -171,6 +187,8 @@ export async function launchCampaign(opts: {
     campaignId: campaign.id,
     servicesQueued: svcList.length,
     estimatedCostUsd,
+    skippedExpensive: skipped.length,
+    skippedExpensiveCostUsd,
   };
 }
 
