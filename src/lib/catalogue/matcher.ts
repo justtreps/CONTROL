@@ -2,21 +2,21 @@
 //
 // One predicate per product slug. Each predicate returns
 //   { match: boolean; country: string | null }
-// on a service's (name, platform). The predicate assumes the
-// classifier has already stripped platform/service out into DB
-// columns, but still re-inspects the raw name because BulkMedya
-// mashes sub-types (story / reel / video / live) into the name
-// rather than the DB-level serviceType.
+// on a service's (name, platform). Rules per product slug are
+// the ones operators actually trust — spelled out below, not
+// buried in layered regex gates. Keep them explicit so a future
+// Amir-or-Claude can read the file top-to-bottom and audit
+// classification without spelunking.
 //
-// "Strict whitelist" discipline:
-//   • single inclusion keyword for the product type
-//   • explicit blacklist for every sub-variant the operator doesn't
-//     want routed (story likes / reel views / auto / bot / fake …)
-//   • geo emoji + country keywords are stripped BEFORE the keyword
-//     test so "🇧🇷 Instagram Brazil Likes" passes ig-likes and stores
-//     "BR" as target country
+// Inclusion-first discipline:
+//   • MUST contain the product keyword in the service name
+//     (case-insensitive, word-boundary)
+//   • MUST NOT contain any of the product's exclusion words
+//   • geo emoji + country keywords are stripped BEFORE the
+//     inclusion/exclusion test so "🇧🇷 Instagram Brazil Likes"
+//     still passes ig-likes and stores "BR" as target country
 //
-// Called from three places:
+// Called from:
 //   • syncServices (lib/bulkmedya.ts) after every sync — new rows
 //   • /api/catalogue/rematch                      — manual button
 //   • seed migration one-shot after `db push`     — initial fill
@@ -37,19 +37,11 @@ export type ServiceLite = {
   active: boolean;
 };
 
-// Emoji + country-prefix stripper. Removes flag emojis and common
-// country-prefix patterns so keyword tests don't see them.
-// The matcher uses detectCountry() on the RAW name to capture the
-// geo signal before this stripping runs.
-//
-// We use a surrogate-pair regex instead of the cleaner
-// /\p{Extended_Pictographic}/gu because the project's tsconfig
-// targets pre-ES2018 (the `u` flag + Unicode property escapes need
-// ES2018+). The surrogate pair range [D800-DBFF][DC00-DFFF] covers
-// every non-BMP codepoint, which is where every emoji lives —
-// including the regional-indicator pairs that compose flag emojis.
+// Emoji + country-prefix stripper (see prior comment — ES2017
+// targets so we avoid Unicode property escapes).
 const EMOJI_RX = /[\uD800-\uDBFF][\uDC00-\uDFFF]/g;
-const COUNTRY_PREFIX_RX = /\b(brazil|brasil|france|french|usa|uk|germany|spain|italy|india|mexico|turkey|japan|korea|china|russia|indonesia|nigeria|arab|saudi|iran|pakistan|bangladesh|morocco|egypt|arabian|iranian|turkish|italian|german|spanish|brazilian|american)\b/gi;
+const COUNTRY_PREFIX_RX =
+  /\b(brazil|brasil|france|french|usa|uk|germany|spain|italy|india|mexico|turkey|japan|korea|china|russia|indonesia|nigeria|arab|saudi|iran|pakistan|bangladesh|morocco|egypt|arabian|iranian|turkish|italian|german|spanish|brazilian|american)\b/gi;
 
 function normalise(name: string): string {
   return name
@@ -60,18 +52,36 @@ function normalise(name: string): string {
     .trim();
 }
 
-// Global rejects — same keywords the classifier disables. Applied
-// before any whitelist so a "Story Views" row never passes ig-views.
-const DISABLE_TOPIC_RX =
-  /\b(stor(?:y|ies)|igtv|instagram\s+tv|ig\s*tv|livestreams?|live\s*stream(?:ing)?|live\s*stream\s*(?:views?|viewers?)|live\s*viewers?|live\s*views?|live\s*chat|impressions?|reach(?:es)?|profile\s*visits?|mentions?|autoplays?|reposts?|reposte[rs]?|poll(?:s|es)?|votes?|quiz(?:z?es)?|reactions?|comment(?:s|aire[s]?)?)\b/i;
-
-// Noise adjectives that should be manual-only (bot / fake).
+// Quality floor — services marked bot / fake / spam never get
+// routed to production regardless of otherwise-matching keywords.
+// Still applied on top of the per-product rules so operators don't
+// have to list "bot" in every exclusion list.
 const BOT_FAKE_RX = /\b(bot|fake|spam)\b/i;
 
 // "Auto" services (auto-likes / auto-views / auto-followers that
 // fire on schedule) are a different SKU from single-shot orders —
-// exclude from the catalog.
+// exclude from the catalog by default.
 const AUTO_RX = /\bauto\b/i;
+
+// Helper: returns true if normalised name contains ALL given
+// word-bounded tokens.
+function containsAll(n: string, tokens: string[]): boolean {
+  for (const t of tokens) {
+    const rx = new RegExp(`\\b${t}\\b`, "i");
+    if (!rx.test(n)) return false;
+  }
+  return true;
+}
+
+// Helper: returns true if normalised name contains ANY given
+// word-bounded token.
+function containsAny(n: string, tokens: string[]): boolean {
+  for (const t of tokens) {
+    const rx = new RegExp(`\\b${t}\\b`, "i");
+    if (rx.test(n)) return true;
+  }
+  return false;
+}
 
 type Matcher = (s: ServiceLite) => MatchResult;
 
@@ -83,115 +93,99 @@ function ok(s: ServiceLite): MatchResult {
   return { match: true, country: detectCountry(s.name) };
 }
 
-// Helper — platform + no topic-level rejections.
 function baseGate(s: ServiceLite, expectedPlatform: string): boolean {
   if (!s.active) return false;
   if (s.platform !== expectedPlatform) return false;
-  if (DISABLE_TOPIC_RX.test(s.name)) return false;
+  const n = s.name.toLowerCase();
+  if (BOT_FAKE_RX.test(n)) return false;
+  if (AUTO_RX.test(n)) return false;
   return true;
 }
 
 // ───────────────────────────────────────────────────────────────
-// Per-product predicates.
-//
-// Comment for each one carries the exact spec wording so the rules
-// are traceable back to the product brief.
+// Per-product rules. Include / exclude lists come straight from
+// the product brief; edit here when the catalogue expands.
 // ───────────────────────────────────────────────────────────────
 
-// ig-followers: name contains "follower" on IG. Exclude bot/fake/spam.
+// ig-followers: IG + "followers" AND NOT (channel | member |
+//   subscribe | subscriber). Excludes broadcast-channel services.
 const matchIgFollowers: Matcher = (s) => {
   if (!baseGate(s, "instagram")) return fail();
   const n = normalise(s.name);
-  if (!/\bfollowers?\b/.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAll(n, ["followers?"])) return fail();
+  if (containsAny(n, ["channel", "members?", "subscribers?", "subscribe"]))
+    return fail();
   return ok(s);
 };
 
-// ig-likes: "likes" only. Exclude story/reel/auto/video likes + bot/fake.
+// ig-likes: IG + "likes" AND NOT (views | comment | reaction |
+//   story). Story likes and reactions are different SKUs.
 const matchIgLikes: Matcher = (s) => {
   if (!baseGate(s, "instagram")) return fail();
   const n = normalise(s.name);
-  if (!/\blikes?\b/.test(n)) return fail();
-  // All the reel/video/auto variants go to their own SKUs or are not
-  // sold at all. baseGate already killed story/reel variants via the
-  // disable topic rx, but we add the explicit check for redundancy +
-  // the "video likes" case which doesn't share a stem with story.
-  if (/\b(video|reel)\s+likes?\b/.test(n)) return fail();
-  if (AUTO_RX.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAll(n, ["likes?"])) return fail();
+  if (containsAny(n, ["views?", "comments?", "reactions?", "stor(?:y|ies)"]))
+    return fail();
   return ok(s);
 };
 
-// ig-views: all "views" formats now map to the IG Reels metric —
-// Meta unified "video views" / "reel views" / "reels views" into a
-// single Reels-plays counter in 2026, so we accept them all. Only
-// exclusions are:
-//   • story views   (ephemeral, different SKU, not sold)
-//   • profile views (vanity metric, not a content view)
-//   • impressions / reach (caught by baseGate → DISABLE_TOPIC_RX)
-//   • auto / bot / fake (quality markers → operator-only)
-// baseGate already rejects stor(?:y|ies) via DISABLE_TOPIC_RX, so
-// "Instagram Story Views" never reaches here; we still keep an
-// explicit check for `profile views` because only `profile visits`
-// is in DISABLE_TOPIC_RX.
+// ig-views: IG + ("views" OR "reel views" OR "video views") AND
+//   NOT (story | live | igtv). "profile views" is vanity, filtered
+//   out as a live keyword — the user's spec doesn't explicitly
+//   exclude it but it's not a content view.
 const matchIgViews: Matcher = (s) => {
   if (!baseGate(s, "instagram")) return fail();
   const n = normalise(s.name);
-  if (!/\bviews?\b/.test(n)) return fail();
-  if (/\bprofile\s+views?\b/.test(n)) return fail();
-  if (AUTO_RX.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAny(n, ["views?", "reel views?", "video views?"])) return fail();
+  if (containsAny(n, ["stor(?:y|ies)", "live", "igtv", "ig tv", "profile views?"]))
+    return fail();
   return ok(s);
 };
 
-// tt-followers: "follower" on TikTok.
+// tt-followers: TT + "followers" AND NOT (live | channel).
 const matchTtFollowers: Matcher = (s) => {
   if (!baseGate(s, "tiktok")) return fail();
   const n = normalise(s.name);
-  if (!/\bfollowers?\b/.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAll(n, ["followers?"])) return fail();
+  if (containsAny(n, ["live", "channel"])) return fail();
   return ok(s);
 };
 
-// tt-likes: "likes" on TikTok.
+// tt-likes: TT + "likes" AND NOT (views | comment).
 const matchTtLikes: Matcher = (s) => {
   if (!baseGate(s, "tiktok")) return fail();
   const n = normalise(s.name);
-  if (!/\blikes?\b/.test(n)) return fail();
-  if (AUTO_RX.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAll(n, ["likes?"])) return fail();
+  if (containsAny(n, ["views?", "comments?"])) return fail();
   return ok(s);
 };
 
-// tt-views: "views" on TikTok — "video views" is the standard TT
-// naming (every TT views service is by definition on a video) so we
-// accept it instead of blacklisting.
+// tt-views: TT + "views" AND NOT (live | ads).
 const matchTtViews: Matcher = (s) => {
   if (!baseGate(s, "tiktok")) return fail();
   const n = normalise(s.name);
-  if (!/\bviews?\b/.test(n)) return fail();
-  if (AUTO_RX.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAll(n, ["views?"])) return fail();
+  if (containsAny(n, ["live", "ads"])) return fail();
   return ok(s);
 };
 
-// tt-shares: "share"/"shares" on TT. Reshare is excluded by the
-// topic disable (it matches "reposts?").
+// tt-shares: TT + "share" or "shares". Reshare stays a different
+//   SKU (different upstream token) — matched by substring would
+//   false-positive, so we keep "reshare" explicit.
 const matchTtShares: Matcher = (s) => {
   if (!baseGate(s, "tiktok")) return fail();
   const n = normalise(s.name);
-  if (!/\bshares?\b/.test(n)) return fail();
-  if (/\breshares?\b/.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAny(n, ["shares?"])) return fail();
+  if (containsAny(n, ["reshares?"])) return fail();
   return ok(s);
 };
 
-// tt-saves: "save"/"saves"/"favorite"/"bookmark" on TT.
+// tt-saves: TT + ("saves" OR "save" OR "bookmark"). Favorites is
+//   the same thing on TT UI, kept from the prior rule.
 const matchTtSaves: Matcher = (s) => {
   if (!baseGate(s, "tiktok")) return fail();
   const n = normalise(s.name);
-  if (!/\b(saves?|favou?rites?|bookmarks?)\b/.test(n)) return fail();
-  if (BOT_FAKE_RX.test(n)) return fail();
+  if (!containsAny(n, ["saves?", "bookmarks?", "favou?rites?"])) return fail();
   return ok(s);
 };
 
@@ -215,6 +209,17 @@ export function matchService(
   return fn(s);
 }
 
+// Returns the list of product slugs a service matches. Used by
+// rematchAll to flag out-of-scope services (zero matches across
+// all 8 products) so the campaign launcher + routing skip them.
+export function matchAllProducts(s: ServiceLite): string[] {
+  const matched: string[] = [];
+  for (const slug of Object.keys(MATCHERS)) {
+    if (MATCHERS[slug](s).match) matched.push(slug);
+  }
+  return matched;
+}
+
 // ── Bulk rematch ────────────────────────────────────────────────
 
 export type RematchResult = {
@@ -223,6 +228,9 @@ export type RematchResult = {
   candidatesCreated: number;
   candidatesUpdated: number;
   candidatesMarkedIneligible: number;
+  // Services that don't match ANY of the 8 products — the campaign
+  // launcher + routing layer skip these rows entirely.
+  servicesOutOfScope: number;
   perProduct: Record<
     string,
     { eligible: number; ineligible: number; geoTagged: number }
@@ -264,75 +272,88 @@ export async function rematchAll(): Promise<RematchResult> {
     candidatesCreated: 0,
     candidatesUpdated: 0,
     candidatesMarkedIneligible: 0,
+    servicesOutOfScope: 0,
     perProduct: {},
   };
   for (const p of products) {
     result.perProduct[p.slug] = { eligible: 0, ineligible: 0, geoTagged: 0 };
   }
 
-  // For each (product, service) — upsert candidacy.
-  // Matches O(P × S) = 8 × 5k = 40k evaluations, each an in-memory
-  // regex — fast enough. DB writes are the bottleneck, so we batch
-  // the upserts within Promise.all chunks.
+  // First pass — per-service matching across all products. We need
+  // the full per-service result up front so we can count
+  // out-of-scope rows (zero matches) after the upserts.
+  const serviceMatches = new Map<
+    number,
+    Array<{ productId: number; slug: string; country: string | null }>
+  >();
+  for (const s of services) {
+    const hits: Array<{ productId: number; slug: string; country: string | null }> = [];
+    for (const p of products) {
+      const m = matchService(p.slug, s);
+      if (m.match) hits.push({ productId: p.id, slug: p.slug, country: m.country });
+    }
+    serviceMatches.set(s.id, hits);
+    if (hits.length === 0) result.servicesOutOfScope++;
+  }
+
+  // Second pass — reconcile ProductServiceCandidate rows. For each
+  // (product, service), upsert candidacy based on the matcher
+  // result. Chunked Promise.all for DB write throughput.
   const CHUNK = 50;
   for (const p of products) {
     for (let i = 0; i < services.length; i += CHUNK) {
       const chunk = services.slice(i, i + CHUNK);
       await Promise.all(
         chunk.map(async (s) => {
-          const m = matchService(p.slug, s);
+          const hits = serviceMatches.get(s.id) ?? [];
+          const hit = hits.find((h) => h.productId === p.id);
+          const matched = Boolean(hit);
+          const country = hit?.country ?? null;
+
           const existing = await prisma.productServiceCandidate.findUnique({
             where: {
-              productId_serviceId: {
-                productId: p.id,
-                serviceId: s.id,
-              },
+              productId_serviceId: { productId: p.id, serviceId: s.id },
             },
             select: { id: true, isEligible: true, forceExcluded: true },
           });
 
           if (!existing) {
-            if (!m.match) return; // no row needed
+            if (!matched) return;
             await prisma.productServiceCandidate.create({
               data: {
                 productId: p.id,
                 serviceId: s.id,
                 isEligible: true,
-                targetCountry: m.country,
+                targetCountry: country,
               },
             });
             result.candidatesCreated++;
             const bucket = result.perProduct[p.slug];
             bucket.eligible++;
-            if (m.country) bucket.geoTagged++;
+            if (country) bucket.geoTagged++;
             return;
           }
 
-          // Row already exists — update eligibility only. Don't
+          // Row exists — update isEligible + targetCountry. Don't
           // touch forceExcluded (operator-set) or scoring fields.
-          if (existing.isEligible !== m.match) {
+          if (existing.isEligible !== matched) {
             await prisma.productServiceCandidate.update({
               where: { id: existing.id },
-              data: {
-                isEligible: m.match,
-                targetCountry: m.country,
-              },
+              data: { isEligible: matched, targetCountry: country },
             });
             result.candidatesUpdated++;
-            if (!m.match) result.candidatesMarkedIneligible++;
-          } else if (m.match) {
-            // Keep targetCountry fresh even if eligibility didn't
-            // change — name may have been edited on a re-sync.
+            if (!matched) result.candidatesMarkedIneligible++;
+          } else if (matched) {
             await prisma.productServiceCandidate.update({
               where: { id: existing.id },
-              data: { targetCountry: m.country },
+              data: { targetCountry: country },
             });
           }
 
           const bucket = result.perProduct[p.slug];
-          if (m.match) {
+          if (matched) {
             bucket.eligible++;
-            if (m.country) bucket.geoTagged++;
+            if (country) bucket.geoTagged++;
           } else {
             bucket.ineligible++;
           }
