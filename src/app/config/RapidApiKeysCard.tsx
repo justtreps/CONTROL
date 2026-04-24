@@ -92,16 +92,19 @@ export function RapidApiKeysCard() {
   return (
     <section className="px-4 md:px-8 py-16 md:py-20 border-t border-[#666666]/20">
       <div className="max-w-7xl mx-auto flex flex-col gap-6">
+        <div className="font-mono text-xs text-[#FF3300] tracking-widest border border-[#FF3300] px-3 py-1 w-max">
+          [ FLOTTE RAPIDAPI · MULTI-CLÉS ]
+        </div>
         <div className="flex items-end justify-between gap-4 flex-wrap border-b border-[#FF3300]/60 pb-3">
           <div className="flex items-end gap-4 flex-wrap">
-            <span className="font-mono text-[11px] text-[#FF3300] tracking-widest">
-              [ RAPIDAPI ]
-            </span>
-            <h2 className="brand font-display text-3xl md:text-4xl uppercase tracking-tight text-white m-0 leading-none">
-              Clés API.
+            <h2
+              className="brand font-display uppercase tracking-tight text-white m-0 leading-none"
+              style={{ fontSize: "clamp(2rem, 4.5vw, 3.5rem)" }}
+            >
+              Flotte <span className="text-[#FF3300]">RapidAPI.</span>
             </h2>
             <span className="font-mono text-[10px] text-[#666666] tracking-wide normal-case">
-              multi-clés · round-robin · failover auto
+              round-robin · failover auto · quota live
             </span>
           </div>
           <button

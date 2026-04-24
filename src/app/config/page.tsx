@@ -107,6 +107,11 @@ export default async function ConfigPage() {
         </div>
       </section>
 
+      {/* Flotte multi-clés RapidAPI — affichée en premier pour être la
+          1re chose vue. L'ancien champ RAPIDAPI_KEY dans ConfigForms
+          en dessous ne sert plus qu'au legacy seed fallback. */}
+      <RapidApiKeysCard />
+
       <ConfigForms
         initialBulkmedyaSet={Boolean(bulkmedyaKey)}
         initialRapidApiSet={Boolean(rapidApiKey)}
@@ -118,8 +123,6 @@ export default async function ConfigPage() {
           active: a.active,
         }))}
       />
-
-      <RapidApiKeysCard />
 
       <ConfigDangerZone />
     </>
