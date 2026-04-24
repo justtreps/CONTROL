@@ -714,6 +714,87 @@ export const detectDryRunOffWithTestbot: Detector = async () => {
 
 // ── Registry ───────────────────────────────────────────────────
 
+// ── POOL CLEANUP ───────────────────────────────────────────────
+
+// pool_insufficient_after_cleanup — fires when the mass cleanup
+// finished but the surviving pool is under the MIN_POOL_FOR_RESUME
+// threshold (500). Surfaces the "LANCER SCRAPE 1500 COMPTES IG"
+// button so the operator can grow the pool without digging for it.
+export const detectPoolInsufficientAfterCleanup: Detector = async () => {
+  const c = await prisma.scoringCampaign.findFirst({
+    where: { status: "paused" },
+    orderBy: { id: "desc" },
+  });
+  if (!c || !c.stopReason?.startsWith("pool_insufficient_after_cleanup")) {
+    return [];
+  }
+  const poolCount = await prisma.testAccount.count({
+    where: { platform: "instagram", status: "available", active: true },
+  });
+  const match = c.stopReason.match(/:(\d+)/);
+  const snapshotCount = match ? Number(match[1]) : poolCount;
+  return [
+    {
+      code: `pool_insufficient_after_cleanup:${c.id}`,
+      category: "pool",
+      severity: "warning",
+      title: `Pool IG insuffisant après cleanup (${poolCount} comptes)`,
+      description: `La campagne #${c.id} reste pausée : ${poolCount} comptes available après health-check (seuil de reprise 500).`,
+      explanation: `Le health-check a invalidé les comptes privés/supprimés. Il reste ${poolCount} comptes actifs (${snapshotCount} au moment du cleanup). Pour relancer la campagne il faut grossir le pool — la recommandation est d'ajouter ~1500 comptes frais via le scraper existant.`,
+      impact:
+        "La campagne #${c.id} ne reprendra pas tant que le pool est sous 500 comptes. Les placements déjà en vol continuent normalement.",
+      suggestedAction:
+        "Lancer un scrape de 1500 comptes IG via le bouton ci-dessous. Durée estimée 20-40 min selon le rate limit RapidAPI.",
+      actionType: "button",
+      actionPayload: {
+        endpoint: "/api/pool/scrape",
+        method: "POST",
+        payload: { platform: "instagram", count: 1500 },
+        confirm: "Lancer un scrape de 1500 comptes IG ?",
+      },
+      relatedEntityType: "scoringCampaign",
+      relatedEntityId: c.id,
+    },
+  ];
+};
+
+// pool_cleanup_in_progress — live status chip while the coordinator
+// state machine is running. Auto-resolves when the Config row gets
+// deleted.
+export const detectPoolCleanupInProgress: Detector = async () => {
+  const row = await prisma.config.findUnique({
+    where: { key: "pool_cleanup:session" },
+  });
+  if (!row) return [];
+  const s = row.value as {
+    campaignId?: number;
+    pausedAt?: string;
+    phase?: string;
+    healthCheckJobId?: number;
+    lastResult?: { poolCountAfter?: number; action?: string };
+  };
+  const minutes = s.pausedAt
+    ? Math.floor((Date.now() - new Date(s.pausedAt).getTime()) / 60_000)
+    : 0;
+  return [
+    {
+      code: `pool_cleanup_in_progress:${s.campaignId ?? "?"}`,
+      category: "pool",
+      severity: "info",
+      title: `Pool cleanup en cours (phase: ${s.phase ?? "?"})`,
+      description: `Démarré il y a ${minutes}min. Campagne #${s.campaignId ?? "?"} en pause pendant le nettoyage.`,
+      explanation: `Le coordinator enchaîne : health-check (invalide ghost/private), reclassify country (no-API), reprise auto si pool ≥ 500. Health-check job #${s.healthCheckJobId ?? "pending"}.`,
+      impact:
+        "La campagne est pausée ~15-25 min. Les placements déjà en vol ne sont pas affectés.",
+      suggestedAction: "Surveiller le Config row pool_cleanup:session sur le dashboard ou attendre la reprise automatique.",
+      actionType: "link",
+      actionPayload: { href: "/alertes" },
+      relatedEntityType: "scoringCampaign",
+      relatedEntityId: s.campaignId ?? 0,
+    },
+  ];
+};
+
 export const DETECTORS: Detector[] = [
   detectKeyNearCap,
   detectKeyCapped,
@@ -722,6 +803,8 @@ export const DETECTORS: Detector[] = [
   detectRateLimiterSaturated,
   detectPoolBelowMin,
   detectPoolHighInvalidation,
+  detectPoolInsufficientAfterCleanup,
+  detectPoolCleanupInProgress,
   detectSeedsExhausted,
   detectScrapeStale,
   detectJobStuck,

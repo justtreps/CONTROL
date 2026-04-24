@@ -852,11 +852,15 @@ function CampaignCard({
           ? "#66CCFF"
           : "#FF3300";
 
-  async function call(path: string) {
+  async function call(path: string, body?: unknown) {
     if (busy) return;
     setBusy(true);
     try {
-      await fetch(path, { method: "POST" });
+      await fetch(path, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
       onChanged();
     } finally {
       setBusy(false);
@@ -888,14 +892,38 @@ function CampaignCard({
             </button>
           )}
           {campaign.status === "paused" && (
-            <button
-              type="button"
-              onClick={() => call("/api/scoring/campaign/resume")}
-              disabled={busy}
-              className="interactive border border-[#00CC66] text-[#00CC66] hover:bg-[#00CC66] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
-            >
-              [ REPRENDRE ]
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Nettoyer le pool IG avant de reprendre ? Health-check ~20 min, auto-reprise si pool ≥ 500."
+                    )
+                  )
+                    void call("/api/pool/mass-cleanup/start", {
+                      campaignId: campaign.id,
+                    });
+                }}
+                disabled={busy}
+                className="interactive border border-[#00CCFF] text-[#00CCFF] hover:bg-[#00CCFF] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+              >
+                [ NETTOYER POOL ]
+              </button>
+              <button
+                type="button"
+                onClick={() => call("/api/scoring/campaign/resume")}
+                disabled={busy}
+                className="interactive border border-[#00CC66] text-[#00CC66] hover:bg-[#00CC66] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+              >
+                [ REPRENDRE ]
+              </button>
+            </>
+          )}
+          {campaign.status === "paused_for_pool_cleanup" && (
+            <span className="font-mono text-[11px] tracking-widest uppercase text-[#00CCFF] border border-[#00CCFF] px-3 py-1.5 animate-pulse">
+              [ POOL CLEANUP EN COURS ]
+            </span>
           )}
           {(campaign.status === "running" || campaign.status === "paused") && (
             <button
