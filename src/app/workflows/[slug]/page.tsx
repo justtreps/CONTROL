@@ -1,6 +1,4 @@
-// Workflow detail — read-only node graph (brutalist ASCII-art flow)
-// + run history drawer. React Flow visual editor lands in a
-// follow-up (~300kb lib, separate concern).
+// Workflow detail — React Flow canvas + run history drawer.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -8,6 +6,7 @@ import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import type { NodesArray } from "@/lib/workflows/nodes";
 import { WorkflowDetailClient } from "./WorkflowDetailClient";
+import { cadenceLabel } from "../cadence";
 
 export const dynamic = "force-dynamic";
 
@@ -35,14 +34,28 @@ export default async function WorkflowDetailPage({
     <>
       <DashboardHeader />
 
-      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-8">
+      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-6">
         <div className="max-w-7xl mx-auto flex flex-col gap-3">
-          <Link
-            href="/workflows"
-            className="interactive font-mono text-xs text-[#666666] hover:text-white tracking-widest uppercase"
-          >
-            ← WORKFLOWS
-          </Link>
+          {/* Breadcrumb */}
+          <div className="flex items-center gap-2 font-mono text-xs text-[#666666] tracking-widest uppercase">
+            <Link
+              href="/config"
+              className="interactive hover:text-white"
+            >
+              CONFIG
+            </Link>
+            <span>›</span>
+            <Link
+              href="/workflows"
+              className="interactive hover:text-white"
+            >
+              WORKFLOWS
+            </Link>
+            <span>›</span>
+            <span className="text-white truncate max-w-sm">
+              {w.displayName}
+            </span>
+          </div>
           <div className="font-mono text-xs text-[#FF3300] tracking-widest border border-[#FF3300] px-3 py-1 w-max">
             [ WORKFLOW · {w.category.toUpperCase()} ·{" "}
             {w.triggerType.toUpperCase()} ]
@@ -50,17 +63,28 @@ export default async function WorkflowDetailPage({
           <h1 className="brand font-display text-4xl sm:text-5xl md:text-6xl uppercase tracking-tight leading-[0.9] text-white m-0">
             {w.displayName}
           </h1>
-          <p className="font-mono text-xs text-[#999999] normal-case leading-relaxed max-w-3xl">
-            {w.description}
-          </p>
+          {w.description && (
+            <p className="font-mono text-xs text-[#999999] normal-case leading-relaxed max-w-3xl">
+              {w.description}
+            </p>
+          )}
           <div className="font-mono text-[11px] text-[#666666] tracking-widest uppercase">
             Trigger :{" "}
             <span className="text-white">
               {w.triggerType === "cron"
-                ? `cron ${w.cronExpression}`
+                ? `cron ${w.cronExpression} · ${cadenceLabel(w.cronExpression)}`
                 : w.triggerType === "event"
                   ? `event ${w.eventType}`
                   : "manual"}
+            </span>
+            {" · "}
+            Statut :{" "}
+            <span
+              className={
+                w.isActive ? "text-[#00CC66]" : "text-[#666666]"
+              }
+            >
+              {w.isActive ? "ACTIF" : "INACTIF"}
             </span>
           </div>
         </div>
@@ -68,6 +92,8 @@ export default async function WorkflowDetailPage({
 
       <WorkflowDetailClient
         slug={w.slug}
+        category={w.category}
+        displayName={w.displayName}
         isActive={w.isActive}
         nodes={nodes}
         initialRuns={runs.map((r) => ({
@@ -83,6 +109,7 @@ export default async function WorkflowDetailPage({
                 nodeId: string | null;
                 level: string;
                 message: string;
+                durationMs?: number;
               }>)
             : [],
         }))}
@@ -90,3 +117,4 @@ export default async function WorkflowDetailPage({
     </>
   );
 }
+

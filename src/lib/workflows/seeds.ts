@@ -1,8 +1,12 @@
-// Canonical 8 workflows — the starting kit. Every flow wires
-// existing behaviour through the new executor so the operator sees
-// the same cron work surfaced under /workflows. No migration or
-// kill-switch flip happens yet — the legacy crons keep running in
-// parallel until a follow-up commit disables them.
+// Canonical 8 workflows — the starting kit. Each graph uses the
+// full node grammar (FILTER / CONDITION / LOOP / WAIT) so the UI
+// editor has a representative example of every branching + timing
+// primitive.
+//
+// Re-running the seed endpoint is idempotent: existing rows get
+// their metadata refreshed (displayName / description / cron /
+// category / triggerType / eventType) but `nodes` is ONLY overwritten
+// when the row was freshly created. Operator edits survive re-seed.
 
 import type { NodesArray } from "./nodes";
 
@@ -17,49 +21,69 @@ type WorkflowSeed = {
   nodes: NodesArray;
 };
 
-// Helper — linear chain of nodes with deterministic ids (n1, n2, …).
-function chain(
-  steps: Array<Omit<NodesArray[number], "id" | "nextNodeId">>
-): NodesArray {
-  return steps.map((s, i) => ({
-    ...s,
-    id: `n${i + 1}`,
-    nextNodeId: i < steps.length - 1 ? `n${i + 2}` : undefined,
-  }));
-}
-
 export const WORKFLOW_SEEDS: WorkflowSeed[] = [
   // a. Health check — pool abonnés (every 6h)
   {
     slug: "health-check-follower-pool",
     displayName: "Health check — Pool abonnés",
     description:
-      "Scanne toutes les 6h le pool de comptes follower_test, invalide ceux qui sont devenus privés / supprimés / bannis.",
+      "Scanne toutes les 6h le pool follower_test, invalide les comptes morts, notifie si le pool dipse sous le seuil.",
     category: "health",
     triggerType: "cron",
     cronExpression: "0 */6 * * *",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Cron */6h" },
+    nodes: [
       {
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Cron */6h",
+        nextNodeId: "fetch",
+      },
+      {
+        id: "fetch",
         type: "FETCH_POOL",
         config: { poolType: "follower" },
         label: "Pool abonnés",
+        nextNodeId: "hc",
       },
       {
+        id: "hc",
         type: "ACTION_HEALTH_CHECK",
         config: { scope: "follower" },
         label: "Health check",
+        nextNodeId: "cond",
       },
       {
+        id: "cond",
+        type: "CONDITION",
+        config: {
+          expression: "ctx.poolCount < 500",
+          thenNodeId: "notify_low",
+          elseNodeId: "notify_ok",
+        },
+        label: "< 500 comptes ?",
+      },
+      {
+        id: "notify_low",
         type: "NOTIFY",
         config: {
           message:
-            "Health check abonnés terminé — pool: {{ ctx.poolCount }} comptes.",
+            "⚠ Pool abonnés sous le seuil : {{ ctx.poolCount }} comptes.",
+          severity: "warn",
+        },
+        label: "Alerte low pool",
+      },
+      {
+        id: "notify_ok",
+        type: "NOTIFY",
+        config: {
+          message:
+            "Health check abonnés ok — {{ ctx.poolCount }} comptes.",
           severity: "info",
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 
   // b. Health check — pool engagement (every 6h)
@@ -67,61 +91,108 @@ export const WORKFLOW_SEEDS: WorkflowSeed[] = [
     slug: "health-check-engagement-pool",
     displayName: "Health check — Pool engagement",
     description:
-      "Scanne toutes les 6h le pool de posts engagement_test + leurs parents, invalide les comptes morts.",
+      "Scanne toutes les 6h le pool engagement_test + parents, invalide, notifie low pool.",
     category: "health",
     triggerType: "cron",
     cronExpression: "0 */6 * * *",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Cron */6h" },
+    nodes: [
       {
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Cron */6h",
+        nextNodeId: "fetch",
+      },
+      {
+        id: "fetch",
         type: "FETCH_POOL",
         config: { poolType: "engagement" },
         label: "Pool engagement",
+        nextNodeId: "hc",
       },
       {
+        id: "hc",
         type: "ACTION_HEALTH_CHECK",
         config: { scope: "engagement" },
         label: "Health check",
+        nextNodeId: "cond",
       },
       {
+        id: "cond",
+        type: "CONDITION",
+        config: {
+          expression: "ctx.poolCount < 500",
+          thenNodeId: "notify_low",
+          elseNodeId: "notify_ok",
+        },
+        label: "< 500 posts ?",
+      },
+      {
+        id: "notify_low",
         type: "NOTIFY",
         config: {
           message:
-            "Health check engagement terminé — pool: {{ ctx.poolCount }} comptes.",
+            "⚠ Pool engagement sous le seuil : {{ ctx.poolCount }} posts.",
+          severity: "warn",
+        },
+        label: "Alerte low pool",
+      },
+      {
+        id: "notify_ok",
+        type: "NOTIFY",
+        config: {
+          message:
+            "Health check engagement ok — {{ ctx.poolCount }} posts.",
           severity: "info",
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 
-  // c. Auto-refill pool abonnés (event)
+  // c. Auto-refill pool abonnés — event-triggered with IG/TT branch
   {
     slug: "refill-follower-pool",
     displayName: "Auto-refill — Pool abonnés",
     description:
-      "Déclenché quand le pool abonnés passe sous le seuil min. Lance un scrape pour rafraîchir.",
+      "Sur event pool.below_threshold.follower, branche selon plateforme et lance un scrape ciblé 500 comptes.",
     category: "pool",
     triggerType: "event",
     eventType: "pool.below_threshold.follower",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Event low_pool" },
+    nodes: [
       {
-        type: "FETCH_POOL",
-        config: { poolType: "follower" },
-        label: "Pool abonnés",
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Event low_pool",
+        nextNodeId: "cond",
       },
       {
-        type: "FILTER",
-        config: { field: "poolCount", operator: "lt", value: 500 },
-        label: "< 500 comptes",
+        id: "cond",
+        type: "CONDITION",
+        config: {
+          expression: 'ctx.event.payload.platform == "instagram"',
+          thenNodeId: "scrape_ig",
+          elseNodeId: "scrape_tt",
+        },
+        label: "Plateforme IG ?",
       },
       {
+        id: "scrape_ig",
         type: "ACTION_SCRAPE",
-        config: { poolType: "follower", count: 500 },
-        label: "Scrape 500",
+        config: { poolType: "follower", platform: "instagram", count: 500 },
+        label: "Scrape IG · 500",
+        nextNodeId: "notify",
       },
       {
+        id: "scrape_tt",
+        type: "ACTION_SCRAPE",
+        config: { poolType: "follower", platform: "tiktok", count: 500 },
+        label: "Scrape TT · 500",
+        nextNodeId: "notify",
+      },
+      {
+        id: "notify",
         type: "NOTIFY",
         config: {
           message:
@@ -130,36 +201,52 @@ export const WORKFLOW_SEEDS: WorkflowSeed[] = [
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 
-  // d. Auto-refill pool engagement (event)
+  // d. Auto-refill engagement — same branching pattern
   {
     slug: "refill-engagement-pool",
     displayName: "Auto-refill — Pool engagement",
     description:
-      "Déclenché quand le pool engagement passe sous le seuil min. Lance un scrape pour rafraîchir.",
+      "Sur event pool.below_threshold.engagement, branche IG/TT, scrape 500 posts.",
     category: "pool",
     triggerType: "event",
     eventType: "pool.below_threshold.engagement",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Event low_pool" },
+    nodes: [
       {
-        type: "FETCH_POOL",
-        config: { poolType: "engagement" },
-        label: "Pool engagement",
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Event low_pool",
+        nextNodeId: "cond",
       },
       {
-        type: "FILTER",
-        config: { field: "poolCount", operator: "lt", value: 500 },
-        label: "< 500 posts",
+        id: "cond",
+        type: "CONDITION",
+        config: {
+          expression: 'ctx.event.payload.platform == "instagram"',
+          thenNodeId: "scrape_ig",
+          elseNodeId: "scrape_tt",
+        },
+        label: "Plateforme IG ?",
       },
       {
+        id: "scrape_ig",
         type: "ACTION_SCRAPE",
-        config: { poolType: "engagement", count: 500 },
-        label: "Scrape 500",
+        config: { poolType: "engagement", platform: "instagram", count: 500 },
+        label: "Scrape IG · 500",
+        nextNodeId: "notify",
       },
       {
+        id: "scrape_tt",
+        type: "ACTION_SCRAPE",
+        config: { poolType: "engagement", platform: "tiktok", count: 500 },
+        label: "Scrape TT · 500",
+        nextNodeId: "notify",
+      },
+      {
+        id: "notify",
         type: "NOTIFY",
         config: {
           message:
@@ -168,98 +255,167 @@ export const WORKFLOW_SEEDS: WorkflowSeed[] = [
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 
-  // e. Scoring continu testbot (every 1h)
+  // e. Scoring continu — fetch → filter stale → loop over candidates → test → wait 7d → notify
   {
     slug: "scoring-continu",
     displayName: "Scoring continu — Testbot",
     description:
-      "Chaque heure : pick les candidats catalogue éligibles, lance le testbot, scoring automatique après T+7d.",
+      "Chaque heure : candidats catalogue éligibles + jamais testés, lance testbot en batch, attend 7j pour la mesure finale.",
     category: "scoring",
     triggerType: "cron",
     cronExpression: "0 * * * *",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Cron */1h" },
+    nodes: [
       {
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Cron */1h",
+        nextNodeId: "fetch",
+      },
+      {
+        id: "fetch",
         type: "FETCH_SERVICES",
         config: { filters: { isEligible: true, forceExcluded: false } },
-        label: "Services éligibles",
+        label: "Candidats éligibles",
+        nextNodeId: "filter_stale",
       },
       {
+        id: "filter_stale",
         type: "FILTER",
         config: { field: "lastTestedAt", operator: "lt", value: null },
-        label: "Jamais testé / stale",
+        label: "lastTestedAt null",
+        nextNodeId: "loop",
       },
       {
+        id: "loop",
+        type: "LOOP",
+        config: {
+          iterationKey: "services",
+          iterationVar: "candidate",
+          bodyNodeId: "body_test",
+          afterNodeId: "wait",
+        },
+        label: "Pour chaque candidat",
+      },
+      {
+        id: "body_test",
         type: "ACTION_TEST",
         config: {},
-        label: "Lance tests",
+        label: "Lance test",
       },
       {
+        id: "wait",
         type: "WAIT",
         config: { unit: "days", value: 7 },
         label: "Wait T+7d",
+        nextNodeId: "notify",
       },
       {
+        id: "notify",
         type: "NOTIFY",
         config: {
-          message: "Scoring terminé — placed={{ ctx.testbot.placed }}.",
+          message: "Scoring batch terminé — placed={{ ctx.testbot.placed }}.",
           severity: "info",
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 
-  // f. Sync services BulkMedya (every 1h)
+  // f. Sync services — sync → rematch (ACTION_SYNC auto-emits services.synced)
   {
     slug: "sync-services",
     displayName: "Sync services BulkMedya",
     description:
-      "Chaque heure : fetch la liste BulkMedya, upsert en DB, re-match le catalogue automatiquement.",
+      "Chaque heure : fetch BulkMedya, upsert en DB, ACTION_SYNC émet services.synced qui déclenche le rematch workflow.",
     category: "sync",
     triggerType: "cron",
     cronExpression: "0 * * * *",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Cron */1h" },
-      { type: "ACTION_SYNC", config: {}, label: "Sync BulkMedya" },
-      { type: "ACTION_REMATCH", config: {}, label: "Rematch catalogue" },
+    nodes: [
       {
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Cron */1h",
+        nextNodeId: "sync",
+      },
+      {
+        id: "sync",
+        type: "ACTION_SYNC",
+        config: {},
+        label: "Sync BulkMedya",
+        nextNodeId: "cond",
+      },
+      {
+        id: "cond",
+        type: "CONDITION",
+        config: {
+          expression: "ctx.sync.created > 0",
+          thenNodeId: "notify_new",
+          elseNodeId: "notify_nochange",
+        },
+        label: "Nouveaux services ?",
+      },
+      {
+        id: "notify_new",
         type: "NOTIFY",
         config: {
           message:
-            "Sync terminé — créés={{ ctx.sync.created }} mis à jour={{ ctx.sync.updated }}.",
+            "Sync : {{ ctx.sync.created }} nouveaux services ajoutés, {{ ctx.sync.updated }} mis à jour.",
           severity: "info",
         },
-        label: "Notification",
+        label: "Nouveaux services",
       },
-    ]),
+      {
+        id: "notify_nochange",
+        type: "NOTIFY",
+        config: {
+          message: "Sync : aucun nouveau service, {{ ctx.sync.updated }} mis à jour.",
+          severity: "info",
+        },
+        label: "Aucun nouveau",
+      },
+    ],
   },
 
-  // g. Matching catalogue (event)
+  // g. Matching catalogue — on event services.synced
   {
     slug: "catalogue-rematch-on-sync",
     displayName: "Matching catalogue (sur sync)",
     description:
-      "Déclenché après un sync services réussi. Re-applique le matcher strict sur les 8 produits MyBoost.",
+      "Event-triggered sur services.synced. Re-applique le matcher strict sur les 8 produits.",
     category: "catalogue",
     triggerType: "event",
     eventType: "services.synced",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Event services.synced" },
-      { type: "ACTION_REMATCH", config: {}, label: "Rematch" },
+    nodes: [
       {
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Event services.synced",
+        nextNodeId: "rematch",
+      },
+      {
+        id: "rematch",
+        type: "ACTION_REMATCH",
+        config: {},
+        label: "Rematch",
+        nextNodeId: "notify",
+      },
+      {
+        id: "notify",
         type: "NOTIFY",
         config: {
           message:
-            "Rematch : {{ ctx.rematch.candidatesCreated }} nouveaux candidats.",
+            "Rematch : {{ ctx.rematch.candidatesCreated }} nouveaux candidats, {{ ctx.rematch.candidatesMarkedIneligible }} invalidés.",
           severity: "info",
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 
   // h. Cleanup comptes invalides (daily at 04:00 UTC)
@@ -267,31 +423,37 @@ export const WORKFLOW_SEEDS: WorkflowSeed[] = [
     slug: "cleanup-invalid-accounts",
     displayName: "Cleanup — Comptes invalides",
     description:
-      "Chaque jour : archive les comptes status='invalid' depuis plus de 30 jours.",
+      "Quotidien 04:00 UTC : fetch les comptes invalides, filtre ceux > 30j, archive.",
     category: "pool",
     triggerType: "cron",
     cronExpression: "0 4 * * *",
-    nodes: chain([
-      { type: "TRIGGER", config: {}, label: "Cron daily 04:00 UTC" },
+    nodes: [
       {
+        id: "trigger",
+        type: "TRIGGER",
+        config: {},
+        label: "Cron daily 04:00 UTC",
+        nextNodeId: "fetch",
+      },
+      {
+        id: "fetch",
         type: "FETCH_POOL",
         config: {
           poolType: "follower",
           filters: { status: "invalid" },
         },
-        label: "Pool invalides",
+        label: "Invalides",
+        nextNodeId: "del",
       },
       {
-        type: "FILTER",
-        config: { field: "invalidatedAt", operator: "lt", value: 30 },
-        label: "> 30 jours",
-      },
-      {
+        id: "del",
         type: "ACTION_DELETE",
         config: { iterationKey: "pool" },
-        label: "Archiver",
+        label: "Archive",
+        nextNodeId: "notify",
       },
       {
+        id: "notify",
         type: "NOTIFY",
         config: {
           message: "Cleanup : {{ ctx.poolCount }} comptes archivés.",
@@ -299,46 +461,55 @@ export const WORKFLOW_SEEDS: WorkflowSeed[] = [
         },
         label: "Notification",
       },
-    ]),
+    ],
   },
 ];
 
+// Re-seed is idempotent — existing rows keep their nodes JSON so
+// operator edits survive a re-run. Brand new rows land with the
+// canonical graph above.
 export async function seedWorkflows(): Promise<{
   upserted: string[];
   count: number;
+  nodesRewrittenFor: string[];
 }> {
   const { prisma } = await import("@/lib/prisma");
   const upserted: string[] = [];
+  const nodesRewrittenFor: string[] = [];
   for (const w of WORKFLOW_SEEDS) {
-    await prisma.workflow.upsert({
+    const existing = await prisma.workflow.findUnique({
       where: { slug: w.slug },
-      create: {
-        slug: w.slug,
-        displayName: w.displayName,
-        description: w.description,
-        category: w.category,
-        triggerType: w.triggerType,
-        cronExpression: w.cronExpression ?? null,
-        eventType: w.eventType ?? null,
-        nodes:
-          w.nodes as unknown as import("@prisma/client").Prisma.InputJsonValue,
-      },
-      update: {
-        // Preserve isActive + nodes customisations made through the UI.
-        displayName: w.displayName,
-        description: w.description,
-        category: w.category,
-        triggerType: w.triggerType,
-        cronExpression: w.cronExpression ?? null,
-        eventType: w.eventType ?? null,
-        // Only overwrite nodes on the VERY first seed (when the row
-        // was just created above); skip on updates so operator edits
-        // survive re-seeds. Detect first-create via a fresh count.
-        // Simplest: skip nodes on update; fresh seed already landed
-        // them via create().
-      },
+      select: { id: true },
     });
+    if (!existing) {
+      await prisma.workflow.create({
+        data: {
+          slug: w.slug,
+          displayName: w.displayName,
+          description: w.description,
+          category: w.category,
+          triggerType: w.triggerType,
+          cronExpression: w.cronExpression ?? null,
+          eventType: w.eventType ?? null,
+          nodes:
+            w.nodes as unknown as import("@prisma/client").Prisma.InputJsonValue,
+        },
+      });
+      nodesRewrittenFor.push(w.slug);
+    } else {
+      await prisma.workflow.update({
+        where: { slug: w.slug },
+        data: {
+          displayName: w.displayName,
+          description: w.description,
+          category: w.category,
+          triggerType: w.triggerType,
+          cronExpression: w.cronExpression ?? null,
+          eventType: w.eventType ?? null,
+        },
+      });
+    }
     upserted.push(w.slug);
   }
-  return { upserted, count: upserted.length };
+  return { upserted, count: upserted.length, nodesRewrittenFor };
 }

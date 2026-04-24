@@ -7,6 +7,7 @@ import Link from "next/link";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { WorkflowsList } from "./WorkflowsList";
+import { CreateWorkflowButton } from "./CreateWorkflowButton";
 import { getSystemToggles } from "@/lib/system/toggles";
 
 export const dynamic = "force-dynamic";
@@ -69,9 +70,12 @@ export default async function WorkflowsPage() {
           <div className="font-mono text-xs text-[#FF3300] tracking-widest border border-[#FF3300] px-3 py-1 w-max">
             [ WORKFLOWS · {rows.length} FLOWS ]
           </div>
-          <h1 className="brand font-display text-4xl sm:text-5xl md:text-7xl uppercase tracking-tight leading-[0.9] text-white m-0">
-            Workflows.
-          </h1>
+          <div className="flex items-end justify-between gap-4 flex-wrap">
+            <h1 className="brand font-display text-4xl sm:text-5xl md:text-7xl uppercase tracking-tight leading-[0.9] text-white m-0">
+              Workflows.
+            </h1>
+            <CreateWorkflowButton />
+          </div>
           <p className="font-mono text-xs text-[#666666] normal-case leading-relaxed max-w-3xl">
             Orchestrateur visuel. Chaque workflow enchaîne des nodes (fetch,
             filter, action, notify) selon un trigger cron ou event.

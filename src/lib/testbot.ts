@@ -415,6 +415,16 @@ async function attemptPlaceOrder({
 
     if ("error" in order) {
       await releaseHeld();
+      // Emit service.died — any workflow listening on the event bus
+      // can react (dispatcher would be a forceExcluded toggle on
+      // the ProductServiceCandidate, a notify, etc.). Best-effort;
+      // the skip path above already handles the local failure.
+      const { emit } = await import("@/lib/workflows/events");
+      await emit("service.died", {
+        serviceId: service.id,
+        bulkmedyaId: service.bulkmedyaId,
+        reason: String(order.error).slice(0, 200),
+      });
       return { kind: "skip", reason: `bulkmedya: ${order.error}` };
     }
 

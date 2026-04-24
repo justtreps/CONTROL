@@ -10,7 +10,7 @@ import { runWorkflow } from "@/lib/workflows/executor";
 export const maxDuration = 300;
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: { slug: string } }
 ) {
   const w = await prisma.workflow.findUnique({
@@ -18,6 +18,11 @@ export async function POST(
     select: { id: true },
   });
   if (!w) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const result = await runWorkflow(w.id, "manual");
-  return NextResponse.json({ ok: true, ...result });
+  // Query param ?dryRun=1 skips ACTION_* side effects; everything
+  // else runs normally so the operator can observe the graph flow
+  // without firing real scrapes/tests/placements.
+  const dryRun =
+    new URL(req.url).searchParams.get("dryRun") === "1";
+  const result = await runWorkflow(w.id, "manual", { dryRun });
+  return NextResponse.json({ ok: true, dryRun, ...result });
 }

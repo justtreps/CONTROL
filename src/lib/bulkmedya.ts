@@ -236,6 +236,22 @@ export async function syncServices(): Promise<SyncResult> {
     );
   }
 
+  // Emit services.synced so event-triggered workflows pick up
+  // (catalogue-rematch-on-sync etc.). Best-effort.
+  try {
+    const { emit } = await import("@/lib/workflows/events");
+    await emit("services.synced", {
+      total: raw.length,
+      created,
+      updated,
+      deactivated: deactivated.count,
+    });
+  } catch (e) {
+    console.warn(
+      `[syncServices] failed to emit services.synced: ${(e as Error).message}`
+    );
+  }
+
   return {
     total: raw.length,
     created,

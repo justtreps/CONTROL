@@ -699,7 +699,7 @@ model WorkflowRun {
   // 'running'   — in-flight on a node
   // 'completed' — reached the end of the graph cleanly
   // 'failed'    — a node threw; see logs for the stack
-  // 'paused'    — stuck on a WAIT node; resumedAt will fire it again
+  // 'paused'    — stuck on a WAIT node; resumeAt will fire it again
   status         String   @default("running")
   currentNodeId  String?
   // Live variable bag passed between nodes (eg. FETCH_POOL stashes
@@ -708,10 +708,39 @@ model WorkflowRun {
   // Append-only log of { nodeId, at, level, message } entries.
   // Surface in the UI history drawer.
   logs           Json     @default("[]")
+  // Pause/resume shuttle for WAIT nodes. resumeAt is the wall-clock
+  // the master cron scans — "run is paused AND resumeAt <= now" is
+  // the pick criterion. When the run resumes, executor re-enters at
+  // currentNodeId, walks the remaining graph. pausedAt is just for
+  // audit (age of the pause).
+  pausedAt       DateTime?
+  resumeAt       DateTime?
   resumedAt      DateTime?
   // Triggered by: 'cron' | 'manual' | 'event' | 'retry'
   trigger        String   @default("cron")
+  // When run was fired from an event, carries the WorkflowEvent.id
+  // so the UI can surface "why did this run start?".
+  sourceEventId  Int?
 
   @@index([workflowId, startedAt])
   @@index([status])
+  @@index([status, resumeAt])
+}
+
+// Event bus. Emitters call lib/workflows/events.ts:emit(type, payload).
+// The master workflow-executor cron picks up unprocessed rows each
+// tick and fires every workflow with matching triggerType='event' +
+// eventType. Multiple workflows can listen to the same event type —
+// each gets its own WorkflowRun with sourceEventId=this.id.
+model WorkflowEvent {
+  id            Int      @id @default(autoincrement())
+  type          String   // e.g. "pool.below_threshold.follower"
+  payload       Json     @default("{}")
+  emittedAt     DateTime @default(now())
+  processedAt   DateTime?
+  // Count of workflow runs that fired from this event — audit.
+  runsTriggered Int      @default(0)
+
+  @@index([processedAt, emittedAt])
+  @@index([type, emittedAt])
 }

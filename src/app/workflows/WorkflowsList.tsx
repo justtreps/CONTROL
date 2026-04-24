@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { cadenceLabel } from "./cadence";
 
 type Row = {
   id: number;
@@ -107,13 +108,13 @@ export function WorkflowsList({
               </p>
               <div className="flex flex-col gap-1 font-mono text-[10px] text-[#666666] tracking-widest uppercase normal-case">
                 <div>
-                  Trigger :{" "}
+                  Cadence :{" "}
                   <span className="text-white">
                     {r.triggerType === "cron"
-                      ? `cron ${r.cronExpression ?? ""}`
+                      ? cadenceLabel(r.cronExpression)
                       : r.triggerType === "event"
                         ? `event ${r.eventType ?? ""}`
-                        : "manual"}
+                        : "manuel"}
                   </span>
                 </div>
                 <div>

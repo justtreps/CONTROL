@@ -277,5 +277,19 @@ export async function maybeQueueAutoRefill(
       },
     });
     stats.queuedRefills.push(p);
+
+    // Emit the pool.below_threshold event so any workflow listening
+    // on the follower universe can also fire (eg. the UI-configured
+    // refill-follower-pool seed). Legacy auto-refill queue above
+    // stays in place — when the operator flips the workflow kill
+    // switch on + retires the old crons, the queue emission above
+    // can be retired with them.
+    const { emit } = await import("@/lib/workflows/events");
+    await emit("pool.below_threshold.follower", {
+      platform: p,
+      available,
+      threshold,
+      target,
+    });
   }
 }
