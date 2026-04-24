@@ -16,6 +16,8 @@ const PUBLIC_PATHS = [
   "/api/pool/reclassify-services",
   "/api/pool/backfill-country",
   "/api/pool/backfill-last-tested",
+  "/api/catalogue/seed",
+  "/api/catalogue/rematch",
 ];
 
 export async function middleware(req: NextRequest) {

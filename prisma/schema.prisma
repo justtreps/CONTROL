@@ -59,11 +59,77 @@ model Service {
 
   testOrders      TestOrder[]
   scores          ServiceScore[]
+  productCandidacies ProductServiceCandidate[]
 
   @@index([platform, serviceType, active])
   @@index([poolType, active])
   @@index([targetCountry])
   @@index([lastTestedAt])
+}
+
+// MyBoost product catalog — the 8 SKUs the user actually sells. The
+// matcher (src/lib/catalogue/matcher.ts) evaluates every active
+// BulkMedya Service against each product's rules and fills Product
+// ServiceCandidate rows. Routing, scoring and the testbot all key off
+// those candidacies instead of the raw Service.poolType heuristic.
+model MyBoostProduct {
+  id               Int      @id @default(autoincrement())
+  slug             String   @unique
+  displayName      String
+  platform         String   // "instagram" | "tiktok"
+  productType      String   // "followers" | "likes" | "views" | "shares" | "saves"
+  // Free-form JSON so the matcher can evolve per-product without
+  // schema churn (e.g. extra blacklist words, min-rate thresholds).
+  matchingCriteria Json     @default("{}")
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  candidates       ProductServiceCandidate[]
+
+  @@index([platform, productType])
+  @@index([isActive])
+}
+
+// Many-to-many link between a MyBoostProduct and the BulkMedya
+// Services that match its whitelist. currentScore + rank are filled
+// by the scoring engine on each pass.
+model ProductServiceCandidate {
+  id              Int      @id @default(autoincrement())
+  productId       Int
+  product         MyBoostProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  serviceId       Int
+  service         Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  // Matcher output — "is this a valid candidate right now?". Flipped
+  // false if the service drops out of scope on a re-match (inactive,
+  // renamed, reclassified). We keep the row around instead of
+  // deleting so scoring history survives.
+  isEligible      Boolean  @default(true)
+
+  // Operator override — "never use this service for this product no
+  // matter what the matcher says". Set from the catalogue detail UI.
+  forceExcluded   Boolean  @default(false)
+
+  // Scoring outputs. currentScore is 0-100; rank is position within
+  // the product's ranked candidate list (rank=1 is the top pick the
+  // router will try first). Both null until the scoring engine has
+  // seen enough test orders.
+  currentScore    Float?
+  rank            Int?
+
+  // Geo detected by the matcher after stripping emoji / country
+  // suffixes from the service name. null = global service.
+  targetCountry   String?
+
+  lastScoredAt    DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([productId, serviceId])
+  @@index([productId, rank])
+  @@index([productId, isEligible, forceExcluded])
+  @@index([serviceId])
 }
 
 model TestAccount {

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { isTestableService, whyNotTestable } from "@/lib/services/testable";
+import { PRODUCT_SEEDS } from "@/lib/catalogue/products";
 
 type Filter = "pending" | "never" | "6mo" | "1y" | "2y";
 
@@ -49,6 +50,35 @@ export function ServicesReviewTable({
         }),
       });
       if (res.ok) {
+        setRows((xs) => xs.filter((r) => r.id !== id));
+        router.refresh();
+      }
+    } finally {
+      setBusy((s) => ({ ...s, [id]: false }));
+    }
+  }
+
+  // Operator-force-link a service to a specific MyBoost product —
+  // bypasses the classifier's verdict entirely. The candidate row
+  // lands with isEligible=true + forceExcluded=false, so the next
+  // testbot + scoring cycle will pick it up naturally.
+  async function forceLink(id: number, slug: string) {
+    if (busy[id] || !slug) return;
+    setBusy((s) => ({ ...s, [id]: true }));
+    try {
+      const res = await fetch(`/api/catalogue/candidates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productSlug: slug, serviceId: id }),
+      });
+      if (res.ok) {
+        // Clearing the manual-review flag so the row drops out of the
+        // pending tab; the candidate is now tracked in /config/catalogue.
+        await fetch(`/api/config/services/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ classificationManualReview: false }),
+        });
         setRows((xs) => xs.filter((r) => r.id !== id));
         router.refresh();
       }
@@ -180,7 +210,29 @@ export function ServicesReviewTable({
                 </td>
                 <td className="px-3 py-3 text-right whitespace-nowrap">
                   {filter === "pending" ? (
-                    <div className="inline-flex gap-2">
+                    <div className="inline-flex items-center gap-2 flex-wrap justify-end">
+                      <select
+                        defaultValue=""
+                        disabled={busy[r.id]}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v) forceLink(r.id, v);
+                          e.currentTarget.value = "";
+                        }}
+                        title="Forcer ce service comme candidat d'un produit MyBoost"
+                        className="interactive bg-transparent border border-[#FF3300]/70 text-[#FF3300] px-2 py-1 font-mono text-[11px] tracking-widest uppercase outline-none disabled:opacity-60"
+                      >
+                        <option value="" disabled>
+                          [ FORCER → ]
+                        </option>
+                        {PRODUCT_SEEDS.filter(
+                          (p) => p.platform === r.platform
+                        ).map((p) => (
+                          <option key={p.slug} value={p.slug}>
+                            {p.slug}
+                          </option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         onClick={() => decide(r.id, "follower_test")}

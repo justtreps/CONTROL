@@ -1,9 +1,9 @@
-// MVP scope: CONTROL only ingests / scores / routes services that match
-// (platform=instagram|tiktok, service_type=followers). See src/lib/scope.ts.
-// For likes / views / comments / shares / saves / any other platform,
-// MyBoost must keep routing via its existing system — NOT through this
-// endpoint. A request outside the MVP scope will 404 with
-// "no_eligible_service" because the scoring pool is empty for those keys.
+// MyBoost → CONTROL order endpoint. Supports the new product-catalog
+// routing (send `product: "ig-followers"`) and the legacy
+// (`platform` + `service_type`) shape for backward compatibility.
+// Both resolve to a ProductServiceCandidate behind the scenes; the
+// router picks the best-ranked, scored service and falls back through
+// the ranks on provider error.
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { routeOrder } from "@/lib/router";
@@ -11,12 +11,19 @@ import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 30;
 
-const bodySchema = z.object({
-  platform: z.string().min(1),
-  service_type: z.string().min(1),
-  quantity: z.number().int().positive(),
-  target_url: z.string().url(),
-});
+// Either `product` OR (`platform` + `service_type`) must be present.
+const bodySchema = z
+  .object({
+    product: z.string().min(1).optional(),
+    platform: z.string().min(1).optional(),
+    service_type: z.string().min(1).optional(),
+    quantity: z.number().int().positive(),
+    target_url: z.string().url(),
+  })
+  .refine((d) => Boolean(d.product) || (d.platform && d.service_type), {
+    message: "either `product` OR (`platform`+`service_type`) is required",
+    path: ["product"],
+  });
 
 function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -60,9 +67,11 @@ export async function POST(req: Request) {
     );
   }
 
-  const { platform, service_type, quantity, target_url } = parsed.data;
+  const { product, platform, service_type, quantity, target_url } =
+    parsed.data;
 
   const result = await routeOrder({
+    product,
     platform,
     serviceType: service_type,
     quantity,

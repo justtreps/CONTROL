@@ -137,10 +137,12 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const avg = (pick: (s: OrderScore) => number) =>
       scores.reduce((acc, s) => acc + pick(s), 0) / scores.length;
 
+    const finalScore = avg((s) => s.final);
+
     await prisma.serviceScore.create({
       data: {
         serviceId,
-        currentScore: avg((s) => s.final),
+        currentScore: finalScore,
         completionFactor: avg((s) => s.completion),
         realismScore: avg((s) => s.realism),
         speedScore: avg((s) => s.speed),
@@ -148,9 +150,69 @@ export async function runScoringEngine(): Promise<ScoringResult> {
       },
     });
 
+    // Fan out to every ProductServiceCandidate row pointing at this
+    // service — the same service can be a candidate for multiple
+    // products (in practice not, since matchers are platform +
+    // type specific, but the schema allows it). Only currentScore +
+    // lastScoredAt are touched; rank is recomputed per-product
+    // below.
+    await prisma.productServiceCandidate.updateMany({
+      where: { serviceId },
+      data: { currentScore: finalScore, lastScoredAt: new Date() },
+    });
+
     result.servicesScored++;
     result.rowsWritten++;
   }
 
+  // Re-rank every product's candidates. Top rank = 1 for the best
+  // scored, ineligible / forceExcluded rows get rank=null (sit out
+  // of the routing order entirely).
+  await recomputeRanks();
+
   return result;
+}
+
+// Rewrites ProductServiceCandidate.rank for every active product.
+// Called at the end of runScoringEngine and exposed so the catalogue
+// page can offer a "rescorer" button.
+export async function recomputeRanks(): Promise<void> {
+  const products = await prisma.myBoostProduct.findMany({
+    where: { isActive: true },
+    select: { id: true },
+  });
+  for (const p of products) {
+    const rows = await prisma.productServiceCandidate.findMany({
+      where: {
+        productId: p.id,
+        isEligible: true,
+        forceExcluded: false,
+      },
+      orderBy: [
+        { currentScore: { sort: "desc", nulls: "last" } },
+        { id: "asc" },
+      ],
+      select: { id: true, currentScore: true },
+    });
+    // Assign rank 1..N to the in-order rows, null to the rest.
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      // null currentScore rows land at the tail — keep rank null so
+      // the router only falls back to them once every scored one
+      // has been tried.
+      const rank = r.currentScore == null ? null : i + 1;
+      await prisma.productServiceCandidate.update({
+        where: { id: r.id },
+        data: { rank },
+      });
+    }
+    // Ineligible / forceExcluded rows — clear rank.
+    await prisma.productServiceCandidate.updateMany({
+      where: {
+        productId: p.id,
+        OR: [{ isEligible: false }, { forceExcluded: true }],
+      },
+      data: { rank: null },
+    });
+  }
 }

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { prisma } from "@/lib/prisma";
 import { getConfig } from "@/lib/config";
@@ -104,6 +105,24 @@ export default async function ConfigPage() {
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* Quick-access link strip — catalogue + review sit one click away. */}
+      <section className="px-4 md:px-8 pb-4">
+        <div className="max-w-7xl mx-auto flex flex-wrap gap-3">
+          <Link
+            href="/config/catalogue"
+            className="interactive border border-[#FF3300] bg-[#FF3300] text-black hover:bg-[#CC2900] hover:border-[#CC2900] transition-colors px-4 py-2 font-mono text-xs tracking-widest uppercase"
+          >
+            [ CATALOGUE MYBOOST → ]
+          </Link>
+          <Link
+            href="/config/services-review"
+            className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white transition-colors px-4 py-2 font-mono text-xs tracking-widest uppercase"
+          >
+            [ SERVICES À TRIER → ]
+          </Link>
         </div>
       </section>
 

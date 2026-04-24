@@ -95,18 +95,46 @@ export async function runTestBot(
 
   const cutoff = new Date(Date.now() - SERVICE_COOLDOWN_HOURS * 3600 * 1000);
 
-  // Sellable-only gate: the testbot is the upstream feeder for
-  // ServiceScore, so anything we don't actually route to MyBoost has
-  // no business sitting in the test cycle (it just pollutes the
-  // pool's resources and the scoring pipeline). Predicate centralised
-  // in lib/services/testable — same rules drive the UI badge.
-  const [services, totalActiveOnSellablePlatforms] = await Promise.all([
-    prisma.service.findMany({
-      where: TESTABLE_WHERE,
-      include: {
-        testOrders: { orderBy: { placedAt: "desc" }, take: 1 },
+  // Catalogue-only gate: the testbot is the upstream feeder for
+  // ServiceScore + ProductServiceCandidate.currentScore, so it only
+  // tests services that are eligible candidates for at least one
+  // MyBoost product. Services that never match anything in the
+  // catalogue (e.g. "Instagram Comments" rows) stay dormant.
+  // Predicate here matches the matcher's output: isEligible=true AND
+  // !forceExcluded for at least one active product.
+  const eligibleServiceIdsRows = await prisma.productServiceCandidate.findMany(
+    {
+      where: {
+        isEligible: true,
+        forceExcluded: false,
+        product: { isActive: true },
       },
-    }),
+      select: { serviceId: true },
+      distinct: ["serviceId"],
+    }
+  );
+  const eligibleIds = eligibleServiceIdsRows.map((r) => r.serviceId);
+
+  const [services, totalActiveOnSellablePlatforms] = await Promise.all([
+    eligibleIds.length === 0
+      ? Promise.resolve([] as Array<
+          import("@prisma/client").Service & {
+            testOrders: import("@prisma/client").TestOrder[];
+          }
+        >)
+      : prisma.service.findMany({
+          where: {
+            id: { in: eligibleIds },
+            // Still require the legacy sellable-bucket fields so a
+            // stale Service row we've since flipped to manual review
+            // never sneaks back in through the catalogue. Belt +
+            // braces while the two sources of truth co-exist.
+            ...TESTABLE_WHERE,
+          },
+          include: {
+            testOrders: { orderBy: { placedAt: "desc" }, take: 1 },
+          },
+        }),
     prisma.service.count({
       where: {
         active: true,
@@ -120,7 +148,7 @@ export async function runTestBot(
     totalActiveOnSellablePlatforms - services.length
   );
   console.log(
-    `[testbot] Filtered ${services.length} services eligible, skipped ${skippedNotSellable} (reason: not sellable)`
+    `[testbot] Filtered ${services.length} catalogue-eligible services (total candidates: ${eligibleIds.length}), skipped ${skippedNotSellable}`
   );
 
   // Platform-fair rotation: split eligible services per platform,

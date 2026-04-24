@@ -2,6 +2,7 @@ import { getBulkmedyaKey } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
 import { SCOPE } from "@/lib/scope";
 import { classifyService } from "@/lib/services/classifier";
+import { rematchAll } from "@/lib/catalogue/matcher";
 
 const BULKMEDYA_URL = process.env.BULKMEDYA_API_URL ?? "https://bulkmedya.org/api/v2";
 
@@ -220,6 +221,20 @@ export async function syncServices(): Promise<SyncResult> {
   console.log(
     `[syncServices] fetched=${raw.length} kept=${kept} (created=${created}, updated=${updated}) skipped=${skippedOutOfScope} deactivated=${deactivated.count}`
   );
+
+  // Auto-rematch the catalogue after every sync — keeps the product
+  // × service candidacies fresh without a second operator action.
+  // Best-effort: failures don't undo the sync itself.
+  try {
+    const rematch = await rematchAll();
+    console.log(
+      `[syncServices] catalogue rematch: created=${rematch.candidatesCreated} updated=${rematch.candidatesUpdated} ineligible=${rematch.candidatesMarkedIneligible}`
+    );
+  } catch (e) {
+    console.error(
+      `[syncServices] catalogue rematch failed: ${(e as Error).message}`
+    );
+  }
 
   return {
     total: raw.length,

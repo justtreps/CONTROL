@@ -1,9 +1,26 @@
+// MyBoost → CONTROL order routing.
+//
+// Two entry shapes supported:
+//   1. Preferred: { product: "ig-followers", quantity, targetUrl }
+//      → look up MyBoostProduct by slug, pick the best-ranked Product
+//        ServiceCandidate with isEligible + !forceExcluded, fall back
+//        through ranks on error.
+//   2. Legacy:   { platform: "instagram", serviceType: "followers", ... }
+//      → mapped to the canonical slug `${platformPrefix}-${type}`
+//        before the same candidate-based routing runs. Keeps
+//        MyBoost's existing caller shape working until migration.
+//
+// The old ServiceScore.currentScore path is retained as a tiebreaker
+// when a candidate has no ProductServiceCandidate.currentScore yet
+// (freshly seeded catalog, scoring hasn't run over it).
+
 import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
 
 export type RouteOrderInput = {
-  platform: string;
-  serviceType: string;
+  platform?: string;
+  serviceType?: string;
+  product?: string;
   quantity: number;
   targetUrl: string;
 };
@@ -22,6 +39,7 @@ export type RouteOrderSuccess = {
   chosenService: ChosenService;
   score: number | null;
   attempts: number;
+  productSlug: string | null;
 };
 
 export type RouteOrderFailure = {
@@ -29,39 +47,136 @@ export type RouteOrderFailure = {
   dryRun: boolean;
   error: string;
   attempts: number;
+  productSlug: string | null;
 };
 
 export type RouteOrderResult = RouteOrderSuccess | RouteOrderFailure;
 
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 5;
 
 export function isDryRun(): boolean {
   const v = (process.env.DRY_RUN ?? "true").toLowerCase().trim();
   return v !== "false" && v !== "0" && v !== "";
 }
 
-export async function routeOrder(input: RouteOrderInput): Promise<RouteOrderResult> {
-  const platform = input.platform.toLowerCase();
-  const serviceType = input.serviceType.toLowerCase();
+// Maps legacy (platform, serviceType) into the canonical product slug.
+function legacySlugFor(
+  platform: string | undefined,
+  serviceType: string | undefined
+): string | null {
+  if (!platform || !serviceType) return null;
+  const p = platform.toLowerCase();
+  const t = serviceType.toLowerCase();
+  const prefix = p === "instagram" ? "ig" : p === "tiktok" ? "tt" : null;
+  if (!prefix) return null;
+  const canonicalType = [
+    "followers",
+    "likes",
+    "views",
+    "shares",
+    "saves",
+  ].includes(t)
+    ? t
+    : null;
+  if (!canonicalType) return null;
+  return `${prefix}-${canonicalType}`;
+}
+
+export async function routeOrder(
+  input: RouteOrderInput
+): Promise<RouteOrderResult> {
   const { quantity, targetUrl } = input;
   const dryRun = isDryRun();
 
-  const eligible = await prisma.service.findMany({
-    where: {
-      active: true,
-      platform,
-      serviceType,
-      minQuantity: { lte: quantity },
-      maxQuantity: { gte: quantity },
-    },
-    include: { scores: { orderBy: { computedAt: "desc" }, take: 1 } },
-  });
+  // Resolve product slug — prefer the explicit one.
+  const slug =
+    input.product ?? legacySlugFor(input.platform, input.serviceType);
 
-  if (eligible.length === 0) {
+  if (!slug) {
     await prisma.routingDecision.create({
       data: {
-        platform,
-        serviceType,
+        platform: input.platform ?? "",
+        serviceType: input.serviceType ?? "",
+        quantity,
+        targetUrl,
+        attempts: 0,
+        success: false,
+        dryRun,
+        errorMessage: "invalid_product_or_legacy_mapping",
+      },
+    });
+    return {
+      success: false,
+      dryRun,
+      error: "invalid_product_or_legacy_mapping",
+      attempts: 0,
+      productSlug: null,
+    };
+  }
+
+  const product = await prisma.myBoostProduct.findUnique({
+    where: { slug },
+    select: { id: true, slug: true, platform: true, productType: true },
+  });
+  if (!product || !product) {
+    await prisma.routingDecision.create({
+      data: {
+        platform: input.platform ?? "",
+        serviceType: input.serviceType ?? "",
+        quantity,
+        targetUrl,
+        attempts: 0,
+        success: false,
+        dryRun,
+        errorMessage: `unknown_product:${slug}`,
+      },
+    });
+    return {
+      success: false,
+      dryRun,
+      error: "unknown_product",
+      attempts: 0,
+      productSlug: slug,
+    };
+  }
+
+  // Eligible candidates for this product + this quantity window.
+  // rank ASC (null last) is the source of truth for routing order —
+  // the scoring engine maintains it.
+  const candidates = await prisma.productServiceCandidate.findMany({
+    where: {
+      productId: product.id,
+      isEligible: true,
+      forceExcluded: false,
+      service: {
+        active: true,
+        minQuantity: { lte: quantity },
+        maxQuantity: { gte: quantity },
+      },
+    },
+    orderBy: [
+      { rank: { sort: "asc", nulls: "last" } },
+      { currentScore: { sort: "desc", nulls: "last" } },
+      { id: "asc" },
+    ],
+    include: {
+      service: {
+        select: {
+          id: true,
+          bulkmedyaId: true,
+          name: true,
+          ratePerK: true,
+        },
+      },
+    },
+    take: MAX_ATTEMPTS,
+  });
+
+  if (candidates.length === 0) {
+    await prisma.routingDecision.create({
+      data: {
+        platform: product.platform,
+        serviceType: product.productType,
         quantity,
         targetUrl,
         attempts: 0,
@@ -70,36 +185,30 @@ export async function routeOrder(input: RouteOrderInput): Promise<RouteOrderResu
         errorMessage: "no_eligible_service",
       },
     });
-    return { success: false, dryRun, error: "no_eligible_service", attempts: 0 };
+    return {
+      success: false,
+      dryRun,
+      error: "no_eligible_service",
+      attempts: 0,
+      productSlug: slug,
+    };
   }
 
-  const ranked = [...eligible].sort((a, b) => {
-    const sa = a.scores[0]?.currentScore;
-    const sb = b.scores[0]?.currentScore;
-    if (sa != null && sb != null && sa !== sb) return sb - sa;
-    if (sa != null && sb == null) return -1;
-    if (sa == null && sb != null) return 1;
-    return a.ratePerK - b.ratePerK;
-  });
-
-  const candidates = ranked.slice(0, MAX_ATTEMPTS);
   let lastError = "no_attempts";
 
   for (let i = 0; i < candidates.length; i++) {
-    const service = candidates[i];
-    const score = service.scores[0]?.currentScore ?? null;
+    const c = candidates[i];
     const attempts = i + 1;
 
     try {
       let bulkmedyaOrderId: string;
-
       if (dryRun) {
-        bulkmedyaOrderId = `DRYRUN-${service.bulkmedyaId}-${Date.now()}-${Math.random()
+        bulkmedyaOrderId = `DRYRUN-${c.service.bulkmedyaId}-${Date.now()}-${Math.random()
           .toString(36)
           .slice(2, 8)}`;
       } else {
         const order = await placeOrder({
-          service: service.bulkmedyaId,
+          service: c.service.bulkmedyaId,
           link: targetUrl,
           quantity,
         });
@@ -112,12 +221,12 @@ export async function routeOrder(input: RouteOrderInput): Promise<RouteOrderResu
 
       await prisma.routingDecision.create({
         data: {
-          platform,
-          serviceType,
+          platform: product.platform,
+          serviceType: product.productType,
           quantity,
           targetUrl,
-          chosenServiceId: service.id,
-          chosenServiceScore: score,
+          chosenServiceId: c.service.id,
+          chosenServiceScore: c.currentScore ?? null,
           bulkmedyaOrderId,
           attempts,
           success: true,
@@ -130,28 +239,29 @@ export async function routeOrder(input: RouteOrderInput): Promise<RouteOrderResu
         dryRun,
         bulkmedyaOrderId,
         chosenService: {
-          id: service.id,
-          bulkmedyaId: service.bulkmedyaId,
-          name: service.name,
-          ratePerK: service.ratePerK,
+          id: c.service.id,
+          bulkmedyaId: c.service.bulkmedyaId,
+          name: c.service.name,
+          ratePerK: c.service.ratePerK,
         },
-        score,
+        score: c.currentScore ?? null,
         attempts,
+        productSlug: slug,
       };
     } catch (e) {
       lastError = (e as Error).message;
     }
   }
 
-  const topService = candidates[0];
+  const topCandidate = candidates[0];
   await prisma.routingDecision.create({
     data: {
-      platform,
-      serviceType,
+      platform: product.platform,
+      serviceType: product.productType,
       quantity,
       targetUrl,
-      chosenServiceId: topService.id,
-      chosenServiceScore: topService.scores[0]?.currentScore ?? null,
+      chosenServiceId: topCandidate.service.id,
+      chosenServiceScore: topCandidate.currentScore ?? null,
       attempts: candidates.length,
       success: false,
       dryRun,
@@ -159,5 +269,11 @@ export async function routeOrder(input: RouteOrderInput): Promise<RouteOrderResu
     },
   });
 
-  return { success: false, dryRun, error: lastError, attempts: candidates.length };
+  return {
+    success: false,
+    dryRun,
+    error: lastError,
+    attempts: candidates.length,
+    productSlug: slug,
+  };
 }
