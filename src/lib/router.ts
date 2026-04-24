@@ -16,6 +16,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 export type RouteOrderInput = {
   platform?: string;
@@ -54,9 +55,34 @@ export type RouteOrderResult = RouteOrderSuccess | RouteOrderFailure;
 
 const MAX_ATTEMPTS = 5;
 
-export function isDryRun(): boolean {
-  const v = (process.env.DRY_RUN ?? "true").toLowerCase().trim();
-  return v !== "false" && v !== "0" && v !== "";
+// DB-backed dry-run check with a small in-memory cache. Reads
+// SystemToggle.dryRunMode and caches the value for 30 s so hot paths
+// (routeOrder per /api/order call, testbot placement loops) don't
+// hit the DB every single time. Default-true semantics preserved —
+// if the table is empty, getSystemToggles() lazy-creates a row with
+// dryRunMode=true.
+let _dryRunCache: { value: boolean; cachedAt: number } | null = null;
+const DRY_RUN_TTL_MS = 30_000;
+
+export async function isDryRun(): Promise<boolean> {
+  if (
+    _dryRunCache &&
+    Date.now() - _dryRunCache.cachedAt < DRY_RUN_TTL_MS
+  ) {
+    return _dryRunCache.value;
+  }
+  const t = await getSystemToggles();
+  _dryRunCache = { value: t.dryRunMode, cachedAt: Date.now() };
+  return t.dryRunMode;
+}
+
+/**
+ * Invalidate the in-memory dry-run cache. Called by the toggle
+ * PATCH endpoint so a flip propagates to callers within one read
+ * instead of up to 30 s later.
+ */
+export function invalidateDryRunCache(): void {
+  _dryRunCache = null;
 }
 
 // Maps legacy (platform, serviceType) into the canonical product slug.
@@ -86,7 +112,7 @@ export async function routeOrder(
   input: RouteOrderInput
 ): Promise<RouteOrderResult> {
   const { quantity, targetUrl } = input;
-  const dryRun = isDryRun();
+  const dryRun = await isDryRun();
 
   // Resolve product slug — prefer the explicit one.
   const slug =

@@ -554,12 +554,19 @@ model TestOrder {
   // this row.
   pollingState     Json?
 
+  // True when the testbot skipped the real BulkMedya placement
+  // (SystemToggle.dryRunMode=true OR testBotEnabled=false). The
+  // bulkmedyaOrderId is prefixed "sim-…" in that case. Kept for
+  // the /logs audit view + so scoring can be filtered when needed.
+  dryRun           Boolean  @default(false)
+
   measurements     Measurement[]
   polls            TestPoll[]
 
   @@index([serviceId, placedAt])
   @@index([status, placedAt])
   @@index([retriedFrom])
+  @@index([dryRun, placedAt])
 }
 
 // Audit log of every adaptive-polling tick on a TestOrder. Scoring
@@ -656,6 +663,13 @@ model SystemToggle {
   // parallel; a follow-up migration commit will disable them once
   // the workflow engine proves stable.
   workflowExecutorEnabled  Boolean  @default(false)
+  // Master dry-run gate. When true (default), every BulkMedya
+  // placement is simulated — TestOrder rows land with dryRun=true
+  // and bulkmedyaOrderId="sim-…", RoutingDecision rows land with
+  // dryRun=true. When false, real BulkMedya orders are placed
+  // (production mode). Replaces the prior process.env.DRY_RUN env
+  // var so the operator can flip the switch from /pool.
+  dryRunMode               Boolean  @default(true)
   updatedAt                DateTime @updatedAt
 }
 

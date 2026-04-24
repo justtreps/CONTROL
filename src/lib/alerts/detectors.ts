@@ -553,6 +553,55 @@ export const detectTestAbortRateHigh: Detector = async () => {
   ];
 };
 
+// ── INFRA / CONFIG ─────────────────────────────────────────────
+
+// dry_run_off_with_testbot — surfaces the "production mode" state
+// so the operator never loses track that real BulkMedya budget is
+// being spent. Info-only; this isn't a bug, just a state we want
+// visible alongside the standard alert feed.
+export const detectDryRunOffWithTestbot: Detector = async () => {
+  const { getSystemToggles } = await import("@/lib/system/toggles");
+  const t = await getSystemToggles();
+  if (t.dryRunMode !== false || !t.testBotEnabled) return [];
+
+  // Pull today's placement count + approximate cost. We estimate
+  // cost via the SUM of Service.ratePerK * targetQuantity / 1000
+  // over TestOrders placed today where dryRun=false (i.e. real
+  // BulkMedya orders).
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const realOrdersToday = await prisma.testOrder.findMany({
+    where: {
+      placedAt: { gte: startOfDay },
+      dryRun: false,
+    },
+    include: { service: { select: { ratePerK: true } } },
+  });
+  const placedCount = realOrdersToday.length;
+  const estimatedCost = realOrdersToday.reduce((acc, o) => {
+    const rate = o.service?.ratePerK ?? 0;
+    return acc + (rate * o.targetQuantity) / 1000;
+  }, 0);
+
+  return [
+    {
+      code: "dry_run_off_with_testbot",
+      category: "infra",
+      severity: "info",
+      title: "Mode production actif",
+      description:
+        "DRY RUN désactivé — le testbot passe de vraies commandes BulkMedya.",
+      explanation: `État des toggles : dryRunMode=false, testBotEnabled=true, scoringEngineEnabled=${t.scoringEngineEnabled ? "true" : "false"}. Depuis 00:00 UTC aujourd'hui : ${placedCount} commandes réelles placées, coût estimé ≈ ${estimatedCost.toFixed(2)} $ (basé sur Service.ratePerK × targetQuantity). Le calcul est approximatif — BulkMedya facture au final selon la livraison réelle.`,
+      impact:
+        "Chaque test testbot consomme du solde BulkMedya. Si la qualité des mesures baisse ou si le catalogue est mal classé, l'argent est dépensé sans retour utile.",
+      suggestedAction:
+        "Surveiller le solde BulkMedya + la qualité des mesures sur /services. Si un doute apparaît (errors batch, scores qui s'effondrent), remettre DRY RUN sur SIMULATION depuis /pool → KILL SWITCH.",
+      actionType: "link",
+      actionPayload: { href: "/pool#kill-switch" },
+    },
+  ];
+};
+
 // ── Registry ───────────────────────────────────────────────────
 
 export const DETECTORS: Detector[] = [
@@ -572,6 +621,7 @@ export const DETECTORS: Detector[] = [
   detectOrderApiFailRate,
   detectTestRetryRateHigh,
   detectTestAbortRateHigh,
+  detectDryRunOffWithTestbot,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──

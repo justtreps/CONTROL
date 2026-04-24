@@ -555,24 +555,39 @@ async function placeRetryOrder({
       ? `https://www.instagram.com/${oracle.username}/`
       : `https://www.tiktok.com/@${oracle.username}`;
 
-  const placement = await placeOrder({
-    service: service.bulkmedyaId,
-    link: postPick?.post.mediaUrl ?? targetUrl,
-    quantity: targetQuantity,
-  });
-  if ("error" in placement) {
-    if (postPick) await releasePost(postPick.post.id);
-    return null;
+  // Honor the same simulated-placement gate as testbot.ts first-pass
+  // so a retry during dryRunMode doesn't accidentally spend real
+  // BulkMedya budget.
+  const toggles = await getSystemToggles();
+  const simulated = !toggles.testBotEnabled || toggles.dryRunMode;
+
+  let bulkmedyaOrderId: string;
+  if (simulated) {
+    bulkmedyaOrderId = `sim-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+  } else {
+    const placement = await placeOrder({
+      service: service.bulkmedyaId,
+      link: postPick?.post.mediaUrl ?? targetUrl,
+      quantity: targetQuantity,
+    });
+    if ("error" in placement) {
+      if (postPick) await releasePost(postPick.post.id);
+      return null;
+    }
+    bulkmedyaOrderId = String(placement.order);
   }
 
   const newOrder = await prisma.testOrder.create({
     data: {
       serviceId,
       testAccountId: account.id,
-      bulkmedyaOrderId: String(placement.order),
+      bulkmedyaOrderId,
       targetQuantity,
       baselineCount: oracle.followerCount,
       status: "running",
+      dryRun: simulated,
       retriedFrom: fromOrderId,
       retryCount: nextRetryCount,
       lastHealthCheckAt: new Date(),

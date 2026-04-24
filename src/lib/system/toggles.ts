@@ -26,7 +26,10 @@ export async function updateSystemToggles(
   return prisma.systemToggle.update({ where: { id: 1 }, data: patch });
 }
 
-const ALL_KEYS: Array<keyof TogglePatch> = [
+// Standard "enabled" toggles — stopAll flips all to false,
+// restartAll to true. Every one of these is "true means the
+// subsystem runs normally".
+const ENABLED_KEYS: Array<keyof TogglePatch> = [
   "poolScrapeEnabled",
   "poolHealthcheckEnabled",
   "routingApiEnabled",
@@ -36,21 +39,36 @@ const ALL_KEYS: Array<keyof TogglePatch> = [
   "workflowExecutorEnabled",
 ];
 
+// dryRunMode is inverted (true means simulation / safe). Handled
+// separately so an emergency stopAll pushes us to the safest
+// possible state (everything off + dry run on), and restartAll
+// leaves the mode untouched so the operator opts into production
+// explicitly via the dedicated toggle.
+const ALL_KEYS: Array<keyof TogglePatch> = [
+  ...ENABLED_KEYS,
+  "dryRunMode",
+];
+
 export async function stopAll(): Promise<SystemToggle> {
   const patch: TogglePatch = {};
-  for (const k of ALL_KEYS) patch[k] = false;
+  for (const k of ENABLED_KEYS) patch[k] = false;
+  patch.dryRunMode = true; // safe state
   return updateSystemToggles(patch);
 }
 
 export async function restartAll(): Promise<SystemToggle> {
   const patch: TogglePatch = {};
-  for (const k of ALL_KEYS) patch[k] = true;
+  for (const k of ENABLED_KEYS) patch[k] = true;
+  // Intentionally NOT touching dryRunMode here — production mode
+  // should be an explicit operator choice, not a side-effect of
+  // clicking RESTART ALL.
   return updateSystemToggles(patch);
 }
 
-// Count of DISABLED toggles — used by the global warning bar.
+// Count of DISABLED subsystems — powers the banner. dryRunMode
+// isn't a "disabled subsystem" in this sense so we skip it.
 export function countDisabled(t: SystemToggle): number {
-  return ALL_KEYS.filter((k) => t[k] === false).length;
+  return ENABLED_KEYS.filter((k) => t[k] === false).length;
 }
 
 export const SYSTEM_TOGGLE_KEYS = ALL_KEYS;

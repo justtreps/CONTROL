@@ -87,12 +87,15 @@ export async function runTestBot(
     errors: [],
   };
 
-  // Kill-switch: when test-bot is disabled we force a simulated path
-  // — no real BulkMedya calls fire, TestOrder rows are written with a
-  // simulated_<ts> id so the rest of the pipeline (scoring, health
-  // check) keeps working without contaminating the pool.
+  // Simulated-placement gate. Two independent toggles push us into
+  // fake-BulkMedya mode:
+  //   • testBotEnabled=false — master kill switch
+  //   • dryRunMode=true       — production safety gate (default)
+  // Either one being truthy forces sim-* bulkmedyaOrderId and no
+  // real BulkMedya call. Measurements still come from real RapidAPI
+  // reads so the scoring pipeline keeps running on real signal.
   const toggles = await getSystemToggles();
-  const simulated = !toggles.testBotEnabled;
+  const simulated = !toggles.testBotEnabled || toggles.dryRunMode;
 
   const cutoff = new Date(Date.now() - SERVICE_COOLDOWN_HOURS * 3600 * 1000);
 
@@ -436,6 +439,10 @@ async function attemptPlaceOrder({
         targetQuantity: service.minQuantity,
         baselineCount: baseline.count,
         status: "running",
+        // Record the mode this order was placed in. /logs + scoring
+        // filters use this to separate production tests from dry-run
+        // simulations.
+        dryRun: simulated,
         // Pre-test health check just succeeded (oracle was ok above).
         lastHealthCheckAt: new Date(),
         // Seed the adaptive polling state — the /api/cron/testbot-poll

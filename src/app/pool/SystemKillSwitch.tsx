@@ -12,12 +12,19 @@ type Toggles = {
   scoringEngineEnabled: boolean;
   adaptivePollingEnabled: boolean;
   workflowExecutorEnabled: boolean;
+  dryRunMode: boolean;
 };
 
 type Row = {
   key: keyof Toggles;
   label: string;
   hint?: string;
+  /**
+   * true = "enabled means it runs" (standard toggle).
+   * false for dryRunMode: "enabled means simulation" — the UI
+   * should render its state as SAFE when on, LIVE when off.
+   */
+  inverted?: boolean;
 };
 
 const ROWS: Row[] = [
@@ -25,6 +32,12 @@ const ROWS: Row[] = [
   { key: "poolHealthcheckEnabled", label: "HEALTH CHECK", hint: "daily cron + manual run" },
   { key: "routingApiEnabled", label: "ROUTING API", hint: "/api/order (MyBoost)" },
   { key: "testBotEnabled", label: "TEST BOT", hint: "BulkMedya calls → simulated" },
+  {
+    key: "dryRunMode",
+    label: "DRY RUN",
+    hint: "simulation sans coût BulkMedya (désactiver pour vraies commandes)",
+    inverted: true,
+  },
   { key: "scoringEngineEnabled", label: "SCORING ENGINE", hint: "/api/cron/scoring" },
   {
     key: "adaptivePollingEnabled",
@@ -121,7 +134,16 @@ export function SystemKillSwitch({ initialToggles }: { initialToggles: Toggles }
     }
   }
 
-  const disabledCount = ROWS.filter((r) => !toggles[r.key]).length;
+  // Exclude the inverted dryRunMode from the disabledCount: being in
+  // "simulation" isn't the same as being paused.
+  const disabledCount = ROWS.filter(
+    (r) => !r.inverted && !toggles[r.key]
+  ).length;
+
+  // Surface the "⚠ COMMANDES RÉELLES EN COURS" banner in the header
+  // strip when production mode is active AND the testbot is running.
+  const liveProduction =
+    toggles.dryRunMode === false && toggles.testBotEnabled === true;
 
   return (
     <section
@@ -131,13 +153,22 @@ export function SystemKillSwitch({ initialToggles }: { initialToggles: Toggles }
     >
       {/* Banner Pattern F compact */}
       <div className="bg-[#FF3300] text-black px-4 md:px-8 h-24 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <span className="font-mono text-xs tracking-widest border border-black/30 px-3 py-1">
             [ SYSTEM CONTROL ]
           </span>
           {disabledCount > 0 && (
             <span className="font-mono text-xs tracking-widest hidden sm:inline">
-              {disabledCount}/{ROWS.length} PAUSED
+              {disabledCount}/
+              {ROWS.filter((r) => !r.inverted).length} PAUSED
+            </span>
+          )}
+          {liveProduction && (
+            <span
+              className="font-mono text-xs tracking-widest bg-black text-[#FFCC00] px-3 py-1 border border-[#FFCC00] uppercase animate-pulse"
+              title="DRY RUN désactivé + TEST BOT actif → chaque test consomme du vrai budget BulkMedya."
+            >
+              ⚠ COMMANDES RÉELLES EN COURS
             </span>
           )}
         </div>
@@ -161,15 +192,29 @@ export function SystemKillSwitch({ initialToggles }: { initialToggles: Toggles }
             <div className="border-b border-[#666666]/20">
               {ROWS.map((r) => {
                 const on = toggles[r.key];
+                // Inverted toggles (dryRunMode) render with
+                // SIMULATION / LIVE labels + amber accent for the
+                // production state so the operator sees it at a glance.
+                const liveWarning = r.inverted && !on;
                 return (
                   <div
                     key={r.key}
-                    className="flex items-center justify-between gap-3 px-4 md:px-8 py-4 border-b border-[#666666]/10 font-mono text-xs md:text-sm tracking-widest uppercase hover:bg-[#0D0D0D]"
+                    className={
+                      "flex items-center justify-between gap-3 px-4 md:px-8 py-4 border-b border-[#666666]/10 font-mono text-xs md:text-sm tracking-widest uppercase hover:bg-[#0D0D0D] " +
+                      (liveWarning ? "bg-[#FFCC00]/10" : "")
+                    }
                   >
                     <div className="min-w-0 flex-1">
-                      <div className="text-white truncate">{r.label}</div>
+                      <div className="text-white truncate flex items-center gap-2">
+                        {r.label}
+                        {liveWarning && (
+                          <span className="font-mono text-[10px] tracking-widest border border-[#FFCC00] text-[#FFCC00] px-1.5 py-0">
+                            PRODUCTION
+                          </span>
+                        )}
+                      </div>
                       {r.hint && (
-                        <div className="font-mono text-[10px] text-[#666666] tracking-widest mt-1 truncate">
+                        <div className="font-mono text-[10px] text-[#666666] tracking-widest mt-1 truncate normal-case">
                           {r.hint}
                         </div>
                       )}
@@ -178,13 +223,31 @@ export function SystemKillSwitch({ initialToggles }: { initialToggles: Toggles }
                       type="button"
                       onClick={() => setOne(r.key, !on)}
                       disabled={busy}
-                      className={`interactive border px-4 py-2 font-mono text-xs tracking-widest uppercase transition-colors disabled:opacity-60 flex-shrink-0 ${
-                        on
-                          ? "border-[#FF3300] bg-[#FF3300] text-black"
-                          : "border-[#666666]/40 text-[#666666] hover:border-white hover:text-white"
-                      }`}
+                      className={
+                        "interactive border px-4 py-2 font-mono text-xs tracking-widest uppercase transition-colors disabled:opacity-60 flex-shrink-0 " +
+                        (r.inverted
+                          ? on
+                            ? "border-[#00CC66] bg-[#00CC66] text-black"
+                            : "border-[#FFCC00] bg-[#FFCC00] text-black"
+                          : on
+                            ? "border-[#FF3300] bg-[#FF3300] text-black"
+                            : "border-[#666666]/40 text-[#666666] hover:border-white hover:text-white")
+                      }
+                      title={
+                        r.inverted
+                          ? on
+                            ? "Mode simulation — cliquer pour passer en production (vraies commandes)"
+                            : "Mode production actif — cliquer pour revenir en simulation"
+                          : undefined
+                      }
                     >
-                      {on ? "[ ENABLED ]" : "[ DISABLED ]"}
+                      {r.inverted
+                        ? on
+                          ? "[ SIMULATION ]"
+                          : "[ ⚠ LIVE ]"
+                        : on
+                          ? "[ ENABLED ]"
+                          : "[ DISABLED ]"}
                     </button>
                   </div>
                 );
