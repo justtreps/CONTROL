@@ -87,6 +87,13 @@ export async function POST(req: Request) {
     getStats: () => initial as unknown as Record<string, unknown>,
   });
 
+  // Snapshot `initial` BEFORE the tranche mutates it — otherwise
+  // beforeStats and afterStats alias the same object and the progress
+  // diff in finalizeTrancheStatus is always 0 → false stale_no_progress.
+  // Same fix pattern as scrape-runner + the runner siblings.
+  const beforeStats =
+    (structuredClone(initial) as unknown as Record<string, unknown>) ?? {};
+
   try {
     const { done, stats: finalStats } = await withAssignedKey(job, () =>
       runHealthCheckTranche({
@@ -101,7 +108,7 @@ export async function POST(req: Request) {
 
     const { finalStatus, stuckReason } = finalizeTrancheStatus({
       job,
-      beforeStats: initial as unknown as Record<string, unknown>,
+      beforeStats,
       afterStats: finalStats as unknown as Record<string, unknown>,
       cfg,
       stopped,

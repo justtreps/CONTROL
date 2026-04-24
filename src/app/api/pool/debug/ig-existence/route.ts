@@ -129,9 +129,11 @@ async function rapidUserinfoById(userId: string, key: string): Promise<Probe> {
   try {
     // Route through the IG client's rate-limit gate even on debug
     // paths so a curl-debug burst doesn't trip the MEGA-plan quota
-    // while real jobs are running.
+    // while real jobs are running. Debug probes don't run inside an
+    // ALS-scoped key context, so pass the legacy sentinel (-1) — the
+    // limiter keeps a dedicated "legacy" window with the default max.
     const { waitForIgSlot } = await import("@/lib/rapidapi/rate-limit");
-    await waitForIgSlot();
+    await waitForIgSlot(-1);
     const res = await fetch(
       `https://instagram-scraper-20251.p.rapidapi.com/userinfo/?username_or_id=${encodeURIComponent(userId)}`,
       {

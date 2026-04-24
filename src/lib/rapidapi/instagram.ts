@@ -50,7 +50,12 @@ async function call(path: string, attempt = 0): Promise<unknown> {
   const token = ctx?.token ?? (await getRapidApiKey());
   if (!token) throw new Error("RapidAPI key not configured");
 
-  await waitForIgSlot();
+  // Per-key rate limit. ctx?.id === -1 is the env-fallback sentinel;
+  // the limiter uses a dedicated "legacy" window for it with a
+  // conservative default. Active DB keys each get their own window
+  // sized by RapidApiKey.rateLimitPerMin, so N keys = N × 85/min
+  // total aggregate throughput.
+  await waitForIgSlot(ctx?.id ?? -1);
 
   const res = await fetch(`https://${HOST}${path}`, {
     headers: {

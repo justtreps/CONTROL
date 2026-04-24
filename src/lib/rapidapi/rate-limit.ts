@@ -1,41 +1,70 @@
-// Global rate limiter for Instagram RapidAPI calls.
+// Per-key rate limiter for Instagram RapidAPI calls.
 //
-// MEGA plan ceiling: 100 req/min per key. We cap at 85 req/min (15%
-// safety margin) to absorb RapidAPI edge jitter and leave room for
-// manual debug curls.
+// Each RapidApiKey row carries its own rateLimitPerMin ceiling (default
+// 85 — MEGA plan is 100/min, 15% safety margin). The limiter now keeps
+// a separate sliding window per keyId, so two active keys get
+// 2×85=170 req/min aggregate throughput. Previously the limiter had
+// a single global window — adding a 2nd key raised the monthly
+// quota ceiling but did nothing for throughput.
 //
-// Storage strategy:
-//   1. Upstash Redis (when UPSTASH_REDIS_REST_URL + _TOKEN are set)
-//      — a cross-process sorted set keyed by a request timestamp.
-//      All Vercel invocations share the same budget so 4 workers
-//      running in parallel collectively stay under 85/min, not 4×85.
-//   2. Fallback: the original in-memory sliding window, for local
-//      dev without Redis or if Upstash briefly fails. Logs a single
-//      warning per process so we know it kicked in.
+// Storage strategy is unchanged in shape:
+//   1. Upstash Redis (when env set) — one sorted set PER KEY under
+//      `rapidapi:ig:ratelimit:v1:key:<id>`.
+//   2. In-memory fallback — one Map<keyId, timestamps[]> per-process.
 //
-// Public API (waitForIgSlot) is unchanged — call sites in
-// instagram.ts + the debug route stay identical.
+// Call sites pass the keyId resolved from the ALS-scoped current
+// key (see lib/rapidapi/key-manager.ts). When no ALS context is
+// set (env-var legacy path), keyId = -1 and a "legacy" redis key +
+// a conservative DEFAULT_MAX is used.
 
 import { Redis } from "@upstash/redis";
+import { prisma } from "@/lib/prisma";
 
 const WINDOW_MS = 60_000;
-const MAX_REQUESTS_PER_WINDOW = 85;
-const REDIS_KEY = "rapidapi:ig:ratelimit:v1";
+const DEFAULT_MAX = 85;
+const REDIS_KEY_PREFIX = "rapidapi:ig:ratelimit:v1:key";
+const LEGACY_KEY_ID = -1; // env-var fallback — no DB row
+
+// ── Per-key rate-limit cache (30s TTL) ──────────────────────────────
+// RapidApiKey.rateLimitPerMin is authoritative. Cache hits avoid a
+// DB round-trip on every IG call. 30s TTL so operator edits via
+// /config/rapidapi-keys propagate to the limiter within seconds.
+
+const rateLimitCache = new Map<number, { limit: number; cachedAt: number }>();
+const RATE_LIMIT_TTL_MS = 30_000;
+
+async function getKeyRateLimit(keyId: number): Promise<number> {
+  if (keyId === LEGACY_KEY_ID) return DEFAULT_MAX;
+  const cached = rateLimitCache.get(keyId);
+  if (cached && Date.now() - cached.cachedAt < RATE_LIMIT_TTL_MS) {
+    return cached.limit;
+  }
+  try {
+    const row = await prisma.rapidApiKey.findUnique({
+      where: { id: keyId },
+      select: { rateLimitPerMin: true },
+    });
+    const limit = row?.rateLimitPerMin ?? DEFAULT_MAX;
+    rateLimitCache.set(keyId, { limit, cachedAt: Date.now() });
+    return limit;
+  } catch {
+    // DB hiccup — use the default so we don't block the call.
+    return DEFAULT_MAX;
+  }
+}
+
+function redisKeyFor(keyId: number): string {
+  return `${REDIS_KEY_PREFIX}:${
+    keyId === LEGACY_KEY_ID ? "legacy" : String(keyId)
+  }`;
+}
 
 // ── Upstash client (lazy singleton) ─────────────────────────────────
 
 let redisClient: Redis | null = null;
-let redisAvailable: boolean | null = null; // null = not probed yet
-
-// Captured the last fallback reason so the debug endpoint can
-// surface it in the UI (env missing vs constructor throw vs reads
-// throwing) without exposing the secrets themselves.
+let redisAvailable: boolean | null = null;
 let fallbackReason: string | null = null;
 
-// Trim whitespace + strip surrounding quote pairs (' or "). Caught
-// a prod bug where UPSTASH_REDIS_REST_URL was stored with literal
-// double-quotes around it, so `new URL(...)` rejected it even
-// though the value started with https://.
 function sanitizeEnv(v: string | undefined): string | undefined {
   if (!v) return v;
   let out = v.trim();
@@ -83,15 +112,8 @@ export function getFallbackReason(): string | null {
   return fallbackReason;
 }
 
-// ── Lua script: atomic acquire ──────────────────────────────────────
-//
-// Returns { 1, 0 }        when a slot was acquired
-//         { 0, waitMs }   when the caller must wait (oldest falls out
-//                         of the window in waitMs)
-//
-// Keeping this in a Lua eval guarantees the prune+count+add triplet
-// is atomic — two Vercel functions can't both see "84 < 85" and then
-// both add past the cap.
+// ── Lua: atomic acquire — unchanged logic, but KEY is per-key ──────
+
 const ACQUIRE_LUA = `
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -104,8 +126,6 @@ redis.call('ZREMRANGEBYSCORE', key, '-inf', '(' .. tostring(cutoff))
 
 local count = redis.call('ZCARD', key)
 if count < max_req then
-  -- member = "<now>:<nonce>" so simultaneous acquirers at the same
-  -- millisecond get distinct members (ZADD overwrites by member).
   redis.call('ZADD', key, now, tostring(now) .. ':' .. nonce)
   redis.call('PEXPIRE', key, window_ms * 2)
   return {1, 0}
@@ -118,21 +138,23 @@ if wait_ms < 50 then wait_ms = 50 end
 return {0, wait_ms}
 `;
 
-async function acquireSlotViaRedis(redis: Redis): Promise<boolean> {
+async function acquireSlotViaRedis(
+  redis: Redis,
+  redisKey: string,
+  maxReq: number
+): Promise<boolean> {
   try {
-    // Random nonce collapses nanosecond-level collisions when many
-    // callers fire in the same tick.
     const nonce =
       Math.floor(Math.random() * 1e9).toString(36) +
       "-" +
       process.pid.toString(36);
     const result = (await redis.eval(
       ACQUIRE_LUA,
-      [REDIS_KEY],
+      [redisKey],
       [
         Date.now().toString(),
         WINDOW_MS.toString(),
-        MAX_REQUESTS_PER_WINDOW.toString(),
+        maxReq.toString(),
         nonce,
       ]
     )) as [number, number] | null;
@@ -142,131 +164,195 @@ async function acquireSlotViaRedis(redis: Redis): Promise<boolean> {
     await new Promise((r) => setTimeout(r, Math.max(50, waitMs)));
     return false;
   } catch (e) {
-    // Upstash hiccup — fall through to the in-memory path for this
-    // caller rather than blocking forever. Rare; shouldn't spam.
     console.warn(
       "[ig-ratelimit] upstash eval failed, one-off in-memory fallback:",
       (e as Error).message.slice(0, 120)
     );
-    return inMemoryAcquireSlotOnce();
+    // We don't have the keyId here for the in-memory fallback without
+    // a signature bump — return false and let the outer loop retry
+    // via the in-memory path on the next iteration.
+    return false;
   }
 }
 
-// ── In-memory fallback (per-process sliding window) ─────────────────
+// ── In-memory fallback — per-key sliding windows ────────────────────
 
-const windowTimestamps: number[] = [];
+const inMemoryWindows = new Map<number, number[]>();
 
-function pruneInMemory(now: number): void {
+function pruneInMemory(keyId: number, now: number): number[] {
+  let arr = inMemoryWindows.get(keyId);
+  if (!arr) {
+    arr = [];
+    inMemoryWindows.set(keyId, arr);
+  }
   const cutoff = now - WINDOW_MS;
-  while (windowTimestamps.length && windowTimestamps[0] < cutoff) {
-    windowTimestamps.shift();
-  }
+  while (arr.length && arr[0] < cutoff) arr.shift();
+  return arr;
 }
 
-// Non-awaiting variant used by the Upstash fallback path: acquires
-// OR returns false so the caller sleeps briefly and retries.
-function inMemoryAcquireSlotOnce(): boolean {
-  const now = Date.now();
-  pruneInMemory(now);
-  if (windowTimestamps.length < MAX_REQUESTS_PER_WINDOW) {
-    windowTimestamps.push(now);
-    return true;
-  }
-  return false;
-}
-
-async function inMemoryAcquireSlot(): Promise<void> {
+async function inMemoryAcquireSlot(
+  keyId: number,
+  maxReq: number
+): Promise<void> {
   while (true) {
     const now = Date.now();
-    pruneInMemory(now);
-    if (windowTimestamps.length < MAX_REQUESTS_PER_WINDOW) {
-      windowTimestamps.push(now);
+    const arr = pruneInMemory(keyId, now);
+    if (arr.length < maxReq) {
+      arr.push(now);
       return;
     }
-    const waitMs = WINDOW_MS - (now - windowTimestamps[0]) + 50;
+    const waitMs = WINDOW_MS - (now - arr[0]) + 50;
     await new Promise((r) => setTimeout(r, waitMs));
   }
 }
 
+// ── Per-key FIFO chain ──────────────────────────────────────────────
+// Previously one module-level `chain` serialised all callers across
+// all keys. With per-key chains, two workers hitting DIFFERENT keys
+// go through Upstash independently — no artificial serialisation
+// across the multi-key pool. Same process, same key → still serial
+// via the key's chain.
+
+const chains = new Map<number, Promise<void>>();
+
 // ── Public API ──────────────────────────────────────────────────────
 
-// Promise chain — even with Redis atomicity we keep a local FIFO so
-// parallel callers inside one process don't all hammer Upstash with
-// the same eval simultaneously. Queues them through eval one at a
-// time; the Lua atomicity still guards cross-process.
-let chain: Promise<void> = Promise.resolve();
-
-export async function waitForIgSlot(): Promise<void> {
-  const prev = chain;
+export async function waitForIgSlot(keyId: number): Promise<void> {
+  const prev = chains.get(keyId) ?? Promise.resolve();
   let release: () => void = () => {};
-  chain = new Promise<void>((r) => {
+  const next = new Promise<void>((r) => {
     release = r;
   });
+  chains.set(keyId, next);
   try {
     await prev;
-    await acquireWithBackoff();
+    await acquireWithBackoff(keyId);
   } finally {
     release();
   }
 }
 
-async function acquireWithBackoff(): Promise<void> {
+async function acquireWithBackoff(keyId: number): Promise<void> {
+  const maxReq = await getKeyRateLimit(keyId);
   const redis = getRedis();
   if (!redis) {
-    await inMemoryAcquireSlot();
+    await inMemoryAcquireSlot(keyId, maxReq);
     return;
   }
-  // Loop until Lua returns ok=1. Each iteration either acquires or
-  // sleeps for the Lua-computed waitMs before retrying.
+  const redisKey = redisKeyFor(keyId);
   for (;;) {
-    const acquired = await acquireSlotViaRedis(redis);
+    const acquired = await acquireSlotViaRedis(redis, redisKey, maxReq);
     if (acquired) return;
+    // acquireSlotViaRedis returning false on an exception (not a
+    // normal wait+retry) — fall to in-memory for this one call so
+    // we don't spin forever when Upstash is down.
+    if (redisAvailable === false) {
+      await inMemoryAcquireSlot(keyId, maxReq);
+      return;
+    }
   }
 }
 
-// Debug helper — returns the current window size so we can inspect
-// live quota usage. If the Upstash call throws (SDK typing quirk,
-// network hiccup, etc.) we degrade to the in-memory count rather
-// than returning a 500 to the polling UI.
-export async function ig429SnapshotForDebug(): Promise<{
+// ── Debug snapshot — returns per-key + aggregate ───────────────────
+
+export type RateLimitKeySnapshot = {
+  keyId: number | "legacy";
+  label: string | null;
+  inFlight: number;
+  max: number;
+};
+
+export type RateLimitSnapshot = {
+  // Aggregate view — kept for the existing UI card.
   backend: "upstash" | "in-memory";
   inFlightWindowSize: number;
   maxPerWindow: number;
   error?: string;
-}> {
+  // Per-key breakdown — new UI can surface each key's window.
+  perKey: RateLimitKeySnapshot[];
+};
+
+export async function ig429SnapshotForDebug(): Promise<RateLimitSnapshot> {
+  // Enumerate active keys + the legacy sentinel so the UI sees all
+  // sliding windows.
+  const activeKeys = await prisma.rapidApiKey
+    .findMany({
+      where: { provider: "instagram", status: "active" },
+      select: { id: true, label: true, rateLimitPerMin: true },
+    })
+    .catch(() => []);
+
+  const targets: Array<{
+    keyId: number | "legacy";
+    label: string | null;
+    max: number;
+  }> = activeKeys.map((k) => ({
+    keyId: k.id,
+    label: k.label,
+    max: k.rateLimitPerMin ?? DEFAULT_MAX,
+  }));
+  // Always include the legacy sentinel for completeness.
+  targets.push({ keyId: "legacy", label: "legacy / env fallback", max: DEFAULT_MAX });
+
   const redis = getRedis();
+  const perKey: RateLimitKeySnapshot[] = [];
+  let errored: string | undefined;
+
   if (redis) {
-    try {
-      const cutoff = Date.now() - WINDOW_MS;
-      // Inclusive prune — remove anything with score ≤ cutoff. This
-      // drops rows at the exact boundary (which are 60s-old to the
-      // millisecond, semantically expired for our use case) and
-      // avoids the SDK's typing quirks around the "(" exclusive
-      // prefix string.
-      await redis.zremrangebyscore(REDIS_KEY, 0, cutoff);
-      const count = (await redis.zcard(REDIS_KEY)) ?? 0;
-      return {
-        backend: "upstash",
-        inFlightWindowSize: count,
-        maxPerWindow: MAX_REQUESTS_PER_WINDOW,
-      };
-    } catch (e) {
-      // Surface the reason so the UI can show it + fall through to
-      // the in-memory count for a best-effort read.
-      pruneInMemory(Date.now());
-      return {
-        backend: "in-memory",
-        inFlightWindowSize: windowTimestamps.length,
-        maxPerWindow: MAX_REQUESTS_PER_WINDOW,
-        error: `upstash snapshot failed: ${(e as Error).message.slice(0, 120)}`,
-      };
+    for (const t of targets) {
+      const key =
+        t.keyId === "legacy"
+          ? `${REDIS_KEY_PREFIX}:legacy`
+          : `${REDIS_KEY_PREFIX}:${t.keyId}`;
+      try {
+        const cutoff = Date.now() - WINDOW_MS;
+        await redis.zremrangebyscore(key, 0, cutoff);
+        const count = (await redis.zcard(key)) ?? 0;
+        perKey.push({
+          keyId: t.keyId,
+          label: t.label,
+          inFlight: count,
+          max: t.max,
+        });
+      } catch (e) {
+        errored = `upstash snapshot failed: ${(e as Error).message.slice(0, 120)}`;
+        // Fall back to in-memory for this key.
+        const numericId =
+          t.keyId === "legacy" ? LEGACY_KEY_ID : (t.keyId as number);
+        const arr = pruneInMemory(numericId, Date.now());
+        perKey.push({
+          keyId: t.keyId,
+          label: t.label,
+          inFlight: arr.length,
+          max: t.max,
+        });
+      }
+    }
+  } else {
+    for (const t of targets) {
+      const numericId =
+        t.keyId === "legacy" ? LEGACY_KEY_ID : (t.keyId as number);
+      const arr = pruneInMemory(numericId, Date.now());
+      perKey.push({
+        keyId: t.keyId,
+        label: t.label,
+        inFlight: arr.length,
+        max: t.max,
+      });
     }
   }
-  pruneInMemory(Date.now());
+
+  const inFlightWindowSize = perKey.reduce((a, p) => a + p.inFlight, 0);
+  const maxPerWindow = perKey.reduce((a, p) => a + p.max, 0);
+
   return {
-    backend: "in-memory",
-    inFlightWindowSize: windowTimestamps.length,
-    maxPerWindow: MAX_REQUESTS_PER_WINDOW,
-    ...(fallbackReason ? { error: `upstash fallback: ${fallbackReason}` } : {}),
+    backend: redis ? "upstash" : "in-memory",
+    inFlightWindowSize,
+    maxPerWindow,
+    perKey,
+    ...(errored ? { error: errored } : {}),
+    ...(!redis && fallbackReason
+      ? { error: `upstash fallback: ${fallbackReason}` }
+      : {}),
   };
 }

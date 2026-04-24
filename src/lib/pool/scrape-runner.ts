@@ -50,7 +50,15 @@ export async function runScrapeJobTranche(
     "id" | "stats" | "jobType" | "startedAt" | "rapidApiKeyId" | "platform"
   >
 ): Promise<ScrapeRunResult> {
-  const beforeStats = job.stats as Record<string, unknown> | null;
+  // CRITICAL: beforeStats MUST be a deep copy — the tranche mutates
+  // `stats` in place (addedA++, callsUsed++, etc.), and without a
+  // clone the "before" snapshot would reflect the post-tranche
+  // values. That aliased both before.primaryProgress ===
+  // after.primaryProgress (always "no progress") and
+  // stats.lastProgressAt never getting stamped, producing false
+  // `stale_no_progress` stucks on jobs that actually did progress.
+  const beforeStats =
+    (structuredClone(job.stats) as Record<string, unknown> | null) ?? {};
   const stats = job.stats as unknown as ScrapeStats;
   const hb = startJobHeartbeat({
     jobId: job.id,

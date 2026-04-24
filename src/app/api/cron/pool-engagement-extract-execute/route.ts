@@ -60,7 +60,10 @@ export async function POST(req: Request) {
     });
   }
 
-  const beforeStats = job.stats as Record<string, unknown> | null;
+  // Deep clone — see scrape-runner.ts for the reference-aliasing
+  // bug this avoids (false stale_no_progress stucks).
+  const beforeStats =
+    (structuredClone(job.stats) as Record<string, unknown> | null) ?? {};
   const stats = job.stats as unknown as ExtractStats;
   const hb = startJobHeartbeat({
     jobId: job.id,
