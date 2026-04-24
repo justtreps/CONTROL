@@ -23,6 +23,7 @@ import { prisma } from "@/lib/prisma";
 import { initScrapeStats } from "@/lib/pool/scraper";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { acquireKeyForNewJob } from "@/lib/rapidapi/key-manager";
+import { dispatchWorkerPair } from "@/lib/pool/dispatch";
 
 // The outer endpoint returns fast; we don't need 300s here. The
 // heavy work runs in /api/cron/pool-scrape-execute (maxDuration 300).
@@ -61,6 +62,33 @@ export async function POST(req: Request) {
   }
   const { platform, count, poolType } = parsed.data;
 
+  // Idempotent — one scrape in flight at a time for the same pool.
+  // Parallel follower + engagement scrapes ARE allowed (different
+  // universes), but two follower scrapes would fight over the same
+  // seeds, so we collide on stats.poolType (or legacy null).
+  const activeList = await prisma.poolJob.findMany({
+    where: {
+      jobType: "scrape",
+      status: { in: ["pending", "running"] },
+    },
+  });
+  const active = activeList.find((j) => {
+    const jobPool = (j.stats as unknown as { poolType?: string } | null)
+      ?.poolType;
+    if (poolType) return jobPool === poolType;
+    // Legacy caller without explicit poolType collides with any
+    // running scrape row — same conservative behavior as before.
+    return true;
+  });
+  if (active) {
+    return NextResponse.json({
+      ok: true,
+      skipped: "already_running",
+      jobId: active.id,
+      status: active.status,
+    });
+  }
+
   const initial = initScrapeStats(platform, count);
   if (poolType) {
     // Stash on the stats JSON rather than adding a dedicated PoolJob
@@ -87,33 +115,19 @@ export async function POST(req: Request) {
     },
   });
 
-  // Dual dispatch — fire both the targeted execute AND the runner in
-  // parallel. Vercel's keepalive fire-and-forget occasionally drops
-  // (observed ~4-5 min stalls until the 5-min cron noticed). With
-  // two independent dispatches, at least one usually lands within
-  // seconds. The runner picks up only jobs not being actively
-  // hearted (see pickJobForRunner) so it won't run a second tranche
-  // against the same job if the execute dispatch already started.
+  // Dual dispatch via shared helper — awaits a short grace window
+  // so the outbound TCP handshakes fully flush before the caller
+  // function exits. The bare `void fetch(..., { keepalive: true })`
+  // pattern was unreliable on Vercel f2f calls and silently dropped
+  // in prod (see lib/pool/dispatch.ts comment). Runner is the safety
+  // net for the rare case only one of the two lands.
   const origin = new URL(req.url).origin;
-  const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
-  const executeUrl = `${origin}/api/cron/pool-scrape-execute?jobId=${job.id}`;
-  const runnerUrl = `${origin}/api/cron/pool-scrape-runner?fromDispatcher=1`;
-  void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
-    (e) => {
-      console.error(
-        `[scrape] execute dispatch failed for job#${job.id}:`,
-        (e as Error).message
-      );
-    }
-  );
-  void fetch(runnerUrl, { method: "POST", headers: auth, keepalive: true }).catch(
-    (e) => {
-      console.error(
-        `[scrape] runner backup dispatch failed for job#${job.id}:`,
-        (e as Error).message
-      );
-    }
-  );
+  await dispatchWorkerPair({
+    executeUrl: `${origin}/api/cron/pool-scrape-execute?jobId=${job.id}`,
+    runnerUrl: `${origin}/api/cron/pool-scrape-runner?fromDispatcher=1`,
+    cronSecret: process.env.CRON_SECRET,
+    jobLabel: `scrape job#${job.id}`,
+  });
 
   return NextResponse.json({
     ok: true,

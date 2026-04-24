@@ -19,6 +19,7 @@ import { prisma } from "@/lib/prisma";
 import { initHealthStats } from "@/lib/pool/health-check";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { acquireKeyForNewJob } from "@/lib/rapidapi/key-manager";
+import { dispatchWorkerPair } from "@/lib/pool/dispatch";
 
 export const maxDuration = 10;
 
@@ -99,31 +100,16 @@ export async function POST(req: Request) {
     },
   });
 
-  // Dual dispatch — same rationale as /api/pool/scrape: keepalive
-  // fire-and-forget occasionally drops, so we fire the runner in
-  // parallel as a backup. The runner skips jobs being actively
-  // hearted (pickJobForRunner) to avoid running two tranches on the
-  // same row.
+  // Dual dispatch via shared helper (awaits grace window so the
+  // fire-and-forget fetches truly land). Runner is the backup if
+  // one of the two drops.
   const origin = new URL(req.url).origin;
-  const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
-  const executeUrl = `${origin}/api/cron/pool-health-check-execute?jobId=${job.id}`;
-  const runnerUrl = `${origin}/api/cron/pool-health-check-runner?fromDispatcher=1`;
-  void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
-    (e) => {
-      console.error(
-        `[health-check] execute dispatch failed for job#${job.id}:`,
-        (e as Error).message
-      );
-    }
-  );
-  void fetch(runnerUrl, { method: "POST", headers: auth, keepalive: true }).catch(
-    (e) => {
-      console.error(
-        `[health-check] runner backup dispatch failed for job#${job.id}:`,
-        (e as Error).message
-      );
-    }
-  );
+  await dispatchWorkerPair({
+    executeUrl: `${origin}/api/cron/pool-health-check-execute?jobId=${job.id}`,
+    runnerUrl: `${origin}/api/cron/pool-health-check-runner?fromDispatcher=1`,
+    cronSecret: process.env.CRON_SECRET,
+    jobLabel: `health-check job#${job.id}`,
+  });
 
   return NextResponse.json({
     ok: true,

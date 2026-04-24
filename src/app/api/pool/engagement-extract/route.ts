@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { initExtractStats } from "@/lib/pool/engagement-extract";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { acquireKeyForNewJob } from "@/lib/rapidapi/key-manager";
+import { dispatchWorkerPair } from "@/lib/pool/dispatch";
 
 export const maxDuration = 10;
 
@@ -76,28 +77,16 @@ export async function POST(req: Request) {
     },
   });
 
-  // Dual dispatch — execute + runner in parallel. pickJobForRunner
-  // on the runner side prevents double-execution.
+  // Dual dispatch via shared helper (awaits grace window so the
+  // fire-and-forget fetches truly land). Runner is the backup if
+  // one of the two drops.
   const origin = new URL(req.url).origin;
-  const auth = { Authorization: `Bearer ${process.env.CRON_SECRET ?? ""}` };
-  const executeUrl = `${origin}/api/cron/pool-engagement-extract-execute?jobId=${job.id}`;
-  const runnerUrl = `${origin}/api/cron/pool-engagement-extract-runner?fromDispatcher=1`;
-  void fetch(executeUrl, { method: "POST", headers: auth, keepalive: true }).catch(
-    (e) => {
-      console.error(
-        `[engagement-extract] execute dispatch failed for job#${job.id}:`,
-        (e as Error).message
-      );
-    }
-  );
-  void fetch(runnerUrl, { method: "POST", headers: auth, keepalive: true }).catch(
-    (e) => {
-      console.error(
-        `[engagement-extract] runner backup dispatch failed for job#${job.id}:`,
-        (e as Error).message
-      );
-    }
-  );
+  await dispatchWorkerPair({
+    executeUrl: `${origin}/api/cron/pool-engagement-extract-execute?jobId=${job.id}`,
+    runnerUrl: `${origin}/api/cron/pool-engagement-extract-runner?fromDispatcher=1`,
+    cronSecret: process.env.CRON_SECRET,
+    jobLabel: `engagement-extract job#${job.id}`,
+  });
 
   return NextResponse.json({
     ok: true,

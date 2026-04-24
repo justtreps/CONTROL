@@ -226,6 +226,13 @@ export function startJobHeartbeat({
     inFlight = true;
     try {
       const snap = getStats();
+      // Stamp heartbeatAt so pickJobForRunner has a per-tick
+      // liveness signal. Without this, lastProgressAt only lands at
+      // tranche-end (~280s later), leaving a window where a freshly
+      // dispatched execute looks dead to the backup runner and gets
+      // double-executed.
+      (snap as Record<string, unknown>).heartbeatAt =
+        new Date().toISOString();
       await prisma.poolJob.update({
         where: { id: jobId },
         data: {
@@ -276,14 +283,26 @@ function pickOnce(candidates: PoolJob[], now: number): PickResult {
   for (const c of candidates) {
     if (c.status === "pending") return { verdict: "take", job: c };
     const s = c.stats as Record<string, unknown> | null;
+    // Freshness is any of:
+    //   • heartbeatAt (written every ~3s by startJobHeartbeat while
+    //     a worker runs), or
+    //   • lastProgressAt (written only at tranche-end, rare signal).
+    // Take the most recent of the two — either one within
+    // FRESH_HEARTBEAT_MS proves a live worker.
+    const heartbeatAt = s?.heartbeatAt as string | undefined;
     const lastProgressAt = s?.lastProgressAt as string | undefined;
-    const lastMs = lastProgressAt
+    const hbMs = heartbeatAt ? new Date(heartbeatAt).getTime() : null;
+    const progMs = lastProgressAt
       ? new Date(lastProgressAt).getTime()
       : null;
-    if (lastMs !== null && now - lastMs < FRESH_HEARTBEAT_MS) {
+    const livenessMs =
+      hbMs !== null && progMs !== null
+        ? Math.max(hbMs, progMs)
+        : (hbMs ?? progMs);
+    if (livenessMs !== null && now - livenessMs < FRESH_HEARTBEAT_MS) {
       continue; // active worker heartbeating
     }
-    if (lastMs === null && now - c.startedAt.getTime() < FRESH_CREATION_MS) {
+    if (livenessMs === null && now - c.startedAt.getTime() < FRESH_CREATION_MS) {
       // Grace — execute may still be spinning up. Remember but keep
       // scanning; if nothing else is takeable, the caller decides
       // whether to wait + retry.
