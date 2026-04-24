@@ -371,7 +371,10 @@ function AddKeyModal({
 
   return (
     <div
-      className="fixed inset-0 z-[10000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+      // z-50 reste sous le curseur custom (z-9998/9999 dans
+      // globals.css) — sinon le backdrop masque le pointeur et on se
+      // retrouve à cliquer à l'aveugle dans le formulaire.
+      className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
