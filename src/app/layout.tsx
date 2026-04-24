@@ -4,6 +4,7 @@ import "./globals.css";
 import { CustomCursor } from "@/components/CustomCursor";
 import { BackgroundGrid } from "@/components/BackgroundGrid";
 import { AppProviders } from "@/components/AppProviders";
+import { GlobalAlertBanner } from "@/components/GlobalAlertBanner";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -44,6 +45,7 @@ export default function RootLayout({
         <BackgroundGrid />
         <div className="noise-overlay" aria-hidden="true" />
         <CustomCursor />
+        <GlobalAlertBanner />
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

@@ -744,3 +744,63 @@ model WorkflowEvent {
   @@index([processedAt, emittedAt])
   @@index([type, emittedAt])
 }
+
+// Observability alert surface. A detector ticks every 2 min and
+// emits zero-or-more DetectorResult rows; the engine reconciles
+// them against this table — create new row per new code, update
+// triggerCount + lastTriggeredAt on an already-active same-code
+// row, and auto_resolve rows whose code no longer matches on the
+// current tick.
+//
+// `code` is a semantic identifier the detector builds deterministically
+// (e.g. "pool_below_min:instagram:follower"). NOT globally unique —
+// after auto_resolve, the same code can re-fire later as a brand-new
+// row. The pair (code, status='active') is what the reconciler
+// looks up.
+model Alert {
+  id                Int      @id @default(autoincrement())
+  code              String
+  // 'infra' | 'pool' | 'job' | 'catalogue' | 'business' | 'rapidapi' | 'testbot'
+  category          String
+  // 'info' | 'warning' | 'critical'
+  severity          String
+  title             String
+  description       String
+  // Long-form "why did this fire". Detector packs concrete values
+  // + thresholds + plausible causes so the operator can understand
+  // from the drawer alone.
+  explanation       String
+  // What breaks downstream if this isn't handled.
+  impact            String
+  // Short human sentence "quoi faire" — rendered in the drawer.
+  suggestedAction   String
+  // 'link' | 'button' | null. Drives how the UI renders the action.
+  //   link   → Next <Link href={actionPayload.href}>
+  //   button → client-side fetch({method, endpoint, body})
+  actionType        String?
+  actionPayload     Json?
+  // Anchor the alert to a concrete row when applicable — the UI
+  // can surface a mini-card on the related page.
+  relatedEntityType String?
+  relatedEntityId   Int?
+
+  // 'active' | 'acknowledged' | 'resolved' | 'auto_resolved'
+  status            String   @default("active")
+
+  firstTriggeredAt  DateTime @default(now())
+  lastTriggeredAt   DateTime @default(now())
+  resolvedAt        DateTime?
+  // Every subsequent tick where the condition matches bumps this.
+  // Surfaces as "déclenchée N fois" in the UI.
+  triggerCount      Int      @default(1)
+
+  acknowledgedBy    String?
+  acknowledgedAt    DateTime?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([status, severity, category])
+  @@index([code, status])
+  @@index([lastTriggeredAt])
+}
