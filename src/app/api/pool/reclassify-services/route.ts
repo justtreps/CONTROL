@@ -1,9 +1,8 @@
-// One-shot (idempotent) — runs the classifier over every Service
-// row and writes back poolType + targetCountry + classification
-// ManualReview. Callable repeatedly (e.g. after adding new
-// classifier patterns) without corrupting existing manual reviews:
-// we ALWAYS overwrite the classifier's output, so if a manual
-// reviewer had intervened their edit is reset. Matches the spec
+// One-shot (idempotent) — runs the strict-whitelist classifier over
+// every Service row and writes back poolType + targetCountry +
+// classificationManualReview + active. Callable repeatedly, e.g.
+// after a classifier refactor: we ALWAYS overwrite the classifier's
+// output, so operator manual overrides are reset. Match the spec
 // ("Reclassifier services" button).
 //
 // Auth: Bearer CRON_SECRET so the operator can curl it; also
@@ -14,9 +13,8 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { classifyService } from "@/lib/services/classifier";
 
-// Now ~5k Service rows after the MVP scope opening; the per-row
-// update loop crosses 60s under the pooler. Keep at 300s so the
-// one-shot always completes in one call.
+// ~5k Service rows — per-row update loop crosses 60s under the
+// pooler. Keep at 300s so the one-shot always completes in one call.
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
@@ -25,35 +23,45 @@ export async function POST(req: Request) {
   }
 
   const services = await prisma.service.findMany({
-    select: { id: true, name: true },
+    select: { id: true, name: true, platform: true },
   });
 
-  const counts: Record<string, number> = {
-    follower_test: 0,
-    engagement_test: 0,
-    unknown: 0,
-    manual_review: 0,
+  const byVerdict: Record<string, number> = {
+    follower: 0,
+    engagement: 0,
+    manual: 0,
+    disabled: 0,
   };
   const countryCounts: Record<string, number> = {};
 
   for (const s of services) {
-    const { poolType, targetCountry, classificationManualReview } =
-      classifyService(s.name);
-    counts[poolType] = (counts[poolType] ?? 0) + 1;
-    if (classificationManualReview) counts.manual_review++;
+    const {
+      verdict,
+      poolType,
+      targetCountry,
+      active,
+      classificationManualReview,
+    } = classifyService({ name: s.name, platform: s.platform });
+
+    byVerdict[verdict] = (byVerdict[verdict] ?? 0) + 1;
     const countryKey = targetCountry ?? "global";
     countryCounts[countryKey] = (countryCounts[countryKey] ?? 0) + 1;
 
     await prisma.service.update({
       where: { id: s.id },
-      data: { poolType, targetCountry, classificationManualReview },
+      data: {
+        poolType,
+        targetCountry,
+        classificationManualReview,
+        active,
+      },
     });
   }
 
   return NextResponse.json({
     ok: true,
     total: services.length,
-    byPoolType: counts,
+    byVerdict,
     byCountry: countryCounts,
   });
 }

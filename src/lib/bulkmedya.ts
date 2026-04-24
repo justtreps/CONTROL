@@ -1,6 +1,7 @@
 import { getBulkmedyaKey } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
 import { SCOPE } from "@/lib/scope";
+import { classifyService } from "@/lib/services/classifier";
 
 const BULKMEDYA_URL = process.env.BULKMEDYA_API_URL ?? "https://bulkmedya.org/api/v2";
 
@@ -142,6 +143,12 @@ export async function syncServices(): Promise<SyncResult> {
 
     keptIds.add(bulkmedyaId);
 
+    // Run the strict-whitelist classifier to stamp poolType /
+    // targetCountry / manualReview / active at sync time. Avoids
+    // the "new services sit as poolType=unknown until operator
+    // clicks Reclassifier" gap that the old flow had.
+    const cls = classifyService({ name: r.name, platform });
+
     const data = {
       bulkmedyaId,
       name: r.name,
@@ -153,12 +160,44 @@ export async function syncServices(): Promise<SyncResult> {
       maxQuantity: Number(r.max) || 0,
       refillSupported: Boolean(r.refill),
       cancelSupported: Boolean(r.cancel),
-      active: true,
+      poolType: cls.poolType,
+      targetCountry: cls.targetCountry,
+      classificationManualReview: cls.classificationManualReview,
+      active: cls.active,
     };
 
     const existing = await prisma.service.findUnique({ where: { bulkmedyaId } });
     if (existing) {
-      await prisma.service.update({ where: { bulkmedyaId }, data });
+      // Preserve operator manual overrides on updates: if the row
+      // already has classificationManualReview=false AND poolType is
+      // set to something explicit by the operator, don't overwrite.
+      // Heuristic: if the current classifier would reach the same
+      // verdict as the operator picked, the update is a no-op.
+      // Otherwise leave the operator's call alone and only update
+      // the non-classification fields.
+      const preserveOperator =
+        existing.classificationManualReview === false &&
+        existing.poolType !== "unknown" &&
+        existing.poolType !== cls.poolType;
+      if (preserveOperator) {
+        await prisma.service.update({
+          where: { bulkmedyaId },
+          data: {
+            name: data.name,
+            category: data.category,
+            platform: data.platform,
+            serviceType: data.serviceType,
+            ratePerK: data.ratePerK,
+            minQuantity: data.minQuantity,
+            maxQuantity: data.maxQuantity,
+            refillSupported: data.refillSupported,
+            cancelSupported: data.cancelSupported,
+            // classification fields kept as-is
+          },
+        });
+      } else {
+        await prisma.service.update({ where: { bulkmedyaId }, data });
+      }
       updated++;
     } else {
       await prisma.service.create({ data });
