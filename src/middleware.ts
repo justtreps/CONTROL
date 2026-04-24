@@ -15,6 +15,7 @@ const PUBLIC_PATHS = [
   // operators can curl them after schema bumps.
   "/api/pool/reclassify-services",
   "/api/pool/backfill-country",
+  "/api/pool/backfill-last-tested",
 ];
 
 export async function middleware(req: NextRequest) {

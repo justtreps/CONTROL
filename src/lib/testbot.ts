@@ -396,6 +396,15 @@ async function attemptPlaceOrder({
       },
     });
 
+    // Stamp the service's lastTestedAt so the /config/services-review
+    // obsolescence filter has a fresh signal. Denormalised max of
+    // TestOrder.placedAt; far cheaper than a JOIN + GROUP BY on the
+    // review page every render.
+    await prisma.service.update({
+      where: { id: service.id },
+      data: { lastTestedAt: new Date() },
+    });
+
     if (postPick) {
       await prisma.testPost.update({
         where: { id: postPick.id },

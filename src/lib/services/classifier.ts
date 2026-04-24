@@ -66,6 +66,21 @@ const FOLLOWER_SUSPICIOUS_RX =
 const ENGAGEMENT_SUSPICIOUS_RX =
   /\b(bot\s+(likes?|views?)|fake\s+(likes?|views?))\b/i;
 
+// Provider-side "this service is dead / was broken" markers. BulkMedya
+// keeps old + fixed variants side by side — when a service has been
+// renamed to include "[Fix]" / "After Update" / "Working Now", the
+// sibling row without those markers is typically the dead one. We
+// surface these to manual review regardless of how clean the rest of
+// the name looks — operator decides whether to enable or disable.
+export const SUSPECT_KEYWORDS_RX =
+  /\b(old|legacy|deprecated|not\s*working|\[fix(?:ed)?\]|after\s+update|working\s+now|broken)\b/i;
+
+// Exported helper so the UI can render a "⚠ SUSPECT WORDING" badge
+// without re-implementing the regex client-side.
+export function hasSuspectWording(name: string): boolean {
+  return SUSPECT_KEYWORDS_RX.test(name);
+}
+
 // Whitelist keyword tests — strict \b boundaries so "viewers" /
 // "likewise" / similar false positives don't match.
 const FOLLOWERS_RX = /\b(followers?|abonn[eé]es?|subscribers?|subs)\b/i;
@@ -144,6 +159,12 @@ function decideVerdict({
   // 1. Hard-disable topics — checked FIRST so story/comment/reach
   //    variants never slip past the whitelist below.
   if (DISABLE_TOPIC_RX.test(s)) return "disabled";
+
+  // 1.5. Suspect wording override — BulkMedya's "[Fix]", "Old",
+  //    "After Update", "Working Now"… tags signal a provider-side
+  //    lifecycle issue. Force manual even if the name would otherwise
+  //    match a clean engagement/follower pattern: operator decides.
+  if (SUSPECT_KEYWORDS_RX.test(s)) return "manual";
 
   // 2. Follower path — strict word match + suspicious-variant triage.
   if (FOLLOWERS_RX.test(s)) {

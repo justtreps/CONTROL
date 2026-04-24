@@ -47,12 +47,23 @@ model Service {
   // manual triage.
   classificationManualReview Boolean @default(false)
 
+  // Denormalised MAX(TestOrder.placedAt). Null = never tested.
+  // Stamped on every TestOrder.create and backfilled via
+  // /api/pool/backfill-last-tested after the column ships. Drives
+  // the obsolescence filter in /config/services-review ("jamais
+  // testé / > 6 mois / > 1 an / > 2 ans") — a row tested recently
+  // and routinely is low-priority for triage even if it's in the
+  // manual-review queue, while rows never tested or stale are
+  // candidates for disable/archival.
+  lastTestedAt    DateTime?
+
   testOrders      TestOrder[]
   scores          ServiceScore[]
 
   @@index([platform, serviceType, active])
   @@index([poolType, active])
   @@index([targetCountry])
+  @@index([lastTestedAt])
 }
 
 model TestAccount {
