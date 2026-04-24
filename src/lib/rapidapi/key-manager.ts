@@ -59,14 +59,58 @@ export async function pickNextApiKey(
   return { id: row.id, token: row.token, provider: row.provider };
 }
 
+// Sanity guard — statistically impossible to hit the monthly cap
+// when we've used < 90 % of it. If instagram.ts classified a 429
+// body as quota-exceeded while usage is this low, it's a classifier
+// false positive. We DON'T flip the key to capped — we return
+// {kind:'false_cap_prevented'} so the caller falls through to
+// backoff-and-retry instead of switching keys.
+const FALSE_CAP_SAFETY_RATIO = 0.9;
+
+// Discriminated result so instagram.ts:call() can distinguish the
+// three outcomes without an extra DB read:
+//   'switched'  — cap confirmed, new key in ctx, retry with it
+//   'all_capped' — no more active keys, throw
+//   'false_cap_prevented' — sanity guard tripped, DON'T cap,
+//                            treat the 429 as a rate-limit and
+//                            backoff on the same key
+export type SwitchOnCapResult =
+  | { kind: "switched"; ctx: ApiKeyCtx }
+  | { kind: "all_capped" }
+  | { kind: "false_cap_prevented" };
+
 // Called by the IG client when a response looked like a monthly-cap
-// 429. Caps the current key, picks the next one, rewires the ALS
-// context + PoolJob.rapidApiKeyId so subsequent calls + the UI see
-// the new key.
-export async function switchOnCap(reason: string): Promise<ApiKeyCtx | null> {
+// 429. If the sanity guard doesn't flag a false positive, caps the
+// current key, picks the next one, rewires the ALS context +
+// PoolJob.rapidApiKeyId so subsequent calls + the UI see the new
+// key.
+export async function switchOnCap(
+  reason: string
+): Promise<SwitchOnCapResult> {
   const store = als.getStore();
-  if (!store) return null;
+  if (!store) return { kind: "all_capped" };
   const current = store.current;
+
+  // Fetch fresh quota numbers — the in-memory ctx is stale (last
+  // refreshed when the job was assigned). If the DB row says usage
+  // < FALSE_CAP_SAFETY_RATIO × monthly, we refuse to cap and log
+  // the event for the false-cap detector in alerts/detectors.ts.
+  const fresh = await prisma.rapidApiKey.findUnique({
+    where: { id: current.id },
+  });
+  if (
+    fresh &&
+    fresh.quotaMonthly &&
+    fresh.quotaMonthly > 0 &&
+    fresh.quotaUsed / fresh.quotaMonthly < FALSE_CAP_SAFETY_RATIO
+  ) {
+    const pct = ((fresh.quotaUsed / fresh.quotaMonthly) * 100).toFixed(1);
+    console.warn(
+      `[rapidapi-keys] FALSE-CAP prevented on key#${current.id}: usage=${pct}% (< ${Math.round(FALSE_CAP_SAFETY_RATIO * 100)}%). 429 classifier probably mis-fired on a per-second rate limit. reason="${reason.slice(0, 120)}"`
+    );
+    return { kind: "false_cap_prevented" };
+  }
+
   await prisma.rapidApiKey
     .update({
       where: { id: current.id },
@@ -81,7 +125,7 @@ export async function switchOnCap(reason: string): Promise<ApiKeyCtx | null> {
   );
 
   const next = await pickNextApiKey(current.provider, [current.id]);
-  if (!next) return null;
+  if (!next) return { kind: "all_capped" };
 
   store.current = next;
   if (store.jobId) {
@@ -95,7 +139,7 @@ export async function switchOnCap(reason: string): Promise<ApiKeyCtx | null> {
   console.log(
     `[rapidapi-keys] switched to key#${next.id} for job#${store.jobId ?? "?"}`
   );
-  return next;
+  return { kind: "switched", ctx: next };
 }
 
 // ── Usage tracking ─────────────────────────────────────────────────

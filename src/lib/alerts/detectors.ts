@@ -58,6 +58,40 @@ export const detectKeyNearCap: Detector = async () => {
   return out;
 };
 
+// rapidapi_false_cap_detected — a key got flagged status='capped'
+// while its usage is suspiciously low (< 90 % of monthly). That's
+// the signature of the classifier-429 bug we patched: any key in
+// 'capped' with quotaUsed/quotaMonthly < 0.9 deserves operator
+// attention because the classifier ate a rate-limit as a cap.
+export const detectRapidapiFalseCap: Detector = async () => {
+  const capped = await prisma.rapidApiKey.findMany({
+    where: { status: "capped" },
+  });
+  const out: DetectorResult[] = [];
+  for (const k of capped) {
+    if (!k.quotaMonthly) continue;
+    const ratio = k.quotaUsed / k.quotaMonthly;
+    if (ratio >= 0.9) continue;
+    out.push({
+      code: `rapidapi_false_cap_detected:${k.id}`,
+      category: "rapidapi",
+      severity: "warning",
+      title: `Clé #${k.id} cappée prématurément (${pct(k.quotaUsed, k.quotaMonthly)}% usage)`,
+      description: `"${k.label}" est marquée capped mais a consommé seulement ${k.quotaUsed.toLocaleString("en-US")} / ${k.quotaMonthly.toLocaleString("en-US")}.`,
+      explanation: `Statistiquement impossible d'avoir hit le monthly cap à ${pct(k.quotaUsed, k.quotaMonthly)}%. Cause probable : classifier 429 trop laxe a interprété un rate-limit-per-second ou per-minute comme un quota mensuel (le body contenait "quota per X"). Depuis le fix df7fb1e + aaca728 le classifier est strict, mais les rows cappées avant ce deploy restent dans l'état 'capped' jusqu'à rehab manuelle.`,
+      impact:
+        "Cette clé est hors du round-robin → throughput RapidAPI divisé par le nombre de clés cappées. La campagne scoring et le testbot tournent dégradés.",
+      suggestedAction:
+        "Re-activer la clé manuellement : UPDATE RapidApiKey SET status='active', lastCappedAt=NULL WHERE id=<id>. Ou attendre le cron daily rapidapi-keys-reset qui passe les capped → active au jour de reset.",
+      actionType: "link",
+      actionPayload: { href: "/config" },
+      relatedEntityType: "rapidApiKey",
+      relatedEntityId: k.id,
+    });
+  }
+  return out;
+};
+
 // key_capped — status='capped' on any key.
 export const detectKeyCapped: Detector = async () => {
   const keys = await prisma.rapidApiKey.findMany({ where: { status: "capped" } });
@@ -555,6 +589,40 @@ export const detectTestAbortRateHigh: Detector = async () => {
 
 // ── SCORING CAMPAIGN ───────────────────────────────────────────
 
+// campaign_low_placement_rate — warns when the active campaign is
+// placing at < 100 services/hour after > 30 min of uptime. Signal
+// that RapidAPI is throttling harder than expected, BulkMedya is
+// slow, or the pool is starved.
+export const detectCampaignLowRate: Detector = async () => {
+  const c = await prisma.scoringCampaign.findFirst({
+    where: { status: "running" },
+    orderBy: { startedAt: "desc" },
+  });
+  if (!c) return [];
+  const minutesElapsed = (Date.now() - c.startedAt.getTime()) / 60_000;
+  if (minutesElapsed < 30) return []; // warm-up grace
+  const ratePerHour = (c.placedServiceIds.length / minutesElapsed) * 60;
+  if (ratePerHour >= 100) return [];
+  return [
+    {
+      code: `campaign_low_placement_rate:${c.id}`,
+      category: "testbot",
+      severity: ratePerHour < 50 ? "warning" : "info",
+      title: `Campagne #${c.id} — rythme lent (${Math.round(ratePerHour)}/h)`,
+      description: `${c.placedServiceIds.length} placements en ${Math.round(minutesElapsed)}min → ${Math.round(ratePerHour)}/h. Objectif 500-1500/h.`,
+      explanation: `Rythme observé sous la cible de 100/h après ${Math.round(minutesElapsed)}min. Causes possibles : RapidAPI 429 fréquents (rate-limit-per-minute), BulkMedya slow-response, pool de comptes épuisé (no_account). Vérifier le compteur ABORTÉS sur la card — > 20 % = signal pool/RapidAPI dégradé.`,
+      impact:
+        "La campagne mettra plus de temps à terminer que prévu. Sous 50/h, 3 000 services prennent > 60 h.",
+      suggestedAction:
+        "Vérifier /config flotte RapidAPI (clés actives, quotaUsed), /pool (comptes available), + la timeline live sur le dashboard.",
+      actionType: "link",
+      actionPayload: { href: "/" },
+      relatedEntityType: "scoringCampaign",
+      relatedEntityId: c.id,
+    },
+  ];
+};
+
 // mass_test_campaign_in_progress — informational tracker for a
 // running ScoringCampaign. Fires whenever there's an active
 // campaign row, not only "> 500 concurrent" — a 100-test campaign
@@ -649,6 +717,7 @@ export const detectDryRunOffWithTestbot: Detector = async () => {
 export const DETECTORS: Detector[] = [
   detectKeyNearCap,
   detectKeyCapped,
+  detectRapidapiFalseCap,
   detectAllKeysCapped,
   detectRateLimiterSaturated,
   detectPoolBelowMin,
@@ -665,6 +734,7 @@ export const DETECTORS: Detector[] = [
   detectTestAbortRateHigh,
   detectDryRunOffWithTestbot,
   detectMassCampaignInProgress,
+  detectCampaignLowRate,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──

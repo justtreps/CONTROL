@@ -18,14 +18,27 @@ const MAX_429_RETRIES = 3;
 // RapidAPI surfaces two very different failure modes under status
 // 429. Distinguishing them is critical: monthly cap needs a key
 // failover, per-second rate limit just needs backoff.
+//
+// PRIOR BUG (flagged keys at 1.7 % quota used): matched any body
+// containing "quota", which included rate-limit bodies like "quota
+// per minute exceeded" or "quota exceeded for the hour". That
+// cascaded into false-caps on every key, bricking the whole
+// testbot. The strict patterns below only match wording that is
+// unambiguously about the monthly plan ceiling. Anything else —
+// "rate limit", "per second/minute/hour", "try again" — falls
+// through to the backoff path.
+const QUOTA_EXCEEDED_PATTERNS = [
+  /monthly\s+quota/,
+  /monthly\s+limit/,
+  /quota\s+exceeded\s+for\s+the\s+month/,
+  /upgrade\s+your\s+plan/,
+  /plan\s+limit\s+reached/,
+  /you\s+have\s+exceeded\s+the\s+monthly/,
+];
+
 function looksLikeQuotaExceeded(body: string): boolean {
   const s = body.toLowerCase();
-  return (
-    s.includes("quota") ||
-    s.includes("monthly limit") ||
-    s.includes("you have exceeded") ||
-    s.includes("upgrade your plan")
-  );
+  return QUOTA_EXCEEDED_PATTERNS.some((rx) => rx.test(s));
 }
 
 export type InstagramFollower = {
@@ -69,12 +82,19 @@ async function call(path: string, attempt = 0): Promise<unknown> {
     const body = await res.text().catch(() => "");
     // Monthly-cap 429 — cap the current key and try to switch.
     if (ctx && looksLikeQuotaExceeded(body)) {
-      const next = await switchOnCap(body.slice(0, 200));
-      if (!next) {
+      const outcome = await switchOnCap(body.slice(0, 200));
+      if (outcome.kind === "switched") {
+        // Don't increment `attempt` — the new key starts fresh.
+        return call(path, 0);
+      }
+      if (outcome.kind === "all_capped") {
         throw new Error("all_keys_capped");
       }
-      // Don't increment `attempt` — the new key starts fresh.
-      return call(path, 0);
+      // false_cap_prevented — the 429 matched the "quota" text but
+      // key usage is nowhere near the monthly cap, so the upstream
+      // probably just hit a per-second/per-minute rate limit and
+      // leaked the word "quota" in its error body. Fall through to
+      // the same backoff path the non-quota 429 takes.
     }
     // Per-second rate-limit — backoff and retry.
     if (attempt < MAX_429_RETRIES) {

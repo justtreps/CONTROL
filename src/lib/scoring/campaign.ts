@@ -30,15 +30,25 @@ import type { Prisma, Service } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { attemptPlaceOrder } from "@/lib/testbot";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { withApiKey } from "@/lib/rapidapi/key-manager";
 
-// 10 placements per tick — each runs ~8-10 s wall time through the
-// oracle + realism sample + BulkMedya + DB path. 10 × 10 s = ~100 s,
-// comfortably under the 300 s cron budget. 10/min × 60 = 600/h so
-// a 3 300-service campaign lands in ~5 h 30. Slower than the target
-// 1 h but safer: individual ticks never hit the timeout so the
-// progressive flush below doesn't need to race anyone.
-const BATCH_SIZE = 10;
-const FLUSH_EVERY = 1; // write campaign progress after every placement
+// BATCH_SIZE = placements attempted per cron tick.
+// CONCURRENCY = parallel placements in flight inside a tick.
+//
+// With 2 active RapidAPI keys and the per-key rate limiter at 85
+// req/min each, aggregate IG throughput = 170 req/min. A
+// placement needs ~2 RapidAPI calls (oracle + follower snapshot),
+// so the ceiling is ~85 placements/min. CONCURRENCY=5 keeps 5
+// placements in flight at once, spread across keys via
+// withApiKey's ALS wrap + round-robin, so the rate limiter is the
+// one that paces us instead of sequential DB/BulkMedya waits.
+//
+// BATCH_SIZE=50 × tick every 1 min = 3000/h theoretical ceiling.
+// Observed ~1000-1500/h (bounded by RapidAPI + BulkMedya
+// responsiveness). 3 271 services → ~2-3 h. Matches the target.
+const BATCH_SIZE = 50;
+const CONCURRENCY = 5;
+const FLUSH_EVERY_WAVE = true; // write campaign progress after each concurrent wave
 const QUOTA_STOP_RATIO = 0.95;
 const ABORT_BURST_MAX = 50;
 const ABORT_BURST_WINDOW_MS = 60 * 60_000;
@@ -269,9 +279,16 @@ export async function runCampaignTick(): Promise<TickResult> {
 
   const simulated = toggles.dryRunMode; // respect dry-run
 
-  // Flush helper — writes the live accumulated progress to DB so a
-  // timeout mid-loop doesn't lose work. Called after every placement
-  // (FLUSH_EVERY=1). Cheap: a single row update, no joins.
+  // Round-robin the active keys across placements so the per-key
+  // rate limiter is the effective bottleneck (170/min with 2 keys)
+  // rather than serialising everything through one key's 85/min.
+  const activeKeys = await prisma.rapidApiKey.findMany({
+    where: { provider: "instagram", status: "active" },
+    orderBy: { id: "asc" },
+  });
+
+  // Flush helper — persists the live accumulated progress so a
+  // timeout mid-loop doesn't lose work. One row update, no joins.
   const flush = async () => {
     await prisma.scoringCampaign.update({
       where: { id: campaign.id },
@@ -286,55 +303,72 @@ export async function runCampaignTick(): Promise<TickResult> {
     });
   };
 
-  let sincelastFlush = 0;
-  for (const sid of batch) {
+  // Process the batch in waves of CONCURRENCY. Inside each wave,
+  // Promise.all fires all placements in parallel; the per-key rate
+  // limiter serialises RapidAPI calls automatically.
+  const placeOne = async (sid: number, waveIdx: number) => {
     const svc = byId.get(sid);
     if (!svc) {
       placed.add(sid);
       result.skipped++;
-      sincelastFlush++;
-      if (sincelastFlush >= FLUSH_EVERY) {
-        await flush();
-        sincelastFlush = 0;
-      }
-      continue;
+      return;
     }
-    try {
-      const outcome = await attemptPlaceOrder({
-        service: svc as Service,
-        simulated,
-      });
-      if (outcome.kind === "placed") {
-        result.placed++;
-      } else if (outcome.kind === "no_account") {
-        // Pool empty — skip this service, don't mark placed so the
-        // next campaign re-queues it when the pool refills.
-        result.skipped++;
-        continue;
-      } else if (outcome.kind === "retry_private") {
+    // Assign a key round-robin by wave index. withApiKey seeds ALS
+    // so every IG call under the wrap uses this key. When no DB
+    // keys are available (env-var fallback path) we skip the wrap
+    // and let instagram.ts fall back to the config key.
+    const key = activeKeys.length
+      ? activeKeys[waveIdx % activeKeys.length]
+      : null;
+    const doPlace = async () => {
+      try {
+        const outcome = await attemptPlaceOrder({
+          service: svc as Service,
+          simulated,
+        });
+        if (outcome.kind === "placed") {
+          result.placed++;
+          placed.add(sid);
+        } else if (outcome.kind === "no_account") {
+          // Pool empty — don't mark placed so a later campaign
+          // re-queues it when the pool refills.
+          result.skipped++;
+        } else if (outcome.kind === "retry_private") {
+          result.aborted++;
+          placed.add(sid);
+        } else {
+          result.aborted++;
+          placed.add(sid);
+        }
+      } catch (e) {
         result.aborted++;
-      } else {
-        result.aborted++;
+        console.warn(
+          `[campaign] service#${sid} placement threw:`,
+          (e as Error).message.slice(0, 160)
+        );
+        // Mark placed anyway so we don't infinite-loop on one
+        // broken service.
+        placed.add(sid);
       }
-      placed.add(sid);
-    } catch (e) {
-      result.aborted++;
-      console.warn(
-        `[campaign] service#${sid} placement threw:`,
-        (e as Error).message.slice(0, 160)
+    };
+    if (key) {
+      await withApiKey(
+        { id: key.id, token: key.token, provider: key.provider },
+        undefined,
+        doPlace
       );
-      // Mark placed anyway so we don't infinite-loop on a single
-      // broken service.
-      placed.add(sid);
+    } else {
+      await doPlace();
     }
-    sincelastFlush++;
-    if (sincelastFlush >= FLUSH_EVERY) {
-      await flush();
-      sincelastFlush = 0;
-    }
+  };
+
+  for (let i = 0; i < batch.length; i += CONCURRENCY) {
+    const wave = batch.slice(i, i + CONCURRENCY);
+    await Promise.all(wave.map((sid, j) => placeOne(sid, i + j)));
+    if (FLUSH_EVERY_WAVE) await flush();
   }
-  // Final flush for any trailing placements not yet persisted.
-  if (sincelastFlush > 0) await flush();
+  // Final flush guarantees the last wave lands.
+  await flush();
 
   result.remaining = campaign.targetServiceIds.length - placed.size;
   return result;
@@ -348,25 +382,32 @@ export async function getActiveCampaign() {
   });
   if (!c) return null;
 
-  // Completion rate + ETA estimation. Linear: remaining /
-  // (placed per minute). placed per min = placedCount / minutes
-  // elapsed. Null when placedCount is still 0.
   const minutesElapsed = Math.max(
     1,
     (Date.now() - c.startedAt.getTime()) / 60_000
   );
-  const rate = c.placedCount / minutesElapsed;
-  const remaining = c.targetServiceIds.length - c.placedServiceIds.length;
-  const etaMinutes = rate > 0 ? Math.round(remaining / rate) : null;
+  const placedSoFar = c.placedServiceIds.length;
+  const target = c.targetServiceIds.length;
 
-  // Accumulated cost: share of the estimated cost that matches the
-  // fraction of placed services. Approximate (each service has its
-  // own minQuantity × ratePerK), but good enough for the progress
-  // card.
-  const placedRatio =
-    c.targetServiceIds.length > 0
-      ? c.placedServiceIds.length / c.targetServiceIds.length
-      : 0;
+  // PLACEMENT metrics — how long until we've dispatched every test.
+  // This is the operator-facing progress bar: "when does the
+  // placement phase finish". Separate from the completion window
+  // which is dominated by T+7 d polling of real BulkMedya deliveries.
+  const placementRatePerMin = placedSoFar / minutesElapsed;
+  const placementRatePerHour = Math.round(placementRatePerMin * 60);
+  const remaining = target - placedSoFar;
+  const placementEtaMinutes =
+    placementRatePerMin > 0
+      ? Math.round(remaining / placementRatePerMin)
+      : null;
+
+  // COMPLETION ETA — placement + T+7d polling window. The last
+  // test placed triggers a 7 d (=10 080 min) wait for the
+  // adaptive poller to finalise it. Total ≈ placementEta + 10 080.
+  const completionEtaMinutes =
+    placementEtaMinutes !== null ? placementEtaMinutes + 7 * 24 * 60 : null;
+
+  const placedRatio = target > 0 ? placedSoFar / target : 0;
   const accumulatedCostUsd = c.estimatedCostUsd
     ? Math.round(c.estimatedCostUsd * placedRatio * 100) / 100
     : null;
@@ -377,13 +418,18 @@ export async function getActiveCampaign() {
     startedAt: c.startedAt.toISOString(),
     finishedAt: c.finishedAt?.toISOString() ?? null,
     stopReason: c.stopReason,
-    targetCount: c.targetServiceIds.length,
-    placedCount: c.placedServiceIds.length,
+    targetCount: target,
+    placedCount: placedSoFar,
     placedPlacedCount: c.placedCount,
     abortedCount: c.abortedCount,
     estimatedCostUsd: c.estimatedCostUsd,
     accumulatedCostUsd,
-    etaMinutes,
+    // Legacy field — clients still read this; point it at the
+    // placement ETA which is the operationally relevant number.
+    etaMinutes: placementEtaMinutes,
+    placementEtaMinutes,
+    completionEtaMinutes,
+    placementRatePerHour,
     remaining,
   };
 }

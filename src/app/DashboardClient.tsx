@@ -82,6 +82,9 @@ type Stats = {
     estimatedCostUsd: number | null;
     accumulatedCostUsd: number | null;
     etaMinutes: number | null;
+    placementEtaMinutes: number | null;
+    completionEtaMinutes: number | null;
+    placementRatePerHour: number;
     remaining: number;
   } | null;
 };
@@ -912,26 +915,49 @@ function CampaignCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-0 border border-[#666666]/20">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-0 border border-[#666666]/20">
         <div className="p-4 border-r border-b md:border-b-0 border-[#666666]/20">
           <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-            SERVICES TESTÉS
+            SERVICES PLACÉS
           </div>
           <div className="font-mono text-2xl text-white tabular-nums mt-1">
             {campaign.placedCount}
-            <span className="text-[#666666] text-sm"> / {campaign.targetCount}</span>
+            <span className="text-[#666666] text-sm">
+              {" "}
+              / {campaign.targetCount}
+            </span>
+          </div>
+        </div>
+        <div className="p-4 border-r border-b md:border-b-0 border-[#666666]/20">
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            RYTHME
+          </div>
+          <div
+            className="font-mono text-2xl tabular-nums mt-1"
+            style={{
+              color:
+                campaign.placementRatePerHour >= 500
+                  ? "#00CC66"
+                  : campaign.placementRatePerHour >= 100
+                    ? "#FFCC00"
+                    : "#FF3300",
+            }}
+          >
+            {campaign.placementRatePerHour}
+          </div>
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase mt-0.5">
+            placements / h
           </div>
         </div>
         <div className="p-4 border-b md:border-r md:border-b-0 border-[#666666]/20">
           <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-            ETA
+            ETA PLACEMENT
           </div>
           <div className="font-mono text-2xl text-white tabular-nums mt-1">
-            {campaign.etaMinutes === null
-              ? "—"
-              : campaign.etaMinutes < 60
-                ? `${campaign.etaMinutes}min`
-                : `${Math.floor(campaign.etaMinutes / 60)}h${String(campaign.etaMinutes % 60).padStart(2, "0")}`}
+            {formatEta(campaign.placementEtaMinutes ?? campaign.etaMinutes)}
+          </div>
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase mt-0.5">
+            complétion delivery T+7j
           </div>
         </div>
         <div className="p-4 border-r border-[#666666]/20">
@@ -980,6 +1006,20 @@ function CampaignCard({
       </div>
     </div>
   );
+}
+
+function formatEta(minutes: number | null): string {
+  if (minutes === null || !Number.isFinite(minutes)) return "—";
+  if (minutes < 1) return "< 1min";
+  if (minutes < 60) return `${minutes}min`;
+  if (minutes < 24 * 60) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return `${h}h${String(m).padStart(2, "0")}`;
+  }
+  const d = Math.floor(minutes / (24 * 60));
+  const h = Math.floor((minutes % (24 * 60)) / 60);
+  return `${d}j${h}h`;
 }
 
 function formatAge(iso: string): string {
