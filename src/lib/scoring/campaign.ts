@@ -31,7 +31,14 @@ import { prisma } from "@/lib/prisma";
 import { attemptPlaceOrder } from "@/lib/testbot";
 import { getSystemToggles } from "@/lib/system/toggles";
 
-const BATCH_SIZE = 25; // placements per tick — ~1500/h = 3521 in ~2h20
+// 10 placements per tick — each runs ~8-10 s wall time through the
+// oracle + realism sample + BulkMedya + DB path. 10 × 10 s = ~100 s,
+// comfortably under the 300 s cron budget. 10/min × 60 = 600/h so
+// a 3 300-service campaign lands in ~5 h 30. Slower than the target
+// 1 h but safer: individual ticks never hit the timeout so the
+// progressive flush below doesn't need to race anyone.
+const BATCH_SIZE = 10;
+const FLUSH_EVERY = 1; // write campaign progress after every placement
 const QUOTA_STOP_RATIO = 0.95;
 const ABORT_BURST_MAX = 50;
 const ABORT_BURST_WINDOW_MS = 60 * 60_000;
@@ -261,12 +268,35 @@ export async function runCampaignTick(): Promise<TickResult> {
   const byId = new Map(services.map((s) => [s.id, s]));
 
   const simulated = toggles.dryRunMode; // respect dry-run
+
+  // Flush helper — writes the live accumulated progress to DB so a
+  // timeout mid-loop doesn't lose work. Called after every placement
+  // (FLUSH_EVERY=1). Cheap: a single row update, no joins.
+  const flush = async () => {
+    await prisma.scoringCampaign.update({
+      where: { id: campaign.id },
+      data: {
+        placedServiceIds: Array.from(placed) as unknown as Prisma.InputJsonValue as number[],
+        placedCount: campaign.placedCount + result.placed,
+        abortedCount: campaign.abortedCount + result.aborted,
+        ...(placed.size >= campaign.targetServiceIds.length
+          ? { status: "completed", finishedAt: new Date() }
+          : {}),
+      },
+    });
+  };
+
+  let sincelastFlush = 0;
   for (const sid of batch) {
     const svc = byId.get(sid);
     if (!svc) {
-      // Service disappeared — mark as placed to skip forever.
       placed.add(sid);
       result.skipped++;
+      sincelastFlush++;
+      if (sincelastFlush >= FLUSH_EVERY) {
+        await flush();
+        sincelastFlush = 0;
+      }
       continue;
     }
     try {
@@ -277,17 +307,13 @@ export async function runCampaignTick(): Promise<TickResult> {
       if (outcome.kind === "placed") {
         result.placed++;
       } else if (outcome.kind === "no_account") {
-        // Pool empty — skip this service, log in stopReason-free
-        // tracking via the counter. Don't add to placedServiceIds
-        // so the next campaign re-queues it when the pool refills.
+        // Pool empty — skip this service, don't mark placed so the
+        // next campaign re-queues it when the pool refills.
         result.skipped++;
         continue;
       } else if (outcome.kind === "retry_private") {
-        // Target dead mid-check — count as aborted for monitoring.
         result.aborted++;
       } else {
-        // skip: provider error / oracle error — count as aborted
-        // so the safety abort-burst check catches cascading fails.
         result.aborted++;
       }
       placed.add(sid);
@@ -301,19 +327,14 @@ export async function runCampaignTick(): Promise<TickResult> {
       // broken service.
       placed.add(sid);
     }
+    sincelastFlush++;
+    if (sincelastFlush >= FLUSH_EVERY) {
+      await flush();
+      sincelastFlush = 0;
+    }
   }
-
-  await prisma.scoringCampaign.update({
-    where: { id: campaign.id },
-    data: {
-      placedServiceIds: Array.from(placed) as unknown as Prisma.InputJsonValue as number[],
-      placedCount: campaign.placedCount + result.placed,
-      abortedCount: campaign.abortedCount + result.aborted,
-      ...(placed.size >= campaign.targetServiceIds.length
-        ? { status: "completed", finishedAt: new Date() }
-        : {}),
-    },
-  });
+  // Final flush for any trailing placements not yet persisted.
+  if (sincelastFlush > 0) await flush();
 
   result.remaining = campaign.targetServiceIds.length - placed.size;
   return result;

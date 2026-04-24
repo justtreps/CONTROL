@@ -6,9 +6,10 @@ import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { runCampaignTick } from "@/lib/scoring/campaign";
 
-// 60s is plenty for 25 placements — each ~1-2s of RapidAPI work
-// serialised through the per-key rate limiter.
-export const maxDuration = 60;
+// 300 s ceiling. Observed: each placement is ~8-10 s wall-time
+// (oracle + realism sample + BulkMedya + DB writes) → a 10-
+// placement batch runs ~80-100 s. 300 s leaves ample headroom.
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
