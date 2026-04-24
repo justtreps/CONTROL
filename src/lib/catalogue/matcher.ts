@@ -122,12 +122,23 @@ const matchIgLikes: Matcher = (s) => {
   return ok(s);
 };
 
-// ig-views: "views" only. Exclude story/reel/video/profile views + auto + bot/fake.
+// ig-views: all "views" formats now map to the IG Reels metric —
+// Meta unified "video views" / "reel views" / "reels views" into a
+// single Reels-plays counter in 2026, so we accept them all. Only
+// exclusions are:
+//   • story views   (ephemeral, different SKU, not sold)
+//   • profile views (vanity metric, not a content view)
+//   • impressions / reach (caught by baseGate → DISABLE_TOPIC_RX)
+//   • auto / bot / fake (quality markers → operator-only)
+// baseGate already rejects stor(?:y|ies) via DISABLE_TOPIC_RX, so
+// "Instagram Story Views" never reaches here; we still keep an
+// explicit check for `profile views` because only `profile visits`
+// is in DISABLE_TOPIC_RX.
 const matchIgViews: Matcher = (s) => {
   if (!baseGate(s, "instagram")) return fail();
   const n = normalise(s.name);
   if (!/\bviews?\b/.test(n)) return fail();
-  if (/\b(video|reel|story|profile)\s+views?\b/.test(n)) return fail();
+  if (/\bprofile\s+views?\b/.test(n)) return fail();
   if (AUTO_RX.test(n)) return fail();
   if (BOT_FAKE_RX.test(n)) return fail();
   return ok(s);
