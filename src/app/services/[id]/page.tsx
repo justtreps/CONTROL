@@ -105,6 +105,9 @@ export default async function ServiceDetailPage({
       deliveredPct,
       checkpoint: latestM?.checkpoint ?? "—",
       bulkmedyaOrderId: o.bulkmedyaOrderId,
+      status: o.status,
+      retryCount: o.retryCount,
+      abortReason: o.abortReason,
     };
   });
 
@@ -251,12 +254,37 @@ export default async function ServiceDetailPage({
                   key={o.id}
                   className={`p-6 md:p-8 ${bg} ${borderRight} ${borderBottom}`}
                 >
-                  <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4">
-                    {o.placedAt
-                      .toISOString()
-                      .replace("T", " ")
-                      .slice(0, 16)}{" "}
-                    UTC
+                  <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-4 flex items-center gap-2 flex-wrap">
+                    <span>
+                      {o.placedAt
+                        .toISOString()
+                        .replace("T", " ")
+                        .slice(0, 16)}{" "}
+                      UTC
+                    </span>
+                    {o.retryCount > 0 && (
+                      <span
+                        className="font-mono text-[10px] tracking-widest uppercase border border-[#FFCC00] text-[#FFCC00] px-1.5 py-0"
+                        title={`Auto-retry chain depth ${o.retryCount} — target died mid-test, re-placed on fresh target.`}
+                      >
+                        RETRY {o.retryCount}/3
+                      </span>
+                    )}
+                    {o.status === "aborted_target_died" && (
+                      <span
+                        className="font-mono text-[10px] tracking-widest uppercase border border-[#FF3300] text-[#FF3300] px-1.5 py-0"
+                        title={o.abortReason ?? "target died mid-test"}
+                      >
+                        ABORT TARGET DEAD
+                      </span>
+                    )}
+                    {o.status === "running" && (
+                      <span
+                        className="font-mono text-[10px] tracking-widest uppercase border border-[#666666]/60 text-[#666666] px-1.5 py-0"
+                      >
+                        EN COURS
+                      </span>
+                    )}
                   </div>
                   <div className="brand font-display text-lg uppercase tracking-tight text-white truncate mb-1">
                     {o.account}

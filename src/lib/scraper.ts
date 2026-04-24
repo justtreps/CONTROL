@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { fetchFollowerSnapshot, type Platform } from "@/lib/rapidapi";
 
@@ -44,12 +45,17 @@ export async function runScraper(
     errors: [],
   };
 
-  // Pull all open orders (not yet final), cap at maxOrders. With 200
-  // default and ~100 open orders in practice, this fetches everyone
-  // every tick — no starvation on any individual order.
+  // Pull all open orders that are still on the LEGACY fixed-checkpoint
+  // path. Rows with pollingState set are handled by the adaptive
+  // poller in lib/testbot/poller.ts — we skip them here to avoid
+  // duplicate Measurement rows fighting for the same checkpoint
+  // unique constraint. Cap at maxOrders. With 200 default and few
+  // legacy rows left, this fetches everyone every tick.
   const openOrders = await prisma.testOrder.findMany({
     where: {
+      status: "running",
       measurements: { none: { checkpoint: FINAL_CHECKPOINT } },
+      pollingState: { equals: Prisma.DbNull },
     },
     include: {
       service: true,
@@ -131,9 +137,11 @@ async function scanOneOrder({
     }
 
     if (due.some((cp) => cp.name === FINAL_CHECKPOINT)) {
+      // T+7d reached — flip status so the scoring engine's
+      // `status=completed` filter picks this row up.
       await prisma.testOrder.update({
         where: { id: order.id },
-        data: { completedAt: new Date() },
+        data: { completedAt: new Date(), status: "completed" },
       });
     }
   } catch (e) {

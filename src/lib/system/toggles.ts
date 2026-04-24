@@ -32,6 +32,7 @@ const ALL_KEYS: Array<keyof TogglePatch> = [
   "routingApiEnabled",
   "testBotEnabled",
   "scoringEngineEnabled",
+  "adaptivePollingEnabled",
 ];
 
 export async function stopAll(): Promise<SystemToggle> {

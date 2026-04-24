@@ -10,6 +10,7 @@ import {
 import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
+import { initialPollingState } from "@/lib/testbot/poller";
 import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -341,15 +342,18 @@ async function attemptPlaceOrder({
         // remaining posts to invalid(parent_invalid) so we don't
         // re-serve them. Works for both follower and engagement paths.
         await invalidateAccount(account.id, "deleted");
-      } else {
-        await releaseHeld();
+        // Retry with a fresh pool entity — same loop as the private
+        // flip below. Turns a dead pick into a transparent retry
+        // instead of a cold skip.
+        return {
+          kind: "retry_private",
+          reason: `account_ghost_${account.userId}`,
+        };
       }
+      await releaseHeld();
       return {
         kind: "skip",
-        reason:
-          oracle.reason === "ghost"
-            ? `account_ghost_${account.userId}`
-            : `oracle_error: ${oracle.message.slice(0, 80)}`,
+        reason: `oracle_error: ${oracle.message.slice(0, 80)}`,
       };
     }
 
@@ -421,6 +425,15 @@ async function attemptPlaceOrder({
         bulkmedyaOrderId: simulated ? `sim-${order.order}` : String(order.order),
         targetQuantity: service.minQuantity,
         baselineCount: baseline.count,
+        status: "running",
+        // Pre-test health check just succeeded (oracle was ok above).
+        lastHealthCheckAt: new Date(),
+        // Seed the adaptive polling state — the /api/cron/testbot-poll
+        // runner picks this up on its next tick. Legacy scraper cron
+        // is deprecated; adaptive path is the single source of truth
+        // for mid-test measurements + auto-retry on dead targets.
+        pollingState:
+          initialPollingState() as unknown as import("@prisma/client").Prisma.InputJsonValue,
       },
     });
 

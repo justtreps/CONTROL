@@ -218,6 +218,7 @@ export function PoolAccountsList({ activePool }: { activePool: ActivePool }) {
             <option value="assigned">ASSIGNED</option>
             <option value="consumed">CONSUMED</option>
             <option value="invalid">INVALID</option>
+            <option value="invalid:died_during_test">⚠ DIED DURING TEST</option>
             <option value="archived">ARCHIVED</option>
           </select>
           <select

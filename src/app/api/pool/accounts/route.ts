@@ -32,7 +32,13 @@ export async function GET(req: Request) {
 
   const where: import("@prisma/client").Prisma.TestAccountWhereInput = {};
   if (platform && platform !== "all") where.platform = platform;
-  if (status && status !== "all") where.status = status;
+  if (status && status !== "all") {
+    // Compound "status:invalidReason" filter — lets the UI drill into
+    // specific invalidation causes (eg. "invalid:died_during_test").
+    const [s, reason] = status.split(":");
+    where.status = s;
+    if (reason) (where as Record<string, unknown>).invalidReason = reason;
+  }
   if (source && source !== "all") where.scrapeSource = source;
   if (accountType && accountType !== "all")
     (where as Record<string, unknown>).accountType = accountType;

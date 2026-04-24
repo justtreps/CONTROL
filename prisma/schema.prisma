@@ -524,9 +524,58 @@ model TestOrder {
   baselineCount    Int
   placedAt         DateTime @default(now())
   completedAt      DateTime?
+
+  // Lifecycle: 'running' (default) → 'completed' (delivered or T+7d)
+  //                               → 'aborted_target_died' (mid-test)
+  //                               → 'aborted_other' (rare: provider 404 etc)
+  // Only 'completed' rows count towards the ServiceScore moving average.
+  status           String   @default("running")
+  abortReason      String?
+
+  // Retry chain — when a target dies mid-test we abort the current
+  // row and relaunch a new TestOrder on the same service with a
+  // fresh target. retriedFrom points at the dead row so the UI can
+  // collapse the chain into a single expandable history entry.
+  // retryCount mirrors the chain depth (0 = fresh, 1 = first retry,
+  // capped at 3 before giving up on the service this cycle).
+  retriedFrom      Int?
+  retriedFromOrder TestOrder?  @relation("TestOrderRetry", fields: [retriedFrom], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  retryOrders      TestOrder[] @relation("TestOrderRetry")
+  retryCount       Int      @default(0)
+
+  // Last time the poller/testbot re-fetched the target via RapidAPI.
+  // Pre-test health check stamps this just before placing the order;
+  // the adaptive poller stamps it on each poll.
+  lastHealthCheckAt DateTime?
+
+  // Adaptive polling state. { nextPollAt, currentIntervalMs,
+  // consecutiveZeroDeltas }. Null → fallback fixed checkpoints
+  // (legacy path via lib/scraper.ts) still drives measurements for
+  // this row.
+  pollingState     Json?
+
   measurements     Measurement[]
+  polls            TestPoll[]
 
   @@index([serviceId, placedAt])
+  @@index([status, placedAt])
+  @@index([retriedFrom])
+}
+
+// Audit log of every adaptive-polling tick on a TestOrder. Scoring
+// doesn't read this — it's purely for the UI timeline + cost audit.
+// Measurement still owns the canonical checkpoint rows scoring reads.
+model TestPoll {
+  id              Int      @id @default(autoincrement())
+  testOrder       TestOrder @relation(fields: [testOrderId], references: [id], onDelete: Cascade)
+  testOrderId     Int
+  polledAt        DateTime @default(now())
+  deliveredQty    Int
+  delta           Int      // this tick's delta vs previous poll
+  targetStatus    String   // 'ok' | 'private' | 'deleted' | 'banned'
+  intervalMsBefore Int     // the interval that preceded this poll (for audit)
+
+  @@index([testOrderId, polledAt])
 }
 
 model Measurement {
@@ -594,5 +643,11 @@ model SystemToggle {
   routingApiEnabled        Boolean  @default(true)
   testBotEnabled           Boolean  @default(true)
   scoringEngineEnabled     Boolean  @default(true)
+  // When true, new TestOrders use the variable-interval adaptive
+  // poller (see lib/testbot/poller.ts). When false, they fall back
+  // to the legacy fixed checkpoints (T+5min / T+30min / T+1h /
+  // T+6h / T+24h / T+7d) driven by lib/scraper.ts. Kill switch for
+  // the operator in case the adaptive poller misbehaves in prod.
+  adaptivePollingEnabled   Boolean  @default(true)
   updatedAt                DateTime @updatedAt
 }

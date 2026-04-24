@@ -120,6 +120,10 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const orders = await prisma.testOrder.findMany({
       where: {
         serviceId,
+        // Only count fully-completed tests in the moving average.
+        // Aborted-target-died rows (auto-retry chain) are discarded
+        // so a dead target can't drag a service's score down.
+        status: "completed",
         measurements: { some: { checkpoint: { not: "T+0" } } },
       },
       include: { measurements: true },

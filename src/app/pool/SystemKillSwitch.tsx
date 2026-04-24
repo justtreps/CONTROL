@@ -10,6 +10,7 @@ type Toggles = {
   routingApiEnabled: boolean;
   testBotEnabled: boolean;
   scoringEngineEnabled: boolean;
+  adaptivePollingEnabled: boolean;
 };
 
 type Row = {
@@ -24,6 +25,11 @@ const ROWS: Row[] = [
   { key: "routingApiEnabled", label: "ROUTING API", hint: "/api/order (MyBoost)" },
   { key: "testBotEnabled", label: "TEST BOT", hint: "BulkMedya calls → simulated" },
   { key: "scoringEngineEnabled", label: "SCORING ENGINE", hint: "/api/cron/scoring" },
+  {
+    key: "adaptivePollingEnabled",
+    label: "POLLING ADAPTATIF",
+    hint: "testbot-poll · 5min↔4h (off = 30min fixe)",
+  },
 ];
 
 export function SystemKillSwitch({ initialToggles }: { initialToggles: Toggles }) {
