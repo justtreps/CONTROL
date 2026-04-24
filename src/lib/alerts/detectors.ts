@@ -553,6 +553,48 @@ export const detectTestAbortRateHigh: Detector = async () => {
   ];
 };
 
+// ── SCORING CAMPAIGN ───────────────────────────────────────────
+
+// mass_test_campaign_in_progress — informational tracker for a
+// running ScoringCampaign. Fires whenever there's an active
+// campaign row, not only "> 500 concurrent" — a 100-test campaign
+// still deserves an observable marker. Severity stays info.
+export const detectMassCampaignInProgress: Detector = async () => {
+  const c = await prisma.scoringCampaign.findFirst({
+    where: { status: { in: ["running", "paused"] } },
+    orderBy: { startedAt: "desc" },
+  });
+  if (!c) return [];
+  const placed = c.placedServiceIds.length;
+  const target = c.targetServiceIds.length;
+  const pct = target > 0 ? Math.round((placed / target) * 1000) / 10 : 0;
+  const minutesElapsed = Math.max(
+    1,
+    Math.floor((Date.now() - c.startedAt.getTime()) / 60_000)
+  );
+  const rate = placed / minutesElapsed;
+  const etaMinutes = rate > 0 ? Math.round((target - placed) / rate) : null;
+
+  return [
+    {
+      code: `mass_test_campaign_in_progress:${c.id}`,
+      category: "testbot",
+      severity: "info",
+      title: `Campagne scoring #${c.id} — ${placed}/${target} services`,
+      description: `Progression ${pct.toFixed(1)}% · ${c.status.toUpperCase()}${c.abortedCount > 0 ? ` · ${c.abortedCount} aborted` : ""}.`,
+      explanation: `Démarrée ${c.startedAt.toISOString()}. Écoulé ${minutesElapsed}min. Rythme observé : ${rate.toFixed(1)} services/min. ETA avant complétion ≈ ${etaMinutes ?? "?"}min. Coût estimé total ${c.estimatedCostUsd ? `$${c.estimatedCostUsd.toFixed(2)}` : "?"}.`,
+      impact:
+        "Consommation RapidAPI + BulkMedya soutenue pendant la fenêtre. Safety guards auto-stop sur quota ≥ 95 %, balance_insufficient, ou > 50 aborts/h.",
+      suggestedAction:
+        "Surveiller la card CAMPAGNE SCORING sur le dashboard. Pauser depuis le bouton si besoin — les tests déjà en vol finalisent normalement.",
+      actionType: "link",
+      actionPayload: { href: "/" },
+      relatedEntityType: "scoringCampaign",
+      relatedEntityId: c.id,
+    },
+  ];
+};
+
 // ── INFRA / CONFIG ─────────────────────────────────────────────
 
 // dry_run_off_with_testbot — surfaces the "production mode" state
@@ -622,6 +664,7 @@ export const DETECTORS: Detector[] = [
   detectTestRetryRateHigh,
   detectTestAbortRateHigh,
   detectDryRunOffWithTestbot,
+  detectMassCampaignInProgress,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──

@@ -69,6 +69,21 @@ type Stats = {
     color: string;
   }>;
   heatmap: number[][];
+  campaign: {
+    id: number;
+    status: string;
+    startedAt: string;
+    finishedAt: string | null;
+    stopReason: string | null;
+    targetCount: number;
+    placedCount: number;
+    placedPlacedCount: number;
+    abortedCount: number;
+    estimatedCostUsd: number | null;
+    accumulatedCostUsd: number | null;
+    etaMinutes: number | null;
+    remaining: number;
+  } | null;
 };
 type ServiceRow = {
   id: number;
@@ -204,6 +219,17 @@ export function DashboardClient({
           />
         </div>
       </section>
+
+      {/* Scoring campaign — inserted between stats and activity
+          when active so it catches the eye. */}
+      {stats.campaign && (
+        <Section title="CAMPAGNE SCORING">
+          <CampaignCard
+            campaign={stats.campaign}
+            onChanged={refresh}
+          />
+        </Section>
+      )}
 
       {/* Activity — line + donut */}
       <Section title="ACTIVITÉ TEMPS RÉEL">
@@ -798,6 +824,160 @@ function HeatmapGrid({ data }: { data: number[][] }) {
           })}
         </div>
       ))}
+    </div>
+  );
+}
+
+function CampaignCard({
+  campaign,
+  onChanged,
+}: {
+  campaign: NonNullable<Stats["campaign"]>;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const pct =
+    campaign.targetCount > 0
+      ? (campaign.placedCount / campaign.targetCount) * 100
+      : 0;
+  const color =
+    campaign.status === "running"
+      ? "#00CC66"
+      : campaign.status === "paused"
+        ? "#FFCC00"
+        : campaign.status === "completed"
+          ? "#66CCFF"
+          : "#FF3300";
+
+  async function call(path: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await fetch(path, { method: "POST" });
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="border-y border-[#666666]/20 p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className="font-mono text-[10px] tracking-widest uppercase border px-2 py-0.5"
+            style={{ color, borderColor: color }}
+          >
+            {campaign.status.replace("_", " ")}
+          </span>
+          <span className="brand font-display text-xl uppercase tracking-tight text-white">
+            Campagne #{campaign.id}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          {campaign.status === "running" && (
+            <button
+              type="button"
+              onClick={() => call("/api/scoring/campaign/pause")}
+              disabled={busy}
+              className="interactive border border-[#FFCC00] text-[#FFCC00] hover:bg-[#FFCC00] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+            >
+              [ PAUSER LA CAMPAGNE ]
+            </button>
+          )}
+          {campaign.status === "paused" && (
+            <button
+              type="button"
+              onClick={() => call("/api/scoring/campaign/resume")}
+              disabled={busy}
+              className="interactive border border-[#00CC66] text-[#00CC66] hover:bg-[#00CC66] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+            >
+              [ REPRENDRE ]
+            </button>
+          )}
+          {(campaign.status === "running" || campaign.status === "paused") && (
+            <button
+              type="button"
+              onClick={() => {
+                if (
+                  confirm("Arrêter définitivement la campagne ? Les tests en vol finaliseront.")
+                )
+                  void call("/api/scoring/campaign/stop");
+              }}
+              disabled={busy}
+              className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+            >
+              [ ARRÊTER ]
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-0 border border-[#666666]/20">
+        <div className="p-4 border-r border-b md:border-b-0 border-[#666666]/20">
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            SERVICES TESTÉS
+          </div>
+          <div className="font-mono text-2xl text-white tabular-nums mt-1">
+            {campaign.placedCount}
+            <span className="text-[#666666] text-sm"> / {campaign.targetCount}</span>
+          </div>
+        </div>
+        <div className="p-4 border-b md:border-r md:border-b-0 border-[#666666]/20">
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            ETA
+          </div>
+          <div className="font-mono text-2xl text-white tabular-nums mt-1">
+            {campaign.etaMinutes === null
+              ? "—"
+              : campaign.etaMinutes < 60
+                ? `${campaign.etaMinutes}min`
+                : `${Math.floor(campaign.etaMinutes / 60)}h${String(campaign.etaMinutes % 60).padStart(2, "0")}`}
+          </div>
+        </div>
+        <div className="p-4 border-r border-[#666666]/20">
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            COÛT ACCUMULÉ
+          </div>
+          <div className="font-mono text-2xl text-[#FF3300] tabular-nums mt-1">
+            {campaign.accumulatedCostUsd === null
+              ? "—"
+              : `$${campaign.accumulatedCostUsd.toFixed(2)}`}
+          </div>
+          {campaign.estimatedCostUsd !== null && (
+            <div className="font-mono text-[10px] text-[#666666] mt-0.5">
+              / ${campaign.estimatedCostUsd.toFixed(2)} estimé
+            </div>
+          )}
+        </div>
+        <div className="p-4">
+          <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            ABORTÉS
+          </div>
+          <div
+            className="font-mono text-2xl tabular-nums mt-1"
+            style={{ color: campaign.abortedCount > 50 ? "#FF3300" : "#FFCC00" }}
+          >
+            {campaign.abortedCount}
+          </div>
+        </div>
+      </div>
+
+      <div className="w-full h-2 bg-[#666666]/20">
+        <div
+          className="h-full transition-all"
+          style={{ width: `${Math.min(100, pct)}%`, background: color }}
+        />
+      </div>
+      <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase normal-case">
+        Démarrée {new Date(campaign.startedAt).toISOString().slice(0, 19)} UTC ·{" "}
+        {pct.toFixed(1)}% complétée · {campaign.remaining} restants
+        {campaign.stopReason && (
+          <span className="text-[#FF3300]">
+            {" "}
+            · stop: {campaign.stopReason}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

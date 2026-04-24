@@ -818,3 +818,37 @@ model Alert {
   @@index([code, status])
   @@index([lastTriggeredAt])
 }
+
+// Mass scoring campaign. Orchestrates N parallel test placements
+// over a bounded window (~1 h typical) against every
+// ProductServiceCandidate that hasn't been tested recently. One
+// campaign active at a time — the cron runner idempotently picks
+// the oldest running/paused row each tick.
+//
+// Safety guards (enforced by lib/scoring/campaign.ts before each
+// placement batch):
+//   • any RapidApiKey with quotaUsed / quotaMonthly ≥ 0.95 → stop
+//   • BulkMedya error === 'balance_insufficient'            → stop
+//   • > 50 TestOrder.status='aborted_target_died' on this
+//     campaign within the last hour                         → stop
+//
+// targetServiceIds is the snapshot taken at launch time so the
+// campaign progress is stable even if the catalogue changes under
+// it. placedServiceIds accumulates IDs we've already dispatched
+// so the ticker doesn't re-place the same service twice.
+model ScoringCampaign {
+  id               Int      @id @default(autoincrement())
+  startedAt        DateTime @default(now())
+  finishedAt       DateTime?
+  status           String   @default("running")
+  stopReason       String?
+  targetServiceIds Int[]
+  placedServiceIds Int[]    @default([])
+  placedCount      Int      @default(0)
+  completedCount   Int      @default(0)
+  abortedCount     Int      @default(0)
+  estimatedCostUsd Float?
+  updatedAt        DateTime @updatedAt
+
+  @@index([status, startedAt])
+}

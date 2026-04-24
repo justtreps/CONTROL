@@ -63,7 +63,7 @@ export type TestBotResult = {
 // Outcome of a single per-service attempt. The outer loop uses this
 // to decide whether to retry with another account, bail on the
 // service, or count a success.
-type AttemptOutcome =
+export type AttemptOutcome =
   | { kind: "placed" }
   | { kind: "retry_private"; reason: string }
   | { kind: "skip"; reason: string }
@@ -252,7 +252,7 @@ export async function runTestBot(
 //   • Engagement services → pick + assign a TestPost (post URL) and
 //     keep a parallel reference to its parent TestAccount for the
 //     oracle re-check + TestOrder.testAccountId lineage.
-async function attemptPlaceOrder({
+export async function attemptPlaceOrder({
   service,
   simulated,
 }: {

@@ -21,6 +21,7 @@
     { "path": "/api/cron/suggestions-refill", "schedule": "*/15 * * * *" },
     { "path": "/api/cron/rapidapi-keys-reset", "schedule": "15 3 * * *" },
     { "path": "/api/cron/workflow-executor", "schedule": "* * * * *" },
-    { "path": "/api/cron/alerts-detector", "schedule": "*/2 * * * *" }
+    { "path": "/api/cron/alerts-detector", "schedule": "*/2 * * * *" },
+    { "path": "/api/cron/scoring-campaign-runner", "schedule": "* * * * *" }
   ]
 }

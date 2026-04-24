@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
+import { getActiveCampaign } from "@/lib/scoring/campaign";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 20;
@@ -408,6 +409,9 @@ async function build() {
     if (day >= 0 && day < 7) heatmap[day][hour]++;
   }
 
+  // ── Scoring campaign (if any active) ──────────────────────────
+  const campaign = await getActiveCampaign();
+
   return {
     generatedAt: new Date().toISOString(),
     globalStats,
@@ -420,6 +424,7 @@ async function build() {
     bottomServices,
     recentEvents,
     heatmap,
+    campaign,
   };
 }
 
