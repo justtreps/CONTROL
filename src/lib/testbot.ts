@@ -11,6 +11,7 @@ import { fetchOracleFor } from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
 import { markTesting } from "@/lib/catalogue/lifecycle";
+import { testQuantityFor } from "@/lib/scoring/test-quantity";
 import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -408,12 +409,23 @@ export async function attemptPlaceOrder({
     // engagement tests, profile URL for follower tests.
     const bulkmedyaLink =
       postUrlOverride ?? targetUrlFor(service.platform, currentUsername);
+    // Floor the test quantity at 20 — anything below is too noisy
+    // to score reliably. Returns null when service.maxQuantity is
+    // below the floor (corrupt BulkMedya row); skip in that case.
+    const testQty = testQuantityFor(service);
+    if (testQty === null) {
+      await releaseHeld();
+      return {
+        kind: "skip",
+        reason: `service_max_below_floor:${service.maxQuantity}`,
+      };
+    }
     const order = simulated
       ? { order: Date.now() }
       : await placeOrder({
           service: service.bulkmedyaId,
           link: bulkmedyaLink,
-          quantity: service.minQuantity,
+          quantity: testQty,
         });
 
     if ("error" in order) {
@@ -436,7 +448,7 @@ export async function attemptPlaceOrder({
         serviceId: service.id,
         testAccountId: account.id,
         bulkmedyaOrderId: simulated ? `sim-${order.order}` : String(order.order),
-        targetQuantity: service.minQuantity,
+        targetQuantity: testQty,
         baselineCount: baseline.count,
         status: "running",
         // Record the mode this order was placed in. /logs + scoring

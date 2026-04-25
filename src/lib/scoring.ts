@@ -183,28 +183,44 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const avg = (pick: (s: OrderScore) => number) =>
       scores.reduce((acc, s) => acc + pick(s), 0) / scores.length;
 
-    const finalScore = avg((s) => s.final);
+    // Raw moving-average score (the metric we used as
+    // currentScore historically — kept for transparency on the
+    // /config/catalogue drawer).
+    const rawScore = avg((s) => s.final);
+
+    // Confidence factor — services with few samples shouldn't
+    // beat services with many samples just because the few
+    // samples landed lucky. Linear ramp 0.1 → 1.0 over 1 → 10
+    // samples; flat at 1.0 beyond.
+    const sampleCount = orders.length;
+    const confidence = Math.min(1, sampleCount / 10);
+    const weightedScore = rawScore * confidence;
 
     await prisma.serviceScore.create({
       data: {
         serviceId,
-        currentScore: finalScore,
+        // currentScore = weightedScore so any legacy reader
+        // (RoutingDecision audit, /services list, etc.) gets the
+        // confidence-adjusted view automatically.
+        currentScore: weightedScore,
         completionFactor: avg((s) => s.completion),
         realismScore: avg((s) => s.realism),
         speedScore: avg((s) => s.speed),
         dropScore: avg((s) => s.drop),
+        rawScore,
+        sampleCount,
+        confidence,
+        weightedScore,
       },
     });
 
-    // Fan out to every ProductServiceCandidate row pointing at this
-    // service — the same service can be a candidate for multiple
-    // products (in practice not, since matchers are platform +
-    // type specific, but the schema allows it). Only currentScore +
-    // lastScoredAt are touched; rank is recomputed per-product
-    // below.
+    // Fan out the weighted score to every candidacy row pointing
+    // at this service. Routing + dashboard tables read
+    // candidate.currentScore for ranking; weighted is what we
+    // want them to see.
     await prisma.productServiceCandidate.updateMany({
       where: { serviceId },
-      data: { currentScore: finalScore, lastScoredAt: new Date() },
+      data: { currentScore: weightedScore, lastScoredAt: new Date() },
     });
 
     result.servicesScored++;

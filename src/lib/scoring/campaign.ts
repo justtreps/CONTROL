@@ -31,6 +31,7 @@ import { prisma } from "@/lib/prisma";
 import { attemptPlaceOrder } from "@/lib/testbot";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { withApiKey } from "@/lib/rapidapi/key-manager";
+import { testCostUsd } from "./test-quantity";
 
 // BATCH_SIZE = placements attempted per cron tick.
 // CONCURRENCY = parallel placements in flight inside a tick.
@@ -158,6 +159,7 @@ export async function launchCampaign(opts: {
         select: {
           id: true,
           minQuantity: true,
+          maxQuantity: true,
           ratePerK: true,
         },
       },
@@ -168,6 +170,7 @@ export async function launchCampaign(opts: {
   const svcList: Array<{
     id: number;
     minQuantity: number;
+    maxQuantity: number;
     ratePerK: number;
     cost: number;
   }> = [];
@@ -175,7 +178,10 @@ export async function launchCampaign(opts: {
   for (const c of cands) {
     if (!c.service || seen.has(c.service.id)) continue;
     seen.add(c.service.id);
-    const cost = (c.service.ratePerK * c.service.minQuantity) / 1000;
+    // Cost uses the floored test quantity (max(20, minQuantity)).
+    // Returns null when service.maxQuantity < 20 — silent skip.
+    const cost = testCostUsd(c.service);
+    if (cost === null) continue;
     if (cost > maxCost) {
       skipped.push({ id: c.service.id, cost });
       continue;

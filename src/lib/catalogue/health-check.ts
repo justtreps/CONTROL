@@ -21,6 +21,7 @@ import { prisma } from "@/lib/prisma";
 import { fetchServices, classifyServiceType, placeOrder } from "@/lib/bulkmedya";
 import { rematchAll } from "./matcher";
 import { detectCountry } from "@/lib/services/classifier";
+import { testCostUsd, testQuantityFor } from "@/lib/scoring/test-quantity";
 
 const REVIVE_BATCH_CAP = 200; // BulkMedya orders per run
 const REVIVE_CONCURRENCY = 25;
@@ -240,7 +241,14 @@ export async function runCatalogueHealthCheck(): Promise<HealthCheckSummary> {
         service: { active: true },
       },
       include: {
-        service: { select: { id: true, ratePerK: true, minQuantity: true } },
+        service: {
+          select: {
+            id: true,
+            ratePerK: true,
+            minQuantity: true,
+            maxQuantity: true,
+          },
+        },
       },
     });
     const seenForPlace = new Set<number>();
@@ -250,7 +258,8 @@ export async function runCatalogueHealthCheck(): Promise<HealthCheckSummary> {
     for (const c of newCands) {
       if (!c.service || seenForPlace.has(c.serviceId)) continue;
       seenForPlace.add(c.serviceId);
-      const cost = (c.service.ratePerK * c.service.minQuantity) / 1000;
+      const cost = testCostUsd(c.service);
+      if (cost === null) continue; // maxQuantity below floor — skip
       if (cost > AUTO_PLACE_MAX_COST_USD) {
         skippedExpensive++;
         continue;
@@ -402,10 +411,13 @@ async function tryReviveOne(serviceId: number): Promise<boolean> {
       platform: true,
       bulkmedyaId: true,
       minQuantity: true,
+      maxQuantity: true,
       poolType: true,
     },
   });
   if (!service) return false;
+  const probeQty = testQuantityFor(service);
+  if (probeQty === null) return false;
 
   const isEngagement = service.poolType === "engagement_test";
 
@@ -443,7 +455,7 @@ async function tryReviveOne(serviceId: number): Promise<boolean> {
     const order = await placeOrder({
       service: service.bulkmedyaId,
       link: bulkLink,
-      quantity: service.minQuantity,
+      quantity: probeQty,
     });
     return !("error" in order);
   } catch {

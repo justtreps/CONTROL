@@ -29,6 +29,7 @@ import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { withApiKey } from "@/lib/rapidapi/key-manager";
+import { testCostUsd, testQuantityFor } from "./test-quantity";
 
 const DEFAULT_MAX_COST_USD = 5;
 const BATCH_SIZE_BRUTE = 200;
@@ -70,7 +71,13 @@ export async function launchBruteCampaign(opts: {
     },
     include: {
       service: {
-        select: { id: true, minQuantity: true, ratePerK: true, active: true },
+        select: {
+          id: true,
+          minQuantity: true,
+          maxQuantity: true,
+          ratePerK: true,
+          active: true,
+        },
       },
     },
   });
@@ -83,7 +90,11 @@ export async function launchBruteCampaign(opts: {
     if (!c.service || !c.service.active) continue;
     if (seen.has(c.service.id)) continue;
     seen.add(c.service.id);
-    const cost = (c.service.ratePerK * c.service.minQuantity) / 1000;
+    // Cost uses the floored test quantity (max(20, minQuantity))
+    // so the budget estimate matches what's actually placed.
+    // Returns null when maxQuantity < 20 — skip those.
+    const cost = testCostUsd(c.service);
+    if (cost === null) continue;
     if (cost > maxCost) {
       skipped.push({ id: c.service.id, cost });
       continue;
@@ -129,10 +140,15 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
         platform: true,
         bulkmedyaId: true,
         minQuantity: true,
+        maxQuantity: true,
         poolType: true,
       },
     });
     if (!service) return { kind: "thrown", reason: "service_not_found" };
+    const testQty = testQuantityFor(service);
+    if (testQty === null) {
+      return { kind: "thrown", reason: `max_below_floor:${service.maxQuantity}` };
+    }
 
     const isEngagement = service.poolType === "engagement_test";
 
@@ -209,7 +225,7 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
       : await placeOrder({
           service: service.bulkmedyaId,
           link: bulkLink,
-          quantity: service.minQuantity,
+          quantity: testQty,
         });
 
     if ("error" in order) {
@@ -239,7 +255,7 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
         serviceId: service.id,
         testAccountId,
         bulkmedyaOrderId: simulated ? `sim-${order.order}` : String(order.order),
-        targetQuantity: service.minQuantity,
+        targetQuantity: testQty,
         baselineCount: baseFollower,
         status: "running",
         dryRun: simulated,

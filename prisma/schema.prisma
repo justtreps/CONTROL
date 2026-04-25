@@ -636,11 +636,29 @@ model ServiceScore {
   id               Int      @id @default(autoincrement())
   service          Service  @relation(fields: [serviceId], references: [id])
   serviceId        Int
+
+  // Backwards-compat alias — populated with weightedScore so old
+  // readers (services list, routing, etc.) automatically pick up
+  // the confidence-adjusted view without needing a code change.
   currentScore     Float
+
+  // Sub-scores feeding the moving average (unchanged semantics).
   completionFactor Float
   realismScore     Float
   speedScore       Float
   dropScore        Float
+
+  // Raw moving-average score over the last 30 RULE-1-valid
+  // TestOrders. 0-100 range, no confidence adjustment.
+  rawScore         Float    @default(0)
+
+  // sampleCount × confidence pair. confidence = min(1,
+  // sampleCount/10). weightedScore = rawScore × confidence —
+  // what the dashboard ranking + UI use.
+  sampleCount      Int      @default(0)
+  confidence       Float    @default(0)
+  weightedScore    Float    @default(0)
+
   computedAt       DateTime @default(now())
 
   @@index([serviceId, computedAt])
