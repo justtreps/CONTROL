@@ -109,6 +109,7 @@ type Stats = {
     PLACEMENT_FAILED: number;
     REMOVED_FROM_BULKMEDYA: number;
     PERMANENTLY_FAILED: number;
+    DEPRECATED_PRODUCT: number;
   };
   catalogueSync?: {
     last: {
@@ -1155,6 +1156,7 @@ function LifecycleCard({
     PLACEMENT_FAILED: number;
     REMOVED_FROM_BULKMEDYA: number;
     PERMANENTLY_FAILED: number;
+    DEPRECATED_PRODUCT: number;
   };
 }) {
   const cells: Array<{ label: string; value: number; color: string; hint: string }> = [
@@ -1166,10 +1168,11 @@ function LifecycleCard({
     { label: "PLACEMENT_FAILED", value: counts.PLACEMENT_FAILED, color: "#A030A0", hint: "BulkMedya rejected" },
     { label: "REMOVED", value: counts.REMOVED_FROM_BULKMEDYA, color: "#888888", hint: "Provider supprimé" },
     { label: "PERM_FAILED", value: counts.PERMANENTLY_FAILED, color: "#552020", hint: "3 fails consécutifs" },
+    { label: "DEPRECATED", value: counts.DEPRECATED_PRODUCT, color: "#604040", hint: "Produit Meta mort (IGTV…)" },
   ];
   const total = cells.reduce((a, c) => a + c.value, 0);
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 border-y border-[#666666]/20">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 border-y border-[#666666]/20">
       {cells.map((c, i) => {
         const pct = total > 0 ? Math.round((c.value / total) * 100) : 0;
         const bg = i % 2 === 0 ? "bg-[#030303]" : "bg-[#0D0D0D]";

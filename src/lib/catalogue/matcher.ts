@@ -63,6 +63,15 @@ const BOT_FAKE_RX = /\b(bot|fake|spam)\b/i;
 // exclude from the catalog by default.
 const AUTO_RX = /\bauto\b/i;
 
+// Deprecated products — Meta killed IGTV in 2022, all migrated to
+// Reels. Any service still mentioning IGTV in its name is by
+// definition obsolete (provider didn't update naming, or BulkMedya
+// still has stale rows). Word-boundary so "instagram tv" or
+// embedded substrings don't false-positive — but the BulkMedya
+// catalogue has historically used the literal token "igtv" and
+// "ig tv" with a space, so we cover both.
+const DEPRECATED_PRODUCT_RX = /\b(igtv|ig\s*tv)\b/i;
+
 // Helper: returns true if normalised name contains ALL given
 // word-bounded tokens.
 function containsAll(n: string, tokens: string[]): boolean {
@@ -99,6 +108,11 @@ function baseGate(s: ServiceLite, expectedPlatform: string): boolean {
   const n = s.name.toLowerCase();
   if (BOT_FAKE_RX.test(n)) return false;
   if (AUTO_RX.test(n)) return false;
+  // Block ALL IGTV-named services across every product slug —
+  // Meta killed the product, no point routing it. Future syncs
+  // will land them as out-of-scope which is correct: they don't
+  // map to any of the 8 MyBoost SKUs.
+  if (DEPRECATED_PRODUCT_RX.test(n)) return false;
   return true;
 }
 
