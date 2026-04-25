@@ -195,22 +195,25 @@ export async function onTestCompleted(params: {
     return { transition: "DEAD", reason: "T+7d sunset, no delivery" };
   }
 
-  // ── Path 2: QUALIFIED/MONITORED + 2 consecutive zero retests ─
+  // ── Path 2: QUALIFIED/MONITORED + 3 consecutive zero retests ─
   // Only kicks in for services that ALREADY delivered at least
-  // once. A single zero retest doesn't kill — providers can have
-  // an off day. Two in a row → DEAD.
+  // once. With the 3×/day retest cadence (every 8h), the prior
+  // 2-fail threshold made an 8h provider blip lethal — too
+  // brittle. Bumped to 3 so a kill needs ~24h of continuous
+  // failure to fire, while still catching a genuinely dead
+  // provider within a single day.
   if (cur === "QUALIFIED" || cur === "MONITORED") {
-    const lastTwo = await prisma.testOrder.findMany({
+    const lastThree = await prisma.testOrder.findMany({
       where: {
         serviceId: params.serviceId,
         status: { in: ["completed", "aborted_target_died", "aborted_other"] },
       },
       include: { measurements: true },
       orderBy: { completedAt: "desc" },
-      take: 2,
+      take: 3,
     });
-    if (lastTwo.length < 2) return { transition: "no_change" };
-    const allZero = lastTwo.every((o) => {
+    if (lastThree.length < 3) return { transition: "no_change" };
+    const allZero = lastThree.every((o) => {
       const peak = Math.max(
         o.baselineCount,
         ...o.measurements.map((m) => m.actualCount)
@@ -218,8 +221,8 @@ export async function onTestCompleted(params: {
       return peak <= o.baselineCount;
     });
     if (!allZero) return { transition: "no_change" };
-    await killService(params.serviceId, "auto_no_delivery_2x_retest");
-    return { transition: "DEAD", reason: "2 consecutive zero retests" };
+    await killService(params.serviceId, "auto_no_delivery_3x_retest");
+    return { transition: "DEAD", reason: "3 consecutive zero retests" };
   }
 
   return { transition: "no_change" };
@@ -278,8 +281,8 @@ export async function killService(
           title: `Service #${serviceId} désactivé auto (${reason})`,
           description: reason.startsWith("no_delivery_at_t_plus_7d")
             ? "Aucune livraison mesurée après 7 jours — service retiré du catalogue routable."
-            : "2 retests consécutifs sans livraison — service retiré du catalogue routable.",
-          explanation: `Lifecycle coordinator: ${reason}. Le service avait ${reason.startsWith("auto_no_delivery_2x_retest") ? "déjà délivré au moins une fois (QUALIFIED/MONITORED)" : "dépassé 7 jours sans aucune livraison RapidAPI mesurée"}. active=false pour écarter du routage, lifecycleStatus=DEAD sur toutes les candidacies.`,
+            : "3 retests consécutifs sans livraison — service retiré du catalogue routable.",
+          explanation: `Lifecycle coordinator: ${reason}. Le service avait ${reason.startsWith("auto_no_delivery_3x_retest") ? "déjà délivré au moins une fois (QUALIFIED/MONITORED) puis échoué 3 retests d'affilée" : "dépassé 7 jours sans aucune livraison RapidAPI mesurée"}. active=false pour écarter du routage, lifecycleStatus=DEAD sur toutes les candidacies.`,
           impact: "Le service n'est plus routable et ne sera plus retesté automatiquement.",
           suggestedAction: "Ouvrir /config/catalogue, cliquer REVIVE si besoin de retester (le service repassera en TESTING).",
           actionType: "link",
