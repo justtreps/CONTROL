@@ -39,7 +39,8 @@ export type LifecycleStatus =
   | "TESTING"
   | "QUALIFIED"
   | "MONITORED"
-  | "DEAD";
+  | "DEAD"
+  | "PLACEMENT_FAILED";
 
 const RANK: Record<LifecycleStatus, number> = {
   NEW: 0,
@@ -47,6 +48,7 @@ const RANK: Record<LifecycleStatus, number> = {
   QUALIFIED: 2,
   MONITORED: 3,
   DEAD: 4,
+  PLACEMENT_FAILED: 5,
 };
 
 // Returns the most-advanced lifecycle status across all of the
@@ -324,6 +326,7 @@ export async function lifecycleCounts(): Promise<Record<LifecycleStatus, number>
     QUALIFIED: 0,
     MONITORED: 0,
     DEAD: 0,
+    PLACEMENT_FAILED: 0,
   };
   const rows = await prisma.productServiceCandidate.findMany({
     select: { serviceId: true, lifecycleStatus: true },

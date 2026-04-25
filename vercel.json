@@ -24,6 +24,7 @@
     { "path": "/api/cron/workflow-executor", "schedule": "* * * * *" },
     { "path": "/api/cron/alerts-detector", "schedule": "*/2 * * * *" },
     { "path": "/api/cron/scoring-campaign-runner", "schedule": "* * * * *" },
+    { "path": "/api/cron/brute-campaign-runner", "schedule": "* * * * *" },
     { "path": "/api/cron/pool-cleanup-coordinator", "schedule": "*/2 * * * *" }
   ]
 }

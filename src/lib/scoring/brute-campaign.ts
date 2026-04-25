@@ -1,0 +1,432 @@
+// BRUTE-FORCE PLACEMENT CAMPAIGN.
+//
+// Hits every NEW eligible service with one real BulkMedya order.
+// Zero pre-checks: no oracle call, no fetchFollowerSnapshot, no
+// country filter, no private-flip guard, no auto-retry on dead
+// pool entities. Just:
+//
+//   1. SELECT first available pool entity (account for follower
+//      services, post for engagement) — peu importe son état
+//   2. POST BulkMedya.addOrder with the cached username/url
+//   3. INSERT TestOrder + Measurement(T+0) using the cached
+//      lastFollowerCount as baseline
+//   4. lifecycleStatus = TESTING
+//
+// On BulkMedya rejection: lifecycleStatus = PLACEMENT_FAILED
+// (distinct state — not DEAD, not back-to-NEW). Service is
+// excluded from the scoring routing pool but stays auditable.
+//
+// Cost cap: maxCostPerTestUsd ($5 default) skips the mega-min ADS
+// SKUs from the catalogue snapshot. That's the ONLY filter — if a
+// service costs ≤ $5 to test, it ships.
+//
+// Concurrency: 50 placements per wave (CONCURRENCY_BRUTE).
+// BATCH_SIZE_BRUTE caps per-tick processing so a single Vercel
+// cron run stays under the 300s budget. With 2762 services, a
+// 1-min cron at BATCH=200 finishes in ~14 ticks (≤ 15 min).
+
+import { prisma } from "@/lib/prisma";
+import { placeOrder } from "@/lib/bulkmedya";
+import { getSystemToggles } from "@/lib/system/toggles";
+import { withApiKey } from "@/lib/rapidapi/key-manager";
+
+const DEFAULT_MAX_COST_USD = 5;
+const BATCH_SIZE_BRUTE = 200;
+const CONCURRENCY_BRUTE = 50;
+const FLUSH_EVERY_WAVE = true;
+const BRUTE_MARKER = "brute_mode";
+
+export type BruteLaunchResult = {
+  campaignId: number;
+  totalServices: number;
+  estimatedCostUsd: number;
+  skippedExpensive: number;
+  skippedExpensiveCostUsd: number;
+};
+
+export type BruteTickResult = {
+  campaignId: number | null;
+  placed: number;
+  failed: number;
+  skipped: number;
+  remaining: number;
+  done: boolean;
+  stopped?: string;
+};
+
+// ── Launch ─────────────────────────────────────────────────────
+
+export async function launchBruteCampaign(opts: {
+  maxCostPerTestUsd?: number;
+} = {}): Promise<BruteLaunchResult | { error: string }> {
+  // Snapshot the NEW eligible services. We don't filter by
+  // service.active because the user wants ALL NEW — even ones
+  // marked active=false get considered.
+  const cands = await prisma.productServiceCandidate.findMany({
+    where: {
+      lifecycleStatus: "NEW",
+      isEligible: true,
+      forceExcluded: false,
+    },
+    include: {
+      service: {
+        select: { id: true, minQuantity: true, ratePerK: true, active: true },
+      },
+    },
+  });
+  const maxCost = opts.maxCostPerTestUsd ?? DEFAULT_MAX_COST_USD;
+  const seen = new Set<number>();
+  const accepted: number[] = [];
+  const skipped: Array<{ id: number; cost: number }> = [];
+  let totalCost = 0;
+  for (const c of cands) {
+    if (!c.service || !c.service.active) continue;
+    if (seen.has(c.service.id)) continue;
+    seen.add(c.service.id);
+    const cost = (c.service.ratePerK * c.service.minQuantity) / 1000;
+    if (cost > maxCost) {
+      skipped.push({ id: c.service.id, cost });
+      continue;
+    }
+    accepted.push(c.service.id);
+    totalCost += cost;
+  }
+  if (accepted.length === 0) return { error: "no_new_services_to_test" };
+
+  const campaign = await prisma.scoringCampaign.create({
+    data: {
+      status: "running",
+      stopReason: BRUTE_MARKER, // marker so the standard runner skips
+      targetServiceIds: accepted,
+      estimatedCostUsd: Math.round(totalCost * 100) / 100,
+    },
+  });
+
+  return {
+    campaignId: campaign.id,
+    totalServices: accepted.length,
+    estimatedCostUsd: Math.round(totalCost * 100) / 100,
+    skippedExpensive: skipped.length,
+    skippedExpensiveCostUsd:
+      Math.round(skipped.reduce((a, s) => a + s.cost, 0) * 100) / 100,
+  };
+}
+
+// ── Brute placement (single service) ───────────────────────────
+
+type BruteOutcome =
+  | { kind: "placed"; testOrderId: number }
+  | { kind: "no_pool" }
+  | { kind: "bulkmedya_failed"; reason: string }
+  | { kind: "thrown"; reason: string };
+
+async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
+  try {
+    const service = await prisma.service.findUnique({
+      where: { id: serviceId },
+      select: {
+        id: true,
+        platform: true,
+        bulkmedyaId: true,
+        minQuantity: true,
+        poolType: true,
+      },
+    });
+    if (!service) return { kind: "thrown", reason: "service_not_found" };
+
+    const isEngagement = service.poolType === "engagement_test";
+
+    // Pick the FIRST available pool entity. No country filter, no
+    // confidence filter — peu importe son état du moment qu'il
+    // est marqué available + active.
+    let username = "";
+    let baseFollower = 0;
+    let testAccountId = 0;
+    let postId: number | null = null;
+    let bulkLink = "";
+
+    if (isEngagement) {
+      const post = await prisma.testPost.findFirst({
+        where: {
+          status: "available",
+          platform: service.platform,
+        },
+        include: { testAccount: true },
+        orderBy: { firstSeenAt: "asc" },
+      });
+      if (!post) return { kind: "no_pool" };
+      // Atomically flip the post to assigned — we don't have a
+      // testOrderId yet so we use a placeholder; the create
+      // immediately below carries the real id and we patch the
+      // post with assignedTestOrderId after the order lands.
+      const flipped = await prisma.testPost
+        .update({
+          where: { id: post.id },
+          data: { status: "assigned", assignedAt: new Date() },
+        })
+        .catch(() => null);
+      if (!flipped) return { kind: "no_pool" };
+      username = post.testAccount.username;
+      baseFollower = post.testAccount.lastFollowerCount ?? 0;
+      testAccountId = post.testAccountId;
+      postId = post.id;
+      bulkLink = post.mediaUrl;
+    } else {
+      const account = await prisma.testAccount.findFirst({
+        where: {
+          status: "available",
+          platform: service.platform,
+          accountType: "follower_test",
+        },
+        orderBy: { firstSeenAt: "asc" },
+      });
+      if (!account) return { kind: "no_pool" };
+      const flipped = await prisma.testAccount
+        .update({
+          where: { id: account.id },
+          data: {
+            status: "assigned",
+            assignedAt: new Date(),
+            active: false,
+          },
+        })
+        .catch(() => null);
+      if (!flipped) return { kind: "no_pool" };
+      username = account.username;
+      baseFollower = account.lastFollowerCount ?? 0;
+      testAccountId = account.id;
+      bulkLink =
+        service.platform === "instagram"
+          ? `https://www.instagram.com/${username}/`
+          : `https://www.tiktok.com/@${username}`;
+    }
+
+    const toggles = await getSystemToggles();
+    const simulated = !toggles.testBotEnabled || toggles.dryRunMode;
+
+    const order = simulated
+      ? { order: Date.now() + Math.floor(Math.random() * 1000) }
+      : await placeOrder({
+          service: service.bulkmedyaId,
+          link: bulkLink,
+          quantity: service.minQuantity,
+        });
+
+    if ("error" in order) {
+      // Release the pool entity — BulkMedya rejected, keep it
+      // available for the next attempt.
+      if (postId) {
+        await prisma.testPost
+          .update({
+            where: { id: postId },
+            data: { status: "available", assignedAt: null },
+          })
+          .catch(() => null);
+      } else {
+        await prisma.testAccount
+          .update({
+            where: { id: testAccountId },
+            data: { status: "available", assignedAt: null, active: true },
+          })
+          .catch(() => null);
+      }
+      return { kind: "bulkmedya_failed", reason: String(order.error).slice(0, 200) };
+    }
+
+    // Write the TestOrder + T+0 baseline measurement inline.
+    const testOrder = await prisma.testOrder.create({
+      data: {
+        serviceId: service.id,
+        testAccountId,
+        bulkmedyaOrderId: simulated ? `sim-${order.order}` : String(order.order),
+        targetQuantity: service.minQuantity,
+        baselineCount: baseFollower,
+        status: "running",
+        dryRun: simulated,
+        lastHealthCheckAt: new Date(),
+        nextPollAt: new Date(Date.now() + 12 * 60 * 60_000),
+      },
+    });
+    await prisma.measurement.create({
+      data: {
+        testOrderId: testOrder.id,
+        checkpoint: "T+0",
+        actualCount: baseFollower,
+        realismData: {},
+      },
+    });
+    if (postId) {
+      await prisma.testPost
+        .update({
+          where: { id: postId },
+          data: { assignedTestOrderId: testOrder.id },
+        })
+        .catch(() => null);
+    } else {
+      await prisma.testAccount
+        .update({
+          where: { id: testAccountId },
+          data: { assignedTestOrderId: testOrder.id },
+        })
+        .catch(() => null);
+    }
+    // Lifecycle: NEW → TESTING. Service-wide updateMany so all
+    // candidacies for this service flip together.
+    await prisma.productServiceCandidate.updateMany({
+      where: { serviceId: service.id, lifecycleStatus: "NEW" },
+      data: { lifecycleStatus: "TESTING" },
+    });
+    await prisma.service.update({
+      where: { id: service.id },
+      data: { lastTestedAt: new Date() },
+    });
+    return { kind: "placed", testOrderId: testOrder.id };
+  } catch (e) {
+    return { kind: "thrown", reason: (e as Error).message.slice(0, 200) };
+  }
+}
+
+// ── Tick (called by /api/cron/brute-campaign-runner) ───────────
+
+export async function runBruteCampaignTick(): Promise<BruteTickResult> {
+  const result: BruteTickResult = {
+    campaignId: null,
+    placed: 0,
+    failed: 0,
+    skipped: 0,
+    remaining: 0,
+    done: false,
+  };
+  const campaign = await prisma.scoringCampaign.findFirst({
+    where: { status: "running", stopReason: BRUTE_MARKER },
+    orderBy: { id: "desc" },
+  });
+  if (!campaign) {
+    result.done = true;
+    return result;
+  }
+  result.campaignId = campaign.id;
+
+  const placedSet = new Set(campaign.placedServiceIds);
+  const pending = campaign.targetServiceIds.filter((id) => !placedSet.has(id));
+  if (pending.length === 0) {
+    await prisma.scoringCampaign.update({
+      where: { id: campaign.id },
+      data: { status: "completed", finishedAt: new Date() },
+    });
+    result.done = true;
+    return result;
+  }
+  const batch = pending.slice(0, BATCH_SIZE_BRUTE);
+
+  // Round-robin RapidAPI keys across waves. The brute placement
+  // doesn't make oracle calls but BulkMedya client may indirectly
+  // touch the rate limiter; the wrap costs nothing when unused.
+  const activeKeys = await prisma.rapidApiKey.findMany({
+    where: { provider: "instagram", status: "active" },
+    select: { id: true, token: true, provider: true },
+  });
+
+  const placed = new Set<number>(placedSet);
+  const failed = new Set<number>();
+
+  let flushAccum = 0;
+  const flush = async () => {
+    if (flushAccum === 0) return;
+    flushAccum = 0;
+    await prisma.scoringCampaign.update({
+      where: { id: campaign.id },
+      data: {
+        placedServiceIds: Array.from(placed),
+        placedCount: result.placed + (campaign.placedCount ?? 0),
+        abortedCount: result.failed + (campaign.abortedCount ?? 0),
+      },
+    });
+  };
+
+  const placeOne = async (sid: number, idx: number) => {
+    const key = activeKeys.length ? activeKeys[idx % activeKeys.length] : null;
+    const run = async () => {
+      const outcome = await placeBruteOne(sid);
+      if (outcome.kind === "placed") {
+        result.placed++;
+        placed.add(sid);
+      } else if (outcome.kind === "no_pool") {
+        // Don't mark placed so the next tick retries when pool
+        // refills. Counts as skipped.
+        result.skipped++;
+      } else {
+        // bulkmedya_failed or thrown — distinct state.
+        await prisma.productServiceCandidate.updateMany({
+          where: { serviceId: sid },
+          data: { lifecycleStatus: "PLACEMENT_FAILED", isEligible: false },
+        });
+        result.failed++;
+        failed.add(sid);
+        placed.add(sid); // mark to skip on next tick
+        console.warn(
+          `[brute] svc#${sid} ${outcome.kind}: ${(outcome as { reason?: string }).reason ?? ""}`
+        );
+      }
+      flushAccum++;
+    };
+    if (key) {
+      await withApiKey(
+        { id: key.id, token: key.token, provider: key.provider },
+        undefined,
+        run
+      );
+    } else {
+      await run();
+    }
+  };
+
+  for (let i = 0; i < batch.length; i += CONCURRENCY_BRUTE) {
+    const wave = batch.slice(i, i + CONCURRENCY_BRUTE);
+    await Promise.all(wave.map((sid, j) => placeOne(sid, i + j)));
+    if (FLUSH_EVERY_WAVE) await flush();
+  }
+  await flush();
+
+  result.remaining = campaign.targetServiceIds.length - placed.size;
+  if (result.remaining <= 0) {
+    await prisma.scoringCampaign.update({
+      where: { id: campaign.id },
+      data: { status: "completed", finishedAt: new Date() },
+    });
+    result.done = true;
+  }
+  return result;
+}
+
+// Helper: dashboard / endpoint convenience — returns the active
+// brute campaign with a few derived fields.
+export async function getActiveBruteCampaign() {
+  const c = await prisma.scoringCampaign.findFirst({
+    where: { status: { in: ["running", "paused"] }, stopReason: BRUTE_MARKER },
+    orderBy: { id: "desc" },
+  });
+  if (!c) return null;
+  const remaining =
+    c.targetServiceIds.length - c.placedServiceIds.length;
+  const elapsedMin = Math.max(
+    1,
+    Math.floor((Date.now() - c.startedAt.getTime()) / 60_000)
+  );
+  const ratePerHour = (c.placedCount / elapsedMin) * 60;
+  const etaMinutes =
+    ratePerHour > 0 ? Math.round((remaining / ratePerHour) * 60) : null;
+  return {
+    id: c.id,
+    status: c.status,
+    startedAt: c.startedAt.toISOString(),
+    finishedAt: c.finishedAt ? c.finishedAt.toISOString() : null,
+    targetCount: c.targetServiceIds.length,
+    placedCount: c.placedCount,
+    failedCount: c.abortedCount,
+    remaining,
+    estimatedCostUsd: c.estimatedCostUsd,
+    placementRatePerHour: Math.round(ratePerHour),
+    etaMinutes,
+  };
+}

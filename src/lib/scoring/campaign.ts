@@ -227,8 +227,14 @@ export async function runCampaignTick(): Promise<TickResult> {
     remaining: 0,
   };
 
+  // Standard runner skips brute-mode campaigns — those are
+  // handled by /api/cron/brute-campaign-runner with raw BulkMedya
+  // placement (no oracle / health / country pre-checks).
   const campaign = await prisma.scoringCampaign.findFirst({
-    where: { status: "running" },
+    where: {
+      status: "running",
+      NOT: { stopReason: "brute_mode" },
+    },
     orderBy: { startedAt: "asc" },
   });
   if (!campaign) return result;

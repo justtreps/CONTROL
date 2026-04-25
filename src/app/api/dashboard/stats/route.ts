@@ -412,9 +412,13 @@ async function build() {
   // ── Scoring campaign (if any active) ──────────────────────────
   const campaign = await getActiveCampaign();
 
-  // ── Catalogue lifecycle (NEW/TESTING/QUALIFIED/MONITORED/DEAD) ─
-  // De-duped per service so the totals reflect "how many
-  // services are in each state", not "how many candidacy rows".
+  // ── Brute placement campaign (#2 et au-delà) ──────────────────
+  const { getActiveBruteCampaign } = await import(
+    "@/lib/scoring/brute-campaign"
+  );
+  const bruteCampaign = await getActiveBruteCampaign();
+
+  // ── Catalogue lifecycle ───────────────────────────────────────
   const { lifecycleCounts } = await import("@/lib/catalogue/lifecycle");
   const catalogueLifecycle = await lifecycleCounts();
 
@@ -431,6 +435,7 @@ async function build() {
     recentEvents,
     heatmap,
     campaign,
+    bruteCampaign,
     catalogueLifecycle,
   };
 }

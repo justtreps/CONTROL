@@ -87,12 +87,26 @@ type Stats = {
     placementRatePerHour: number;
     remaining: number;
   } | null;
+  bruteCampaign?: {
+    id: number;
+    status: string;
+    startedAt: string;
+    finishedAt: string | null;
+    targetCount: number;
+    placedCount: number;
+    failedCount: number;
+    remaining: number;
+    estimatedCostUsd: number | null;
+    placementRatePerHour: number;
+    etaMinutes: number | null;
+  } | null;
   catalogueLifecycle?: {
     NEW: number;
     TESTING: number;
     QUALIFIED: number;
     MONITORED: number;
     DEAD: number;
+    PLACEMENT_FAILED: number;
   };
 };
 type ServiceRow = {
@@ -256,9 +270,17 @@ export function DashboardClient({
         </Section>
       )}
 
-      {/* Catalogue lifecycle — always shown once the schema has
-          lifecycle data. 5 buckets: NEW / TESTING / QUALIFIED /
-          MONITORED / DEAD. */}
+      {/* Brute placement campaign — visible whenever a brute-mode
+          campaign is running. Sits above the lifecycle card so
+          the operator sees throughput live. */}
+      {stats.bruteCampaign && (
+        <Section title={`PLACEMENT MASSIF · CAMPAGNE #${stats.bruteCampaign.id}`}>
+          <BruteCampaignCard campaign={stats.bruteCampaign} />
+        </Section>
+      )}
+
+      {/* Catalogue lifecycle — 6 buckets: NEW / TESTING /
+          QUALIFIED / MONITORED / DEAD / PLACEMENT_FAILED. */}
       {stats.catalogueLifecycle && (
         <Section title="CYCLE DE VIE CATALOGUE">
           <LifecycleCard counts={stats.catalogueLifecycle} />
@@ -1099,18 +1121,20 @@ function LifecycleCard({
     QUALIFIED: number;
     MONITORED: number;
     DEAD: number;
+    PLACEMENT_FAILED: number;
   };
 }) {
   const cells: Array<{ label: string; value: number; color: string; hint: string }> = [
     { label: "NEW", value: counts.NEW, color: "#66CCFF", hint: "Jamais testé" },
     { label: "TESTING", value: counts.TESTING, color: "#FFCC00", hint: "Test initial en cours" },
-    { label: "QUALIFIED", value: counts.QUALIFIED, color: "#00FF88", hint: "Score ≥ 40" },
+    { label: "QUALIFIED", value: counts.QUALIFIED, color: "#00FF88", hint: "Livraison mesurée" },
     { label: "MONITORED", value: counts.MONITORED, color: "#00CC66", hint: "Retest 1×/jour" },
-    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "Auto-killed" },
+    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "Auto-killed T+7d" },
+    { label: "PLACEMENT_FAILED", value: counts.PLACEMENT_FAILED, color: "#A030A0", hint: "BulkMedya rejected" },
   ];
   const total = cells.reduce((a, c) => a + c.value, 0);
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 border-y border-[#666666]/20">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 border-y border-[#666666]/20">
       {cells.map((c, i) => {
         const pct = total > 0 ? Math.round((c.value / total) * 100) : 0;
         const bg = i % 2 === 0 ? "bg-[#030303]" : "bg-[#0D0D0D]";
@@ -1136,6 +1160,81 @@ function LifecycleCard({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function BruteCampaignCard({
+  campaign,
+}: {
+  campaign: NonNullable<Stats["bruteCampaign"]>;
+}) {
+  const pct =
+    campaign.targetCount > 0
+      ? (campaign.placedCount / campaign.targetCount) * 100
+      : 0;
+  return (
+    <div className="border-y border-[#666666]/20 p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            PLACÉS
+          </span>
+          <span className="font-mono text-3xl tabular-nums text-[#00CC66]">
+            {campaign.placedCount.toLocaleString("en-US")}
+          </span>
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest">
+            / {campaign.targetCount.toLocaleString("en-US")}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            FAILED
+          </span>
+          <span className="font-mono text-3xl tabular-nums text-[#A030A0]">
+            {campaign.failedCount.toLocaleString("en-US")}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            RESTANTS
+          </span>
+          <span className="font-mono text-3xl tabular-nums text-[#FFCC00]">
+            {campaign.remaining.toLocaleString("en-US")}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            RYTHME
+          </span>
+          <span className="font-mono text-3xl tabular-nums text-white">
+            {campaign.placementRatePerHour}
+            <span className="text-[#666666] text-lg ml-1">/h</span>
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+            ETA
+          </span>
+          <span className="font-mono text-3xl tabular-nums text-[#66CCFF]">
+            {formatEta(campaign.etaMinutes)}
+          </span>
+        </div>
+      </div>
+      <div className="w-full h-2 bg-[#666666]/20">
+        <div
+          className="h-full transition-all"
+          style={{ width: `${Math.min(100, pct)}%`, background: "#00CC66" }}
+        />
+      </div>
+      <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase normal-case">
+        Démarrée {new Date(campaign.startedAt).toISOString().slice(0, 19)} UTC ·{" "}
+        {pct.toFixed(1)}% complétée · coût estimé{" "}
+        {campaign.estimatedCostUsd
+          ? `$${campaign.estimatedCostUsd.toFixed(2)}`
+          : "—"}{" "}
+        · status {campaign.status}
+      </div>
     </div>
   );
 }
