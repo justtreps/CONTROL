@@ -145,9 +145,11 @@ export function DashboardClient({
 
   return (
     <>
-      {/* Header — planet-earth video background restored
-          (same pattern as /legacy + /login). */}
-      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-8 relative overflow-hidden">
+      {/* Header — planet-earth video background, full-screen
+          hero pattern lifted from /legacy: min-h-[70vh→80vh] +
+          flex flex-col justify-end so the title anchors to the
+          bottom of the section while the video fills the rest. */}
+      <section className="min-h-[70vh] md:min-h-[80vh] w-full flex flex-col justify-end px-4 md:px-8 pb-10 md:pb-12 pt-24 md:pt-32 relative overflow-hidden">
         <video
           autoPlay
           loop
@@ -160,7 +162,7 @@ export function DashboardClient({
         />
         <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-[#030303] via-transparent to-[#030303]" />
         <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-r from-[#030303]/60 via-transparent to-[#030303]/60" />
-        <div className="max-w-7xl mx-auto flex flex-col gap-4 relative z-10">
+        <div className="max-w-7xl mx-auto w-full flex flex-col gap-4 relative z-10">
           <div className="font-mono text-xs text-[#FF3300] tracking-widest border border-[#FF3300] px-3 py-1 w-max">
             [ OBSERVABILITÉ LIVE · REFRESH 10s ]
           </div>
