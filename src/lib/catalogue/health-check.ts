@@ -25,6 +25,10 @@ import { detectCountry } from "@/lib/services/classifier";
 const REVIVE_BATCH_CAP = 200; // BulkMedya orders per run
 const REVIVE_CONCURRENCY = 25;
 const PERMANENT_FAIL_AFTER = 3;
+// Per-service cost cap for auto-placement of NEW services.
+// Mega-min ADS SKUs ($350+) are skipped here, same logic as the
+// campaign runners.
+const AUTO_PLACE_MAX_COST_USD = 5;
 
 export type HealthCheckSummary = {
   runId: number;
@@ -38,6 +42,16 @@ export type HealthCheckSummary = {
   rematchUpdated: number;
   rematchOutOfScope: number;
   perProduct: Record<string, number>;
+  // Phase F — auto-place NEW services via brute-mode campaign.
+  // The actual BulkMedya orders are handled by /api/cron/brute-
+  // campaign-runner so we don't blow the 300s health-check budget.
+  autoPlace: {
+    queuedCount: number;
+    skippedExpensive: number;
+    estimatedCostUsd: number;
+    campaignId: number | null;
+    mode: "new_campaign" | "merged_into_existing" | "no_op";
+  };
   durationMs: number;
 };
 
@@ -212,7 +226,95 @@ export async function runCatalogueHealthCheck(): Promise<HealthCheckSummary> {
     //    matches.
     const rematch = await rematchAll();
 
-    // F. Emit alerts + persist run.
+    // F. Auto-place every NEW eligible service. We don't run the
+    //    BulkMedya orders inline (would blow the 300s budget on
+    //    1000+ services) — instead we hand them off to the brute-
+    //    campaign-runner cron which fires every minute. If a
+    //    brute campaign is already running, we merge our IDs into
+    //    its targetServiceIds so it drains both at once.
+    const newCands = await prisma.productServiceCandidate.findMany({
+      where: {
+        lifecycleStatus: "NEW",
+        isEligible: true,
+        forceExcluded: false,
+        service: { active: true },
+      },
+      include: {
+        service: { select: { id: true, ratePerK: true, minQuantity: true } },
+      },
+    });
+    const seenForPlace = new Set<number>();
+    const placeable: number[] = [];
+    let placeCost = 0;
+    let skippedExpensive = 0;
+    for (const c of newCands) {
+      if (!c.service || seenForPlace.has(c.serviceId)) continue;
+      seenForPlace.add(c.serviceId);
+      const cost = (c.service.ratePerK * c.service.minQuantity) / 1000;
+      if (cost > AUTO_PLACE_MAX_COST_USD) {
+        skippedExpensive++;
+        continue;
+      }
+      placeable.push(c.serviceId);
+      placeCost += cost;
+    }
+
+    let autoPlaceMode: "new_campaign" | "merged_into_existing" | "no_op" = "no_op";
+    let autoPlaceCampaignId: number | null = null;
+
+    if (placeable.length > 0) {
+      const activeBrute = await prisma.scoringCampaign.findFirst({
+        where: { status: "running", stopReason: "brute_mode" },
+        orderBy: { id: "desc" },
+      });
+      if (activeBrute) {
+        // Merge the new IDs into the existing campaign so the
+        // runner picks them up on its next tick. Dedup against
+        // already-placed services so we don't double-fire.
+        const placedSet = new Set(activeBrute.placedServiceIds);
+        const merged = Array.from(
+          new Set([
+            ...activeBrute.targetServiceIds,
+            ...placeable.filter((id) => !placedSet.has(id)),
+          ])
+        );
+        await prisma.scoringCampaign.update({
+          where: { id: activeBrute.id },
+          data: {
+            targetServiceIds: merged,
+            estimatedCostUsd:
+              (activeBrute.estimatedCostUsd ?? 0) +
+              Math.round(placeCost * 100) / 100,
+          },
+        });
+        autoPlaceCampaignId = activeBrute.id;
+        autoPlaceMode = "merged_into_existing";
+      } else {
+        const created = await prisma.scoringCampaign.create({
+          data: {
+            status: "running",
+            stopReason: "brute_mode",
+            targetServiceIds: placeable,
+            estimatedCostUsd: Math.round(placeCost * 100) / 100,
+          },
+        });
+        autoPlaceCampaignId = created.id;
+        autoPlaceMode = "new_campaign";
+
+        // Fire-and-forget the first tick so placements start
+        // before the next minute-cron firing.
+        const origin = process.env.VERCEL_URL
+          ? `https://${process.env.VERCEL_URL}`
+          : process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+        const secret = process.env.CRON_SECRET ?? "";
+        void fetch(`${origin}/api/cron/brute-campaign-runner`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${secret}` },
+        }).catch(() => null);
+      }
+    }
+
+    // G. Emit alerts + persist run.
     const summary: HealthCheckSummary = {
       runId: run.id,
       bulkmedyaTotal: bulkmedyaIdsReturned.size,
@@ -227,6 +329,13 @@ export async function runCatalogueHealthCheck(): Promise<HealthCheckSummary> {
       perProduct: Object.fromEntries(
         Object.entries(rematch.perProduct).map(([slug, b]) => [slug, b.eligible])
       ),
+      autoPlace: {
+        queuedCount: placeable.length,
+        skippedExpensive,
+        estimatedCostUsd: Math.round(placeCost * 100) / 100,
+        campaignId: autoPlaceCampaignId,
+        mode: autoPlaceMode,
+      },
       durationMs: Date.now() - startedAt,
     };
 
