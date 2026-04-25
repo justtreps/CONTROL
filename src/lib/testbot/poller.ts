@@ -25,7 +25,10 @@
 
 import { prisma } from "@/lib/prisma";
 import { fetchOracleFor } from "@/lib/pool/oracle";
-import { onTestCompleted } from "@/lib/catalogue/lifecycle";
+import {
+  onMeasurementWritten,
+  onTestCompleted,
+} from "@/lib/catalogue/lifecycle";
 
 // ── Tuning knobs ────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
@@ -152,6 +155,20 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
     update: { actualCount: currentCount },
   });
 
+  // Per-poll qualification — fires on EVERY measurement, not just
+  // at finalize. A service that delivers in the first 30 min flips
+  // to QUALIFIED right away, doesn't wait for the T+7d sunset.
+  // No-ops when deliveredQty <= 0 or service is already QUALIFIED+.
+  await onMeasurementWritten({
+    serviceId: order.serviceId,
+    deliveredQty,
+  }).catch((e) => {
+    result.errors.push({
+      orderId: order.id,
+      reason: `lifecycle_qualify: ${(e as Error).message.slice(0, 80)}`,
+    });
+  });
+
   if (shouldFinalise) {
     await prisma.testOrder.update({
       where: { id: order.id },
@@ -162,11 +179,10 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
         nextPollAt: null,
       },
     });
-    // Drive the lifecycle state machine: this order either lifts
-    // the service to QUALIFIED/MONITORED (delivered > 0) or
-    // contributes to a kill signal (2 consecutive zeros). Failure
-    // here is tolerated — the next retest will re-trigger the
-    // same check.
+    // Terminal-state lifecycle: only fires DEAD transitions (T+7d
+    // sunset for TESTING, 2-consecutive-zero rule for QUALIFIED/
+    // MONITORED). Up-transitions already happened in the per-poll
+    // hook above.
     await onTestCompleted({
       serviceId: order.serviceId,
       testOrderId: order.id,
@@ -174,7 +190,7 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
     }).catch((e) => {
       result.errors.push({
         orderId: order.id,
-        reason: `lifecycle_hook: ${(e as Error).message.slice(0, 80)}`,
+        reason: `lifecycle_finalize: ${(e as Error).message.slice(0, 80)}`,
       });
     });
     result.ordersFinalised++;

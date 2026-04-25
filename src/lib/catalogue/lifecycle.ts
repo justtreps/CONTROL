@@ -1,27 +1,35 @@
 // Service lifecycle state machine.
 //
-// Each ProductServiceCandidate carries a lifecycleStatus field that
-// transitions through the following states during its life:
+// New rule (April 2026): qualify FAST, die SLOW.
 //
-//   NEW       → first time ever seen, never tested
-//   TESTING   → has a running TestOrder, waiting on completion
-//   QUALIFIED → most recent completed test delivered > 0 AND the
-//               scoring engine gave it currentScore >= 40
-//   MONITORED → qualified + in the daily retest loop (automatic
-//               transition — QUALIFIED is just the threshold
-//               moment, MONITORED is the steady state)
-//   DEAD      → 2 consecutive 0-delivery terminal tests → kill
+//   NEW       → never tested
+//   TESTING   → has a running TestOrder, no qualifying measurement yet
+//   QUALIFIED → first time RapidAPI measured actualCount > baseline
+//               on ANY of the service's TestOrders. Score doesn't
+//               matter — what matters is "the provider actually
+//               delivered something". Happens at poll-time, not
+//               wait-for-T+7d.
+//   MONITORED → QUALIFIED + has been retested at least once (i.e.
+//               has ≥ 2 TestOrders). The daily-retest cron picks
+//               MONITORED services so the score stays fresh.
+//   DEAD      → status TESTING and oldest TestOrder ≥ 7 days old
+//               with no delivery EVER, OR a QUALIFIED/MONITORED
+//               service whose last 2 retests both delivered 0.
+//               Initial-test services NEVER die before T+7d —
+//               BulkMedya can be slow, the operator should give it
+//               the full window.
 //
-// The state machine is edge-triggered:
-//   - onPlacement(serviceId)         NEW → TESTING
-//   - onTestCompleted(testOrder)     TESTING/MONITORED → one of
-//                                    QUALIFIED / MONITORED / DEAD
-//   - forceKill(serviceId)           any → DEAD (operator override)
-//   - revive(serviceId)              DEAD → MONITORED
+// Three entry points:
+//   • markTesting(serviceId)             NEW → TESTING (placement)
+//   • onMeasurementWritten(...)          per-poll: triggers QUALIFIED /
+//                                        MONITORED on first delivery
+//                                        signal
+//   • onTestCompleted(...)               at finalize: triggers DEAD
+//                                        via T+7d sunset OR 2-zero
+//                                        rule on retests
 //
-// Kill is service-wide — all candidacies for the service flip to
-// DEAD and service.active=false. The per-product column supports
-// future product-specific kill logic without a schema change.
+// Kill is service-wide — service.active=false + DEAD on every
+// candidacy. revive() is the operator-facing inverse.
 
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
@@ -33,13 +41,34 @@ export type LifecycleStatus =
   | "MONITORED"
   | "DEAD";
 
-// Score floor for a service to be considered QUALIFIED. Below this
-// the service stays in TESTING (keeps getting retested at the next
-// campaign tick, eventually drifts to DEAD if delivery is 0).
-export const QUALIFY_SCORE = 40;
+const RANK: Record<LifecycleStatus, number> = {
+  NEW: 0,
+  TESTING: 1,
+  QUALIFIED: 2,
+  MONITORED: 3,
+  DEAD: 4,
+};
 
-// NEW → TESTING. Called from lib/testbot.ts right after TestOrder
-// creation. No-op if already past TESTING.
+// Returns the most-advanced lifecycle status across all of the
+// service's candidacies.
+async function bestStatus(
+  serviceId: number
+): Promise<LifecycleStatus | null> {
+  const rows = await prisma.productServiceCandidate.findMany({
+    where: { serviceId },
+    select: { lifecycleStatus: true },
+  });
+  if (rows.length === 0) return null;
+  let best: LifecycleStatus = "NEW";
+  for (const r of rows) {
+    const s = r.lifecycleStatus as LifecycleStatus;
+    if (RANK[s] > RANK[best]) best = s;
+  }
+  return best;
+}
+
+// NEW → TESTING. No-op if any candidacy has already moved past
+// NEW. Called from lib/testbot.ts right after TestOrder.create.
 export async function markTesting(serviceId: number): Promise<void> {
   await prisma.productServiceCandidate.updateMany({
     where: { serviceId, lifecycleStatus: "NEW" },
@@ -47,25 +76,122 @@ export async function markTesting(serviceId: number): Promise<void> {
   });
 }
 
-// Called from the poller when a TestOrder transitions to
-// completed/aborted. Decides the next lifecycle state based on
-// the last 2 test outcomes + the service's current score.
+// Called by the poller every time it writes a Measurement (poll
+// or finalize). The earlier version only ran at finalize, which
+// meant a service that delivered in 30 min sat in TESTING for
+// 7 days. Now: as soon as deliveredQty > 0 → QUALIFIED.
+//
+// MONITORED transition fires when QUALIFIED service has ≥2
+// TestOrders (proxy for "has been retested at least once").
+export async function onMeasurementWritten(params: {
+  serviceId: number;
+  deliveredQty: number;
+}): Promise<void> {
+  if (params.deliveredQty <= 0) return;
+
+  const cur = await bestStatus(params.serviceId);
+  if (cur === null) return;
+  if (cur === "DEAD") return; // operator must revive() first
+
+  // QUALIFIED → MONITORED needs the retest signal: this service
+  // has been tested more than once. We count distinct TestOrders
+  // for the service.
+  if (cur === "QUALIFIED") {
+    const orderCount = await prisma.testOrder.count({
+      where: { serviceId: params.serviceId },
+    });
+    if (orderCount >= 2) {
+      await prisma.productServiceCandidate.updateMany({
+        where: {
+          serviceId: params.serviceId,
+          lifecycleStatus: "QUALIFIED",
+        },
+        data: { lifecycleStatus: "MONITORED" },
+      });
+    }
+    return;
+  }
+
+  if (cur === "MONITORED") return; // already at the steady state
+
+  // cur is NEW or TESTING — first delivery signal → QUALIFIED.
+  // Use ≥2 orders to skip straight to MONITORED if the test has
+  // already been retested before delivery showed up.
+  const orderCount = await prisma.testOrder.count({
+    where: { serviceId: params.serviceId },
+  });
+  const next: LifecycleStatus = orderCount >= 2 ? "MONITORED" : "QUALIFIED";
+  await prisma.productServiceCandidate.updateMany({
+    where: {
+      serviceId: params.serviceId,
+      lifecycleStatus: { in: ["NEW", "TESTING"] },
+    },
+    data: { lifecycleStatus: next },
+  });
+}
+
+// Called by the poller when a TestOrder transitions to
+// completed/aborted. Decides whether to fire a DEAD transition:
+//   • TESTING + age ≥ 7d + no delivery EVER → DEAD (sunset)
+//   • QUALIFIED/MONITORED + last 2 retests delivered 0 → DEAD
+// QUALIFICATION up-transitions are handled by onMeasurementWritten
+// above so this function is purely terminal-state work.
 export async function onTestCompleted(params: {
   serviceId: number;
-  // The row we just finalised — passed in so the caller doesn't
-  // double-fetch.
   testOrderId: number;
   deliveredQty: number;
 }): Promise<{
-  transition: "QUALIFIED" | "MONITORED" | "DEAD" | "stayed_testing" | "no_change";
+  transition: "DEAD" | "no_change";
   reason?: string;
 }> {
   const toggles = await getSystemToggles();
+  if (!toggles.autoKillDeadServicesEnabled) return { transition: "no_change" };
 
-  // 1. Compute the auto-kill signal: last 2 terminal TestOrders
-  //    for this service, both delivered == 0.
-  let killSignal = false;
-  if (toggles.autoKillDeadServicesEnabled) {
+  const cur = await bestStatus(params.serviceId);
+  if (cur === null || cur === "DEAD") return { transition: "no_change" };
+
+  // ── Path 1: TESTING + T+7d sunset ────────────────────────────
+  // Initial test never delivered. Wait the full window before
+  // killing — BulkMedya providers can be slow.
+  if (cur === "NEW" || cur === "TESTING") {
+    if (params.deliveredQty > 0) return { transition: "no_change" };
+    // Has the service EVER had a delivery on any of its TestOrders?
+    // If yes, the per-poll qualifier should have already promoted
+    // it; we still recheck to be defensive against missed hooks.
+    const everDelivered = await serviceEverDelivered(params.serviceId);
+    if (everDelivered) {
+      // Belt-and-braces: re-trigger the up-transition so the
+      // candidate row matches reality.
+      await onMeasurementWritten({
+        serviceId: params.serviceId,
+        deliveredQty: 1,
+      });
+      return { transition: "no_change" };
+    }
+    // Compute the oldest order's age. We use OLDEST instead of
+    // THIS order's age because retries / re-placement chains can
+    // produce a fresh order on a service that's been TESTING for
+    // 6+ days; the meaningful "give up" signal is "this service
+    // has been failing to deliver for a week".
+    const oldest = await prisma.testOrder.findFirst({
+      where: { serviceId: params.serviceId },
+      orderBy: { placedAt: "asc" },
+      select: { placedAt: true },
+    });
+    if (!oldest) return { transition: "no_change" };
+    const ageMs = Date.now() - oldest.placedAt.getTime();
+    if (ageMs < 7 * 24 * 60 * 60_000) {
+      return { transition: "no_change" };
+    }
+    await killService(params.serviceId, "no_delivery_at_t_plus_7d");
+    return { transition: "DEAD", reason: "T+7d sunset, no delivery" };
+  }
+
+  // ── Path 2: QUALIFIED/MONITORED + 2 consecutive zero retests ─
+  // Only kicks in for services that ALREADY delivered at least
+  // once. A single zero retest doesn't kill — providers can have
+  // an off day. Two in a row → DEAD.
+  if (cur === "QUALIFIED" || cur === "MONITORED") {
     const lastTwo = await prisma.testOrder.findMany({
       where: {
         serviceId: params.serviceId,
@@ -75,49 +201,34 @@ export async function onTestCompleted(params: {
       orderBy: { completedAt: "desc" },
       take: 2,
     });
-    if (lastTwo.length === 2) {
-      const delivered = lastTwo.map((o) => {
-        const peak = Math.max(
-          o.baselineCount,
-          ...o.measurements.map((m) => m.actualCount)
-        );
-        return peak - o.baselineCount;
-      });
-      if (delivered.every((d) => d <= 0)) killSignal = true;
-    }
-  }
-
-  if (killSignal) {
-    await killService(params.serviceId, "auto_no_delivery_2x");
-    return { transition: "DEAD", reason: "2 consecutive 0-delivery tests" };
-  }
-
-  // 2. If delivery > 0 on this test → candidates are QUALIFIED (if
-  //    not already past that) or MONITORED (if scoring already
-  //    picked them up). Use score-floor to decide.
-  if (params.deliveredQty > 0) {
-    const topScore = await prisma.productServiceCandidate.findFirst({
-      where: { serviceId: params.serviceId },
-      orderBy: { currentScore: "desc" },
-      select: { currentScore: true },
+    if (lastTwo.length < 2) return { transition: "no_change" };
+    const allZero = lastTwo.every((o) => {
+      const peak = Math.max(
+        o.baselineCount,
+        ...o.measurements.map((m) => m.actualCount)
+      );
+      return peak <= o.baselineCount;
     });
-    const score = topScore?.currentScore ?? 0;
-    const nextStatus: LifecycleStatus =
-      score >= QUALIFY_SCORE ? "MONITORED" : "QUALIFIED";
-    await prisma.productServiceCandidate.updateMany({
-      where: {
-        serviceId: params.serviceId,
-        lifecycleStatus: { in: ["NEW", "TESTING", "QUALIFIED"] },
-      },
-      data: { lifecycleStatus: nextStatus },
-    });
-    return { transition: nextStatus };
+    if (!allZero) return { transition: "no_change" };
+    await killService(params.serviceId, "auto_no_delivery_2x_retest");
+    return { transition: "DEAD", reason: "2 consecutive zero retests" };
   }
 
-  // 3. Delivered zero but auto-kill didn't fire (needs 2 in a row
-  //    or toggle off). Leave the candidate in whatever state it
-  //    was — a single zero delivery isn't terminal on its own.
-  return { transition: "stayed_testing" };
+  return { transition: "no_change" };
+}
+
+// Best-effort scan: does ANY of the service's TestOrders have a
+// Measurement with actualCount > baselineCount?
+async function serviceEverDelivered(serviceId: number): Promise<boolean> {
+  const orders = await prisma.testOrder.findMany({
+    where: { serviceId },
+    select: { baselineCount: true, measurements: { select: { actualCount: true } } },
+  });
+  for (const o of orders) {
+    const peak = Math.max(o.baselineCount, ...o.measurements.map((m) => m.actualCount));
+    if (peak > o.baselineCount) return true;
+  }
+  return false;
 }
 
 // Service-wide kill. Flips active=false on Service (so the router
@@ -135,12 +246,7 @@ export async function killService(
     where: { serviceId },
     data: { lifecycleStatus: "DEAD", isEligible: false },
   });
-  // The alert detector detectServiceKilledNoDelivery surfaces this
-  // on the next /api/cron/alerts-detector tick — the row is
-  // created here so even if the detector is late we have audit.
-  // Alert.code isn't unique (the column lives in schema as plain
-  // String) so we can't upsert; findFirst + update-or-create does
-  // the same job with a tiny race window that's fine for alerts.
+  // Alert.code isn't unique so we findFirst + update-or-create.
   try {
     const code = `service_killed_no_delivery:${serviceId}`;
     const existing = await prisma.alert.findFirst({
@@ -162,10 +268,12 @@ export async function killService(
           category: "catalogue",
           severity: "warning",
           title: `Service #${serviceId} désactivé auto (${reason})`,
-          description: `2 tests consécutifs sans livraison mesurée — service retiré du catalogue routable.`,
-          explanation: `Le lifecycle coordinator a observé 2 TestOrder terminaux consécutifs avec deliveredQty=0 sur ce service. Auto-kill suppose que le fournisseur BulkMedya ne livre plus sur cet ID — active=false pour écarter le service du routage, lifecycleStatus=DEAD sur toutes ses candidacies. Manual revive possible via /config/catalogue si l'opérateur veut retester.`,
-          impact: "Le service n'est plus routable et ne sera plus retesté automatiquement. Si d'autres services du même produit sont QUALIFIED le routage s'adapte sans intervention.",
-          suggestedAction: "Aller sur /config/catalogue, ouvrir le drawer du produit correspondant, cliquer REVIVE si besoin de retester.",
+          description: reason.startsWith("no_delivery_at_t_plus_7d")
+            ? "Aucune livraison mesurée après 7 jours — service retiré du catalogue routable."
+            : "2 retests consécutifs sans livraison — service retiré du catalogue routable.",
+          explanation: `Lifecycle coordinator: ${reason}. Le service avait ${reason.startsWith("auto_no_delivery_2x_retest") ? "déjà délivré au moins une fois (QUALIFIED/MONITORED)" : "dépassé 7 jours sans aucune livraison RapidAPI mesurée"}. active=false pour écarter du routage, lifecycleStatus=DEAD sur toutes les candidacies.`,
+          impact: "Le service n'est plus routable et ne sera plus retesté automatiquement.",
+          suggestedAction: "Ouvrir /config/catalogue, cliquer REVIVE si besoin de retester (le service repassera en TESTING).",
           actionType: "link",
           actionPayload: { href: "/config/catalogue" },
           relatedEntityType: "service",
@@ -178,13 +286,14 @@ export async function killService(
       });
     }
   } catch {
-    // Alert write is best-effort — the kill itself already landed.
+    /* alert is best-effort; the kill itself already landed */
   }
 }
 
-// Operator-triggered resurrection. DEAD services can re-enter the
-// retest loop (useful when BulkMedya fixes a provider and the
-// operator wants to give the service another chance).
+// Operator revival — DEAD → TESTING (we drop QUALIFIED/MONITORED
+// status because the historic delivery signal might be stale).
+// The next placement will trigger qualification per the normal
+// rules.
 export async function reviveService(serviceId: number): Promise<void> {
   await prisma.service.update({
     where: { id: serviceId },
@@ -192,10 +301,8 @@ export async function reviveService(serviceId: number): Promise<void> {
   });
   await prisma.productServiceCandidate.updateMany({
     where: { serviceId, lifecycleStatus: "DEAD" },
-    data: { lifecycleStatus: "MONITORED", isEligible: true },
+    data: { lifecycleStatus: "TESTING", isEligible: true },
   });
-  // Auto-resolve the kill alert so the dashboard reflects the
-  // change without waiting for the next detector tick.
   await prisma.alert
     .updateMany({
       where: {
@@ -207,9 +314,9 @@ export async function reviveService(serviceId: number): Promise<void> {
     .catch(() => null);
 }
 
-// Counts for the dashboard CYCLE DE VIE CATALOGUE card. Grouped
-// by lifecycle status, de-duped to distinct services so a service
-// with 3 candidacies doesn't count 3×.
+// Counts for the dashboard CYCLE DE VIE CATALOGUE card. De-duped
+// per service — "best status" wins so a service with mixed
+// candidacies counts once in its highest bucket.
 export async function lifecycleCounts(): Promise<Record<LifecycleStatus, number>> {
   const out: Record<LifecycleStatus, number> = {
     NEW: 0,
@@ -218,17 +325,6 @@ export async function lifecycleCounts(): Promise<Record<LifecycleStatus, number>
     MONITORED: 0,
     DEAD: 0,
   };
-  // Distinct by serviceId — take the "most advanced" status per
-  // service (DEAD > MONITORED > QUALIFIED > TESTING > NEW) so the
-  // dashboard totals align with the intuition "how many services
-  // are in each state".
-  const rank: Record<LifecycleStatus, number> = {
-    NEW: 0,
-    TESTING: 1,
-    QUALIFIED: 2,
-    MONITORED: 3,
-    DEAD: 4,
-  };
   const rows = await prisma.productServiceCandidate.findMany({
     select: { serviceId: true, lifecycleStatus: true },
   });
@@ -236,75 +332,157 @@ export async function lifecycleCounts(): Promise<Record<LifecycleStatus, number>
   for (const r of rows) {
     const cur = best.get(r.serviceId);
     const next = r.lifecycleStatus as LifecycleStatus;
-    if (!cur || rank[next] > rank[cur]) best.set(r.serviceId, next);
+    if (!cur || RANK[next] > RANK[cur]) best.set(r.serviceId, next);
   }
   for (const v of Array.from(best.values())) out[v]++;
   return out;
 }
 
-// Backfill helper — run once after the schema ships to migrate
-// existing data into the new lifecycle states. Idempotent.
+// Backfill helper — drives existing candidacies into the new
+// lifecycle states based on the actual TestOrder + Measurement
+// history. Idempotent. Replaces the legacy backfill that used
+// score+active heuristics.
 export async function backfillLifecycle(): Promise<{
   inspected: number;
-  seededNew: number;
-  seededTesting: number;
-  seededQualified: number;
-  seededMonitored: number;
-  seededDead: number;
+  promotedToQualified: number;
+  promotedToMonitored: number;
+  demotedFromMonitored: number;
+  revivedFromDead: number;
+  killedAtT7d: number;
+  unchanged: number;
 }> {
   const result = {
     inspected: 0,
-    seededNew: 0,
-    seededTesting: 0,
-    seededQualified: 0,
-    seededMonitored: 0,
-    seededDead: 0,
+    promotedToQualified: 0,
+    promotedToMonitored: 0,
+    demotedFromMonitored: 0,
+    revivedFromDead: 0,
+    killedAtT7d: 0,
+    unchanged: 0,
   };
 
-  // Pull every candidate + its service's latest scoring + order
-  // state so we can decide the bucket in memory.
-  const cands = await prisma.productServiceCandidate.findMany({
-    select: {
-      id: true,
-      serviceId: true,
-      currentScore: true,
-      isEligible: true,
-      lifecycleStatus: true,
-      service: { select: { active: true, lastTestedAt: true } },
-    },
+  // De-duped service list with current best status.
+  const all = await prisma.productServiceCandidate.findMany({
+    select: { serviceId: true, lifecycleStatus: true },
   });
-  result.inspected = cands.length;
+  const best = new Map<number, LifecycleStatus>();
+  for (const r of all) {
+    const cur = best.get(r.serviceId);
+    const next = r.lifecycleStatus as LifecycleStatus;
+    if (!cur || RANK[next] > RANK[cur]) best.set(r.serviceId, next);
+  }
+  result.inspected = best.size;
 
-  for (const c of cands) {
-    let target: LifecycleStatus;
-    if (!c.service.active) {
-      target = "DEAD";
-    } else if (!c.service.lastTestedAt) {
-      target = "NEW";
-    } else if ((c.currentScore ?? 0) >= QUALIFY_SCORE) {
-      target = "MONITORED";
-    } else if (c.isEligible) {
-      // Eligible + tested but no good score → still TESTING.
-      // The next retest will push it forward or to DEAD.
-      target = "TESTING";
-    } else {
-      target = "NEW";
+  for (const [serviceId, status] of Array.from(best.entries())) {
+    // Compute the truths once per service.
+    const orders = await prisma.testOrder.findMany({
+      where: { serviceId },
+      include: { measurements: true },
+      orderBy: { placedAt: "asc" },
+    });
+    const everDelivered = orders.some((o) => {
+      const peak = Math.max(
+        o.baselineCount,
+        ...o.measurements.map((m) => m.actualCount)
+      );
+      return peak > o.baselineCount;
+    });
+    const oldestAgeMs = orders.length > 0
+      ? Date.now() - orders[0].placedAt.getTime()
+      : 0;
+    const orderCount = orders.length;
+
+    if (status === "MONITORED") {
+      if (!everDelivered) {
+        // Bogus MONITORED — demote. If service has any test, it's
+        // TESTING; otherwise NEW.
+        const target: LifecycleStatus = orderCount > 0 ? "TESTING" : "NEW";
+        await prisma.productServiceCandidate.updateMany({
+          where: { serviceId },
+          data: { lifecycleStatus: target },
+        });
+        result.demotedFromMonitored++;
+        continue;
+      }
+      result.unchanged++;
+      continue;
     }
-    if ((c.lifecycleStatus as string) !== target) {
-      await prisma.productServiceCandidate.update({
-        where: { id: c.id },
-        data: { lifecycleStatus: target },
-      });
+
+    if (status === "DEAD") {
+      // Premature kill if oldest TestOrder < 7d old AND no delivery.
+      // Wait — actually we revive on the AGE criterion alone, since
+      // the real DEAD rule is "T+7d AND no delivery". If a DEAD row
+      // had delivery, it was killed by 2-consecutive-zero-rule on
+      // retests; that's a valid DEAD.
+      if (orderCount === 0 || oldestAgeMs < 7 * 24 * 60 * 60_000) {
+        if (!everDelivered) {
+          // Premature DEAD — revive to TESTING.
+          await prisma.service.update({
+            where: { id: serviceId },
+            data: { active: true },
+          });
+          await prisma.productServiceCandidate.updateMany({
+            where: { serviceId },
+            data: {
+              lifecycleStatus: orderCount > 0 ? "TESTING" : "NEW",
+              isEligible: true,
+            },
+          });
+          await prisma.alert
+            .updateMany({
+              where: {
+                code: `service_killed_no_delivery:${serviceId}`,
+                status: { in: ["active", "acknowledged"] },
+              },
+              data: { status: "resolved", resolvedAt: new Date() },
+            })
+            .catch(() => null);
+          result.revivedFromDead++;
+          continue;
+        }
+      }
+      result.unchanged++;
+      continue;
     }
-    // Backfill never produces QUALIFIED — it's a transient state
-    // between "first test passed" and "enrolled in retest loop".
-    // Services already in the DB are either still-testing or
-    // past-qualification, so we route them straight to MONITORED
-    // when they have a usable score.
-    if (target === "NEW") result.seededNew++;
-    else if (target === "TESTING") result.seededTesting++;
-    else if (target === "MONITORED") result.seededMonitored++;
-    else if (target === "DEAD") result.seededDead++;
+
+    if (status === "TESTING" || status === "NEW") {
+      if (everDelivered) {
+        // Should be QUALIFIED (or MONITORED if retested already).
+        const target: LifecycleStatus = orderCount >= 2 ? "MONITORED" : "QUALIFIED";
+        await prisma.productServiceCandidate.updateMany({
+          where: { serviceId },
+          data: { lifecycleStatus: target },
+        });
+        if (target === "QUALIFIED") result.promotedToQualified++;
+        else result.promotedToMonitored++;
+        continue;
+      }
+      // No delivery yet. If oldest order ≥ 7d, kill via T+7d rule.
+      if (orderCount > 0 && oldestAgeMs >= 7 * 24 * 60 * 60_000) {
+        await killService(serviceId, "no_delivery_at_t_plus_7d");
+        result.killedAtT7d++;
+        continue;
+      }
+      result.unchanged++;
+      continue;
+    }
+
+    if (status === "QUALIFIED") {
+      // QUALIFIED with ≥2 orders → promote MONITORED; otherwise
+      // leave as-is.
+      if (orderCount >= 2) {
+        await prisma.productServiceCandidate.updateMany({
+          where: { serviceId, lifecycleStatus: "QUALIFIED" },
+          data: { lifecycleStatus: "MONITORED" },
+        });
+        result.promotedToMonitored++;
+        continue;
+      }
+      result.unchanged++;
+      continue;
+    }
+
+    result.unchanged++;
   }
 
   return result;
