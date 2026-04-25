@@ -1,15 +1,13 @@
 import { ControlEye } from "./ControlEye";
 import { ControlRadar } from "./ControlRadar";
 
-type Size = "sm" | "md" | "lg" | "xl" | "hero";
+type Size = "sm" | "md" | "lg";
 type Variant = "eye" | "radar";
 
 const SIZES: Record<Size, { icon: number; font: number }> = {
   sm: { icon: 20, font: 13 },
   md: { icon: 28, font: 16 },
   lg: { icon: 40, font: 22 },
-  xl: { icon: 96, font: 56 },
-  hero: { icon: 200, font: 120 },
 };
 
 export function ControlLogo({

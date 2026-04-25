@@ -11,7 +11,6 @@ const LINKS = [
   { href: "/logs", label: "JOURNAUX" },
   { href: "/pool", label: "POOL" },
   { href: "/config", label: "CONFIG" },
-  { href: "/library", label: "LIBRARY" },
 ];
 
 export function Nav() {
@@ -32,7 +31,7 @@ export function Nav() {
     <header className="border-b border-grid bg-[var(--bg-color)]/80 backdrop-blur-sm relative z-20">
       <div className="max-w-7xl mx-auto flex items-center justify-between px-4 md:px-6 py-4 gap-4">
         <Link href="/" className="interactive flex-shrink-0">
-          <ControlLogo size="md" />
+          <ControlLogo size="sm" />
         </Link>
 
         {/* Desktop / tablet nav — hidden on small screens */}

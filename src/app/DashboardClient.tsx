@@ -16,18 +16,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import {
-  BracketBox,
-  ControlEye,
-  ControlLogo,
-  ControlRadar,
-  KBDKey,
-  LoadingDots,
-  SegmentedBar,
-  SparkLine,
-  StatusBadge,
-  StatusDot,
-} from "@/components/control";
 
 // Keep the shape loose on the client — the server route is the
 // single source of truth for data types.
@@ -157,37 +145,18 @@ export function DashboardClient({
 
   return (
     <>
-      {/* === HERO — giant eye + wordmark dominate the viewport ===
-          The eye is the brand mark; oversize it on the landing
-          page so the operator immediately feels surveilled-by-
-          their-own-tool. Logo "hero" size = 200px icon + 120px
-          font, scales down on mobile via Tailwind responsive
-          classes on the wrapper. */}
-      <section className="px-4 md:px-8 pt-12 md:pt-20 pb-8 border-b border-[#666666]/20 relative overflow-hidden">
-        {/* Background panopticon — 480px ControlEye sits behind
-            the logo as a watermark, dimmed to 8% so it doesn't
-            steal contrast from foreground text. */}
-        <div
-          aria-hidden="true"
-          className="absolute right-[-80px] top-[-40px] opacity-[0.08] pointer-events-none hidden md:block"
-        >
-          <ControlEye size={480} />
-        </div>
-        <div className="max-w-7xl mx-auto relative z-10 flex flex-col gap-8">
-          <BracketBox>OBSERVABILITÉ LIVE · REFRESH 10s</BracketBox>
-          <div className="flex items-center gap-6 md:gap-10 flex-wrap">
-            {/* Foreground giant eye — visible on mobile too */}
-            <div className="flex items-center gap-4 md:gap-6">
-              <ControlEye size={120} />
-              <ControlEye size={88} active />
-              <ControlEye size={56} hDelay={1.2} vDelay={0.6} />
-            </div>
-            <ControlRadar size={96} />
+      {/* Header */}
+      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-8">
+        <div className="max-w-7xl mx-auto flex flex-col gap-4">
+          <div className="font-mono text-xs text-[#FF3300] tracking-widest border border-[#FF3300] px-3 py-1 w-max">
+            [ OBSERVABILITÉ LIVE · REFRESH 10s ]
           </div>
-          <div className="flex items-end justify-between flex-wrap gap-6">
-            <ControlLogo size="hero" />
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusDot variant={g.toggles.testBotEnabled ? "active" : "idle"} />
+          <div className="flex items-end justify-between flex-wrap gap-4">
+            <h1 className="brand font-display text-4xl sm:text-5xl md:text-7xl uppercase tracking-tight leading-[0.9] text-white m-0">
+              Control<br />
+              <span className="text-[#FF3300]">Dashboard.</span>
+            </h1>
+            <div className="flex flex-wrap gap-2">
               <ToggleChip label="TESTBOT" on={g.toggles.testBotEnabled} />
               <ToggleChip
                 label="DRY RUN"
@@ -199,14 +168,10 @@ export function DashboardClient({
                 label="SCORING"
                 on={g.toggles.scoringEngineEnabled}
               />
-              <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase self-center ml-3">
+              <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase self-center">
                 {new Date(stats.generatedAt).toISOString().slice(11, 19)} UTC
               </span>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-            <LoadingDots />
-            <span>STREAMING TÉLÉMÉTRIE</span>
           </div>
         </div>
       </section>
@@ -285,23 +250,8 @@ export function DashboardClient({
         </Section>
       )}
 
-      {/* Activity — line + donut. Sparkline summary on the left
-          gives a no-axis micro-glance before the full LineChart. */}
+      {/* Activity — line + donut */}
       <Section title="ACTIVITÉ TEMPS RÉEL">
-        <div className="border-y border-[#666666]/20 bg-[#0D0D0D] px-5 md:px-6 py-3 flex items-center gap-4 flex-wrap">
-          <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-            24H · TENDANCE PLACEMENTS
-          </span>
-          <SparkLine
-            data={stats.testsByHour.map((b) => b.placed)}
-            width={300}
-            height={32}
-            color="#FF3300"
-          />
-          <span className="font-mono text-[10px] text-white tabular-nums">
-            {stats.testsByHour.reduce((a, b) => a + b.placed, 0)} TOTAL
-          </span>
-        </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-0 border-y border-[#666666]/20">
           <div className="lg:col-span-2 p-5 md:p-6 border-b lg:border-b-0 lg:border-r border-[#666666]/20 bg-[#030303]">
             <ChartTitle label="TESTS PLACÉS / HEURE · 24H" />
@@ -455,40 +405,46 @@ export function DashboardClient({
           )}
           {stats.rapidApiUsage.map((k) => {
             const ratio = k.ratio ?? 0;
+            const color =
+              k.status === "capped"
+                ? "#FF3300"
+                : ratio >= 90
+                  ? "#FF3300"
+                  : ratio >= 70
+                    ? "#FFCC00"
+                    : "#00CC66";
             return (
-              <div key={k.id} className="flex flex-col gap-2">
+              <div key={k.id} className="flex flex-col gap-1">
                 <div className="flex items-baseline justify-between font-mono text-[11px] tracking-widest uppercase gap-3">
-                  <span className="text-white truncate flex items-center gap-2">
-                    <StatusDot
-                      variant={
-                        k.status === "capped"
-                          ? "error"
-                          : ratio >= 70
-                            ? "warn"
-                            : "active"
-                      }
-                    />
+                  <span className="text-white truncate">
                     #{k.id} {k.label}{" "}
-                    <StatusBadge
-                      label={k.status.toUpperCase()}
-                      variant={k.status === "capped" ? "danger" : "active"}
-                    />
+                    <span
+                      className="text-[10px] normal-case"
+                      style={{ color }}
+                    >
+                      [ {k.status.toUpperCase()} ]
+                    </span>
                   </span>
                   <span className="text-white tabular-nums">
                     {k.quotaUsed.toLocaleString("en-US")}
                     {k.quotaMonthly ? (
                       <span className="text-[#666666]">
                         {" "}
-                        / {k.quotaMonthly.toLocaleString("en-US")}
+                        / {k.quotaMonthly.toLocaleString("en-US")} ·{" "}
+                        {ratio.toFixed(1)}%
                       </span>
                     ) : null}
                   </span>
                 </div>
-                <SegmentedBar
-                  label={`QUOTA ${ratio.toFixed(1)}%`}
-                  value={Math.min(100, ratio)}
-                  segments={20}
-                />
+                <div className="w-full h-1 bg-[#666666]/20">
+                  <div
+                    className="h-full transition-all"
+                    style={{
+                      width: `${Math.min(100, ratio)}%`,
+                      background: color,
+                    }}
+                  />
+                </div>
               </div>
             );
           })}
@@ -634,52 +590,31 @@ export function DashboardClient({
         </div>
       </Section>
 
-      {/* Footer: legacy link + actions + keyboard hints */}
+      {/* Footer: legacy link + actions */}
       <section className="px-4 md:px-8 py-10 border-t border-[#666666]/20">
-        <div className="max-w-7xl mx-auto flex flex-col gap-6">
-          <div className="flex flex-wrap gap-3 items-center justify-between">
-            <span className="font-mono text-[11px] text-[#666666] tracking-widest uppercase flex items-center gap-3">
-              <ControlEye size={20} />
-              Payload {new Date(stats.generatedAt).toISOString().slice(0, 19)} UTC
-            </span>
-            <div className="flex gap-3">
-              <Link
-                href="/alertes"
-                className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase"
-              >
-                [ ALERTES → ]
-              </Link>
-              <Link
-                href="/pool"
-                className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase"
-              >
-                [ POOL → ]
-              </Link>
-              <Link
-                href="/legacy"
-                className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase"
-              >
-                [ ANCIEN DASHBOARD ]
-              </Link>
-            </div>
-          </div>
-          {/* Keyboard hint row — KBDKey from /library, surfaced
-              app-wide via this footer so the operator learns the
-              shortcut vocabulary by exposure. */}
-          <div className="flex items-center gap-3 flex-wrap font-mono text-[10px] text-[#666666] tracking-widest uppercase border-t border-[#666666]/10 pt-4">
-            <span>RACCOURCIS:</span>
-            <span className="flex items-center gap-1.5">
-              <KBDKey>G</KBDKey> <KBDKey>P</KBDKey> POOL
-            </span>
-            <span className="flex items-center gap-1.5">
-              <KBDKey>G</KBDKey> <KBDKey>A</KBDKey> ALERTES
-            </span>
-            <span className="flex items-center gap-1.5">
-              <KBDKey>G</KBDKey> <KBDKey>L</KBDKey> JOURNAUX
-            </span>
-            <span className="flex items-center gap-1.5">
-              <KBDKey>R</KBDKey> REFRESH
-            </span>
+        <div className="max-w-7xl mx-auto flex flex-wrap gap-3 items-center justify-between">
+          <span className="font-mono text-[11px] text-[#666666] tracking-widest uppercase">
+            Payload {new Date(stats.generatedAt).toISOString().slice(0, 19)} UTC
+          </span>
+          <div className="flex gap-3">
+            <Link
+              href="/alertes"
+              className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase"
+            >
+              [ ALERTES → ]
+            </Link>
+            <Link
+              href="/pool"
+              className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase"
+            >
+              [ POOL → ]
+            </Link>
+            <Link
+              href="/legacy"
+              className="interactive border border-[#666666]/40 text-[#666666] hover:text-white hover:border-white transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase"
+            >
+              [ ANCIEN DASHBOARD ]
+            </Link>
           </div>
         </div>
       </section>
@@ -1151,19 +1086,12 @@ function LifecycleCard({
     DEAD: number;
   };
 }) {
-  type Cell = {
-    label: string;
-    value: number;
-    color: string;
-    hint: string;
-    dot: "active" | "idle" | "warn" | "error";
-  };
-  const cells: Cell[] = [
-    { label: "NEW", value: counts.NEW, color: "#66CCFF", hint: "Jamais testé", dot: "idle" },
-    { label: "TESTING", value: counts.TESTING, color: "#FFCC00", hint: "Test initial en cours", dot: "warn" },
-    { label: "QUALIFIED", value: counts.QUALIFIED, color: "#00FF88", hint: "Livraison mesurée", dot: "active" },
-    { label: "MONITORED", value: counts.MONITORED, color: "#00CC66", hint: "Retest 1×/jour", dot: "active" },
-    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "Auto-killed", dot: "error" },
+  const cells: Array<{ label: string; value: number; color: string; hint: string }> = [
+    { label: "NEW", value: counts.NEW, color: "#66CCFF", hint: "Jamais testé" },
+    { label: "TESTING", value: counts.TESTING, color: "#FFCC00", hint: "Test initial en cours" },
+    { label: "QUALIFIED", value: counts.QUALIFIED, color: "#00FF88", hint: "Score ≥ 40" },
+    { label: "MONITORED", value: counts.MONITORED, color: "#00CC66", hint: "Retest 1×/jour" },
+    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "Auto-killed" },
   ];
   const total = cells.reduce((a, c) => a + c.value, 0);
   return (
@@ -1175,14 +1103,11 @@ function LifecycleCard({
           i < cells.length - 1 ? "md:border-r border-[#666666]/20" : "";
         return (
           <div key={c.label} className={`${bg} ${borderR} p-5 md:p-6`}>
-            <div className="flex items-center gap-2 mb-3">
-              <StatusDot variant={c.dot} pulsing={c.dot !== "idle"} />
-              <div
-                className="font-mono text-[10px] tracking-widest uppercase"
-                style={{ color: c.color }}
-              >
-                {c.label}
-              </div>
+            <div
+              className="font-mono text-[10px] tracking-widest uppercase mb-3"
+              style={{ color: c.color }}
+            >
+              {c.label}
             </div>
             <div className="brand font-display text-3xl md:text-5xl tabular-nums text-white">
               {c.value}
