@@ -422,6 +422,12 @@ async function build() {
   const { lifecycleCounts } = await import("@/lib/catalogue/lifecycle");
   const catalogueLifecycle = await lifecycleCounts();
 
+  // ── Catalogue sync status (last run + 30-day rollup) ──────────
+  const { getCatalogueSyncStatus } = await import(
+    "@/lib/catalogue/health-check"
+  );
+  const catalogueSync = await getCatalogueSyncStatus();
+
   return {
     generatedAt: new Date().toISOString(),
     globalStats,
@@ -437,6 +443,7 @@ async function build() {
     campaign,
     bruteCampaign,
     catalogueLifecycle,
+    catalogueSync,
   };
 }
 

@@ -57,6 +57,18 @@ model Service {
   // candidates for disable/archival.
   lastTestedAt    DateTime?
 
+  // Counter for the catalogue health-check revive loop. Reset to
+  // 0 on a successful revive; bumped on every failed revive
+  // attempt against a PLACEMENT_FAILED service. After 3 failures
+  // the service flips to PERMANENTLY_FAILED.
+  placementAttemptCount Int      @default(0)
+
+  // When the daily BulkMedya sync stops returning this
+  // bulkmedyaId, we stamp this and flip active=false +
+  // lifecycleStatus=REMOVED_FROM_BULKMEDYA. Operator can revive
+  // manually if BulkMedya re-adds the service.
+  removedFromProviderAt DateTime?
+
   testOrders      TestOrder[]
   scores          ServiceScore[]
   productCandidacies ProductServiceCandidate[]
@@ -876,4 +888,31 @@ model ScoringCampaign {
   updatedAt        DateTime @updatedAt
 
   @@index([status, startedAt])
+}
+
+// Daily BulkMedya catalogue sync run — full audit trail of what
+// the health-check did each night so the operator can read
+// /config/catalogue?tab=history without spelunking through cron
+// logs. Each row is one run.
+model CatalogueSyncRun {
+  id                 Int      @id @default(autoincrement())
+  startedAt          DateTime @default(now())
+  finishedAt         DateTime?
+  status             String   @default("running") // 'running' | 'completed' | 'error'
+  errorMessage       String?
+
+  // Counts.
+  bulkmedyaTotal     Int      @default(0)
+  addedCount         Int      @default(0)
+  removedCount       Int      @default(0)
+  revivedCount       Int      @default(0)
+  permanentlyFailedCount Int  @default(0)
+  rematchUpdatedCount Int     @default(0)
+  rematchOutOfScope  Int      @default(0)
+
+  // Free-form summary the dashboard / history tab renders.
+  summary            Json     @default("{}")
+
+  @@index([status, startedAt])
+  @@index([startedAt])
 }

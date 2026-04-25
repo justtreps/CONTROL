@@ -40,7 +40,9 @@ export type LifecycleStatus =
   | "QUALIFIED"
   | "MONITORED"
   | "DEAD"
-  | "PLACEMENT_FAILED";
+  | "PLACEMENT_FAILED"
+  | "REMOVED_FROM_BULKMEDYA"
+  | "PERMANENTLY_FAILED";
 
 const RANK: Record<LifecycleStatus, number> = {
   NEW: 0,
@@ -49,6 +51,8 @@ const RANK: Record<LifecycleStatus, number> = {
   MONITORED: 3,
   DEAD: 4,
   PLACEMENT_FAILED: 5,
+  REMOVED_FROM_BULKMEDYA: 6,
+  PERMANENTLY_FAILED: 7,
 };
 
 // Returns the most-advanced lifecycle status across all of the
@@ -327,6 +331,8 @@ export async function lifecycleCounts(): Promise<Record<LifecycleStatus, number>
     MONITORED: 0,
     DEAD: 0,
     PLACEMENT_FAILED: 0,
+    REMOVED_FROM_BULKMEDYA: 0,
+    PERMANENTLY_FAILED: 0,
   };
   const rows = await prisma.productServiceCandidate.findMany({
     select: { serviceId: true, lifecycleStatus: true },

@@ -107,6 +107,28 @@ type Stats = {
     MONITORED: number;
     DEAD: number;
     PLACEMENT_FAILED: number;
+    REMOVED_FROM_BULKMEDYA: number;
+    PERMANENTLY_FAILED: number;
+  };
+  catalogueSync?: {
+    last: {
+      id: number;
+      startedAt: string;
+      finishedAt: string | null;
+      status: string;
+      errorMessage: string | null;
+      added: number;
+      removed: number;
+      revived: number;
+      permanentlyFailed: number;
+      bulkmedyaTotal: number;
+    } | null;
+    last30d: {
+      added: number;
+      removed: number;
+      revived: number;
+      permanentlyFailed: number;
+    };
   };
 };
 type ServiceRow = {
@@ -279,11 +301,20 @@ export function DashboardClient({
         </Section>
       )}
 
-      {/* Catalogue lifecycle — 6 buckets: NEW / TESTING /
-          QUALIFIED / MONITORED / DEAD / PLACEMENT_FAILED. */}
+      {/* Catalogue lifecycle — 8 buckets: NEW / TESTING /
+          QUALIFIED / MONITORED / DEAD / PLACEMENT_FAILED /
+          REMOVED_FROM_BULKMEDYA / PERMANENTLY_FAILED. */}
       {stats.catalogueLifecycle && (
         <Section title="CYCLE DE VIE CATALOGUE">
           <LifecycleCard counts={stats.catalogueLifecycle} />
+        </Section>
+      )}
+
+      {/* Daily catalogue sync card. Shows the last health-check
+          run + 30-day rollup + manual trigger button. */}
+      {stats.catalogueSync && (
+        <Section title="DERNIÈRE SYNC CATALOGUE">
+          <CatalogueSyncCard sync={stats.catalogueSync} onChanged={refresh} />
         </Section>
       )}
 
@@ -1122,35 +1153,39 @@ function LifecycleCard({
     MONITORED: number;
     DEAD: number;
     PLACEMENT_FAILED: number;
+    REMOVED_FROM_BULKMEDYA: number;
+    PERMANENTLY_FAILED: number;
   };
 }) {
   const cells: Array<{ label: string; value: number; color: string; hint: string }> = [
     { label: "NEW", value: counts.NEW, color: "#66CCFF", hint: "Jamais testé" },
-    { label: "TESTING", value: counts.TESTING, color: "#FFCC00", hint: "Test initial en cours" },
+    { label: "TESTING", value: counts.TESTING, color: "#FFCC00", hint: "Test initial" },
     { label: "QUALIFIED", value: counts.QUALIFIED, color: "#00FF88", hint: "Livraison mesurée" },
     { label: "MONITORED", value: counts.MONITORED, color: "#00CC66", hint: "Retest 1×/jour" },
-    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "Auto-killed T+7d" },
+    { label: "DEAD", value: counts.DEAD, color: "#FF3300", hint: "T+7d sans livraison" },
     { label: "PLACEMENT_FAILED", value: counts.PLACEMENT_FAILED, color: "#A030A0", hint: "BulkMedya rejected" },
+    { label: "REMOVED", value: counts.REMOVED_FROM_BULKMEDYA, color: "#888888", hint: "Provider supprimé" },
+    { label: "PERM_FAILED", value: counts.PERMANENTLY_FAILED, color: "#552020", hint: "3 fails consécutifs" },
   ];
   const total = cells.reduce((a, c) => a + c.value, 0);
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 border-y border-[#666666]/20">
+    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 border-y border-[#666666]/20">
       {cells.map((c, i) => {
         const pct = total > 0 ? Math.round((c.value / total) * 100) : 0;
         const bg = i % 2 === 0 ? "bg-[#030303]" : "bg-[#0D0D0D]";
         const borderR =
           i < cells.length - 1 ? "md:border-r border-[#666666]/20" : "";
         return (
-          <div key={c.label} className={`${bg} ${borderR} p-5 md:p-6`}>
+          <div key={c.label} className={`${bg} ${borderR} p-4 md:p-5`}>
             <div
               className="font-mono text-[10px] tracking-widest uppercase mb-3"
               style={{ color: c.color }}
             >
               {c.label}
             </div>
-            <div className="brand font-display text-3xl md:text-5xl tabular-nums text-white">
+            <div className="brand font-display text-2xl md:text-4xl tabular-nums text-white">
               {c.value}
-              <span className="text-[#666666] text-lg md:text-xl ml-2">
+              <span className="text-[#666666] text-base md:text-lg ml-1">
                 {pct}%
               </span>
             </div>
@@ -1160,6 +1195,150 @@ function LifecycleCard({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function CatalogueSyncCard({
+  sync,
+  onChanged,
+}: {
+  sync: NonNullable<Stats["catalogueSync"]>;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  async function trigger() {
+    if (busy) return;
+    if (!confirm("Lancer un catalogue health check maintenant ? ~30s-2min selon le nombre de PLACEMENT_FAILED à revive.")) return;
+    setBusy(true);
+    setFeedback("Sync en cours…");
+    try {
+      const res = await fetch("/api/catalogue/health-check/trigger", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setFeedback(
+          `OK · +${data.summary.added} / −${data.summary.removed} / ↻${data.summary.revived}`
+        );
+        onChanged();
+      } else {
+        setFeedback(`Erreur: ${data.error ?? "inconnue"}`);
+      }
+    } catch (e) {
+      setFeedback(`Erreur: ${(e as Error).message.slice(0, 80)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const last = sync.last;
+  const lastDate = last?.startedAt
+    ? new Date(last.startedAt).toISOString().slice(0, 19)
+    : "—";
+  const statusColor =
+    last?.status === "completed"
+      ? "#00CC66"
+      : last?.status === "running"
+        ? "#FFCC00"
+        : last?.status === "error"
+          ? "#FF3300"
+          : "#666666";
+
+  return (
+    <div className="border-y border-[#666666]/20 p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <span
+            className="font-mono text-[10px] tracking-widest uppercase border px-2 py-0.5"
+            style={{ color: statusColor, borderColor: statusColor }}
+          >
+            {last?.status?.toUpperCase() ?? "—"}
+          </span>
+          <span className="font-mono text-[11px] text-white tracking-widest tabular-nums">
+            {lastDate} UTC
+          </span>
+          {last?.bulkmedyaTotal ? (
+            <span className="font-mono text-[10px] text-[#666666] tracking-widest">
+              · BULKMEDYA TOTAL {last.bulkmedyaTotal.toLocaleString("en-US")}
+            </span>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={trigger}
+          disabled={busy}
+          className="interactive border border-[#FF3300] text-[#FF3300] hover:bg-[#FF3300] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+        >
+          [ FORCER UNE SYNC ]
+        </button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <SyncCell
+          label="NOUVEAUX · 30J"
+          value={sync.last30d.added}
+          color="#66CCFF"
+          subtle={`dernier run +${last?.added ?? 0}`}
+        />
+        <SyncCell
+          label="SUPPRIMÉS · 30J"
+          value={sync.last30d.removed}
+          color="#FF3300"
+          subtle={`dernier run −${last?.removed ?? 0}`}
+        />
+        <SyncCell
+          label="REVIVE OK · 30J"
+          value={sync.last30d.revived}
+          color="#00CC66"
+          subtle={`dernier run ↻${last?.revived ?? 0}`}
+        />
+        <SyncCell
+          label="PERM_FAILED · 30J"
+          value={sync.last30d.permanentlyFailed}
+          color="#552020"
+          subtle={`dernier run ✕${last?.permanentlyFailed ?? 0}`}
+        />
+      </div>
+      {feedback && (
+        <div className="font-mono text-[10px] text-[#FFCC00] tracking-widest uppercase">
+          {feedback}
+        </div>
+      )}
+      {last?.errorMessage && (
+        <div className="font-mono text-[10px] text-[#FF3300] tracking-widest normal-case">
+          ⚠ Last error: {last.errorMessage.slice(0, 200)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SyncCell({
+  label,
+  value,
+  color,
+  subtle,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  subtle: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span
+        className="font-mono text-[10px] tracking-widest uppercase"
+        style={{ color }}
+      >
+        {label}
+      </span>
+      <span className="font-mono text-2xl md:text-3xl tabular-nums text-white">
+        {value.toLocaleString("en-US")}
+      </span>
+      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+        {subtle}
+      </span>
     </div>
   );
 }
