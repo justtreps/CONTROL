@@ -145,9 +145,22 @@ export function DashboardClient({
 
   return (
     <>
-      {/* Header */}
-      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-8">
-        <div className="max-w-7xl mx-auto flex flex-col gap-4">
+      {/* Header — planet-earth video background restored
+          (same pattern as /legacy + /login). */}
+      <section className="px-4 md:px-8 pt-24 md:pt-32 pb-8 relative overflow-hidden">
+        <video
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 w-full h-full object-cover opacity-55 mix-blend-screen z-0"
+          src="/planet-earth.mp4"
+        />
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-[#030303] via-transparent to-[#030303]" />
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-r from-[#030303]/60 via-transparent to-[#030303]/60" />
+        <div className="max-w-7xl mx-auto flex flex-col gap-4 relative z-10">
           <div className="font-mono text-xs text-[#FF3300] tracking-widest border border-[#FF3300] px-3 py-1 w-max">
             [ OBSERVABILITÉ LIVE · REFRESH 10s ]
           </div>
