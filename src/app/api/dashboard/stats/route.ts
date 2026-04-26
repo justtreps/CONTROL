@@ -254,25 +254,18 @@ async function build() {
   );
 
   // ── Top / bottom services ─────────────────────────────────────
-  const topRows = await prisma.serviceScore.findMany({
-    orderBy: [{ currentScore: "desc" }, { computedAt: "desc" }],
-    take: 10,
-    include: {
-      service: {
-        select: {
-          id: true,
-          name: true,
-          platform: true,
-          lastTestedAt: true,
-          active: true,
-        },
-      },
-    },
-  });
-  const bottomRows = await prisma.serviceScore.findMany({
-    where: { service: { active: true } },
-    orderBy: [{ currentScore: "asc" }, { computedAt: "desc" }],
-    take: 10,
+  // Bug fix: we previously queried `take: 10 ORDER BY currentScore`
+  // directly on ServiceScore which is append-only. A service that
+  // scored 80 last week then 5 today would surface in topRows on
+  // its OLD row. The de-dup map then kept the latest (5) but the
+  // selection had already happened on stale data.
+  //
+  // New approach: pull the LATEST ServiceScore per service via
+  // distinct-on serviceId, then sort + slice in app code. This
+  // guarantees the score we rank on is current.
+  const latestPerService = await prisma.serviceScore.findMany({
+    distinct: ["serviceId"],
+    orderBy: [{ serviceId: "asc" }, { computedAt: "desc" }],
     include: {
       service: {
         select: {
@@ -286,42 +279,44 @@ async function build() {
     },
   });
 
-  // De-duplicate by serviceId (the SAME service can appear multiple
-  // times if scoring ran more than once — we want the latest).
-  const bestByService = new Map<number, typeof topRows[number]>();
-  for (const r of [...topRows, ...bottomRows]) {
-    const existing = bestByService.get(r.service.id);
-    if (!existing || r.computedAt > existing.computedAt) {
-      bestByService.set(r.service.id, r);
-    }
-  }
+  const sortedDesc = [...latestPerService].sort(
+    (a, b) => b.currentScore - a.currentScore
+  );
+  const sortedAscActive = latestPerService
+    .filter((r) => r.service.active)
+    .sort((a, b) => a.currentScore - b.currentScore);
 
-  const topServices = Array.from(bestByService.values())
-    .filter((r) => topRows.find((t) => t.service.id === r.service.id))
-    .sort((a, b) => b.currentScore - a.currentScore)
-    .slice(0, 10)
-    .map((r) => ({
-      id: r.service.id,
-      name: r.service.name,
-      platform: r.service.platform,
-      score: Math.round(r.currentScore * 10) / 10,
-      lastTestedAt: r.service.lastTestedAt?.toISOString() ?? null,
-    }));
-  const bottomServices = Array.from(bestByService.values())
-    .filter(
-      (r) =>
-        bottomRows.find((b) => b.service.id === r.service.id) &&
-        r.service.active
-    )
-    .sort((a, b) => a.currentScore - b.currentScore)
-    .slice(0, 10)
-    .map((r) => ({
-      id: r.service.id,
-      name: r.service.name,
-      platform: r.service.platform,
-      score: Math.round(r.currentScore * 10) / 10,
-      lastTestedAt: r.service.lastTestedAt?.toISOString() ?? null,
-    }));
+  const topServices = sortedDesc.slice(0, 10).map((r) => ({
+    id: r.service.id,
+    name: r.service.name,
+    platform: r.service.platform,
+    score: Math.round(r.currentScore * 10) / 10,
+    rawScore: Math.round(r.rawScore * 10) / 10,
+    sampleCount: r.sampleCount,
+    timeToFiftyMin: r.avgTimeToFiftyMin
+      ? Math.round(r.avgTimeToFiftyMin)
+      : null,
+    dropPct: r.avgDropPct !== null
+      ? Math.round(r.avgDropPct * 1000) / 10
+      : null,
+    lastTestedAt: r.service.lastTestedAt?.toISOString() ?? null,
+  }));
+
+  const bottomServices = sortedAscActive.slice(0, 10).map((r) => ({
+    id: r.service.id,
+    name: r.service.name,
+    platform: r.service.platform,
+    score: Math.round(r.currentScore * 10) / 10,
+    rawScore: Math.round(r.rawScore * 10) / 10,
+    sampleCount: r.sampleCount,
+    timeToFiftyMin: r.avgTimeToFiftyMin
+      ? Math.round(r.avgTimeToFiftyMin)
+      : null,
+    dropPct: r.avgDropPct !== null
+      ? Math.round(r.avgDropPct * 1000) / 10
+      : null,
+    lastTestedAt: r.service.lastTestedAt?.toISOString() ?? null,
+  }));
 
   // ── Recent events (mix of TestOrders + Alerts) ────────────────
   const [recentOrders, recentAlerts] = await Promise.all([

@@ -25,28 +25,47 @@ type OrderWithMeasurements = TestOrder & { measurements: Measurement[] };
 
 export type OrderScore = {
   orderId: number;
-  completion: number;
-  realism: number;
-  speed: number;
-  drop: number;
-  final: number;
+  // Sub-scores (0-40, 0-50, 0-10) — additive to total raw 0-100.
+  completionPts: number;
+  speedPts: number;
+  dropPts: number;
+  // Raw metrics surfaced for the dashboard + drawer.
+  completionPct: number;        // delivered / target, 0-1
+  timeToFiftyMin: number | null; // null if 50% never reached
+  dropPct: number;              // (peak - final) / peak, 0-1; 0 if no peak
+  // Aggregate.
+  final: number;                // 0-100
   hasSevenDay: boolean;
-  hasCompleted: boolean;
+  hasDelivery: boolean;         // peak > baseline
 };
 
-const SPEED_BUCKETS: Array<[number, number]> = [
-  [5, 100],
-  [30, 90],
-  [120, 75],
-  [24 * 60, 50],
-  [72 * 60, 25],
+// Speed bracket — minutes from placement until 50% of target
+// delivered. Faster = higher pts (max 50). Bracketed instead of
+// continuous so a 1h:01m service doesn't get a perceptible
+// penalty vs 0h:59m, but a 6h vs 12h gap is sharp.
+const SPEED_BRACKETS: Array<[number, number]> = [
+  [60, 50],         // < 1h
+  [180, 40],        // 1-3h
+  [360, 30],        // 3-6h
+  [720, 20],        // 6-12h
+  [1440, 10],       // 12-24h
+  [2880, 5],        // 24-48h
 ];
 
-function speedScore(deliveryMinutes: number | null): number {
-  if (deliveryMinutes === null) return 0;
-  for (const [threshold, score] of SPEED_BUCKETS) {
-    if (deliveryMinutes <= threshold) return score;
+function speedPtsFor(timeToFiftyMin: number | null): number {
+  if (timeToFiftyMin === null) return 0;
+  for (const [threshold, pts] of SPEED_BRACKETS) {
+    if (timeToFiftyMin <= threshold) return pts;
   }
+  return 0;
+}
+
+// Drop bracket — what % of delivery survived between peak and
+// final (T+7d) measurement. Drop > 30 % = punishment.
+function dropPtsFor(dropPct: number): number {
+  if (dropPct <= 0) return 10;
+  if (dropPct < 0.10) return 7;
+  if (dropPct < 0.30) return 4;
   return 0;
 }
 
@@ -54,52 +73,56 @@ export function computeOrderScore(order: OrderWithMeasurements): OrderScore {
   const measurementsSorted = [...order.measurements].sort(
     (a, b) => a.checkedAt.getTime() - b.checkedAt.getTime()
   );
-
   const postBaseline = measurementsSorted.filter((m) => m.checkpoint !== "T+0");
-  const all = measurementsSorted;
 
   const peakCount =
-    all.length === 0
+    measurementsSorted.length === 0
       ? order.baselineCount
-      : Math.max(...all.map((m) => m.actualCount));
-
+      : Math.max(...measurementsSorted.map((m) => m.actualCount));
   const delivered = Math.max(0, peakCount - order.baselineCount);
-  const completion = Math.min(1, delivered / Math.max(1, order.targetQuantity));
+  const completionPct = Math.min(1, delivered / Math.max(1, order.targetQuantity));
 
-  const realism =
-    postBaseline.length > 0
-      ? postBaseline.reduce((acc, m) => acc + (m.realismScore ?? 0), 0) /
-        postBaseline.length
-      : 0;
-
-  const targetReached = postBaseline.find(
-    (m) => m.actualCount - order.baselineCount >= order.targetQuantity * 0.95
-  );
-  const deliveryMinutes = targetReached
-    ? (targetReached.checkedAt.getTime() - order.placedAt.getTime()) / 60000
+  // ── Speed: minutes from placement to first measurement where
+  //    delivered ≥ 50 % of target. Linear-scan postBaseline rows
+  //    sorted ascending by checkedAt (already sorted above).
+  const fiftyTargetCount =
+    order.baselineCount + order.targetQuantity * 0.5;
+  const fiftyHit = postBaseline.find((m) => m.actualCount >= fiftyTargetCount);
+  const timeToFiftyMin = fiftyHit
+    ? (fiftyHit.checkedAt.getTime() - order.placedAt.getTime()) / 60_000
     : null;
-  const speed = speedScore(deliveryMinutes);
 
+  // ── Drop: between peakCount and the most recent post-baseline
+  //    measurement. We don't gate on T+7d existing — the
+  //    interim drop signal still informs the score on services
+  //    that haven't reached the sunset yet.
+  const lastMeas = postBaseline.length > 0
+    ? postBaseline[postBaseline.length - 1]
+    : null;
   const sevenDay = postBaseline.find((m) => m.checkpoint === "T+7d");
-  let drop = 100;
-  if (sevenDay && peakCount > order.baselineCount) {
+  let dropPct = 0;
+  if (lastMeas && peakCount > order.baselineCount) {
     const netPeak = peakCount - order.baselineCount;
-    const netAtJ7 = Math.max(0, sevenDay.actualCount - order.baselineCount);
-    const dropRatePct = ((netPeak - netAtJ7) / netPeak) * 100;
-    drop = Math.max(0, 100 - dropRatePct * 5);
+    const netAtLast = Math.max(0, lastMeas.actualCount - order.baselineCount);
+    dropPct = Math.min(1, Math.max(0, (netPeak - netAtLast) / netPeak));
   }
 
-  const final = completion * (realism * 0.4 + speed * 0.3 + drop * 0.3);
+  const completionPts = completionPct * 40;
+  const speedPts = speedPtsFor(timeToFiftyMin);
+  const dropPts = dropPtsFor(dropPct);
+  const final = completionPts + speedPts + dropPts; // 0-100
 
   return {
     orderId: order.id,
-    completion,
-    realism,
-    speed,
-    drop,
+    completionPts,
+    speedPts,
+    dropPts,
+    completionPct,
+    timeToFiftyMin,
+    dropPct,
     final,
     hasSevenDay: Boolean(sevenDay),
-    hasCompleted: deliveryMinutes !== null,
+    hasDelivery: peakCount > order.baselineCount,
   };
 }
 
@@ -183,34 +206,57 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const avg = (pick: (s: OrderScore) => number) =>
       scores.reduce((acc, s) => acc + pick(s), 0) / scores.length;
 
-    // Raw moving-average score (the metric we used as
-    // currentScore historically — kept for transparency on the
-    // /config/catalogue drawer).
-    const rawScore = avg((s) => s.final);
+    // Sub-scores feeding rawScore (additive, 0-100).
+    const completionPtsAvg = avg((s) => s.completionPts);
+    const speedPtsAvg = avg((s) => s.speedPts);
+    const dropPtsAvg = avg((s) => s.dropPts);
+    const rawScore = completionPtsAvg + speedPtsAvg + dropPtsAvg;
 
-    // Confidence factor — services with few samples shouldn't
-    // beat services with many samples just because the few
-    // samples landed lucky. Linear ramp 0.1 → 1.0 over 1 → 10
-    // samples; flat at 1.0 beyond.
+    // Bayesian smoothing — pulls low-sample scores toward a
+    // prior of 50 with weight 5. A service with 0 samples
+    // wouldn't be in this loop at all (RULE 1 filter), but a
+    // 1-sample service ends up at (raw + 250)/6 — far less
+    // dominant than its raw value alone.
     const sampleCount = orders.length;
+    const PRIOR = 50;
+    const PRIOR_WEIGHT = 5;
+    const weightedScore =
+      (rawScore * sampleCount + PRIOR * PRIOR_WEIGHT) /
+      (sampleCount + PRIOR_WEIGHT);
+
+    // Confidence kept as a UI hint (not used in math anymore).
     const confidence = Math.min(1, sampleCount / 10);
-    const weightedScore = rawScore * confidence;
+
+    // Aggregate metrics for the dashboard top/flop tables.
+    const timesToFifty = scores
+      .map((s) => s.timeToFiftyMin)
+      .filter((v): v is number => v !== null);
+    const avgTimeToFiftyMin =
+      timesToFifty.length > 0
+        ? timesToFifty.reduce((a, b) => a + b, 0) / timesToFifty.length
+        : null;
+    const avgDropPct = avg((s) => s.dropPct);
 
     await prisma.serviceScore.create({
       data: {
         serviceId,
         // currentScore = weightedScore so any legacy reader
         // (RoutingDecision audit, /services list, etc.) gets the
-        // confidence-adjusted view automatically.
+        // smoothed view automatically.
         currentScore: weightedScore,
-        completionFactor: avg((s) => s.completion),
-        realismScore: avg((s) => s.realism),
-        speedScore: avg((s) => s.speed),
-        dropScore: avg((s) => s.drop),
+        // Legacy sub-score columns kept for backwards compat —
+        // we now store them as "X / 100" normalized so the old
+        // schema readers don't see scale shifts.
+        completionFactor: avg((s) => s.completionPct),
+        realismScore: 0, // realism dropped from the formula
+        speedScore: speedPtsAvg * 2, // 0-100 scale
+        dropScore: dropPtsAvg * 10, // 0-100 scale
         rawScore,
         sampleCount,
         confidence,
         weightedScore,
+        avgTimeToFiftyMin,
+        avgDropPct,
       },
     });
 

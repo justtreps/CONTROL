@@ -137,6 +137,10 @@ type ServiceRow = {
   name: string;
   platform: string;
   score: number;
+  rawScore: number;
+  sampleCount: number;
+  timeToFiftyMin: number | null;
+  dropPct: number | null;
   lastTestedAt: string | null;
 };
 
@@ -831,6 +835,10 @@ function ServicesTable({
               <th className="text-left px-2 py-1 font-normal">Service</th>
               <th className="text-left px-2 py-1 font-normal">Plat.</th>
               <th className="text-right px-2 py-1 font-normal">Score</th>
+              <th className="text-right px-2 py-1 font-normal" title="Raw score before Bayesian smoothing">Raw</th>
+              <th className="text-right px-2 py-1 font-normal" title="Number of TestOrders feeding the moving average">N</th>
+              <th className="text-right px-2 py-1 font-normal" title="Time to 50% delivery">T50</th>
+              <th className="text-right px-2 py-1 font-normal" title="Drop % between peak and final">Drop</th>
               {showDisable && <th className="px-2 py-1" />}
             </tr>
           </thead>
@@ -854,6 +862,22 @@ function ServicesTable({
                   style={{ color: accent }}
                 >
                   {r.score.toFixed(1)}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
+                  {r.rawScore.toFixed(1)}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
+                  {r.sampleCount}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
+                  {r.timeToFiftyMin === null
+                    ? "—"
+                    : r.timeToFiftyMin < 60
+                      ? `${r.timeToFiftyMin}m`
+                      : `${(r.timeToFiftyMin / 60).toFixed(1)}h`}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
+                  {r.dropPct === null ? "—" : `${r.dropPct.toFixed(0)}%`}
                 </td>
                 {showDisable && (
                   <td className="px-2 py-1.5 text-right">

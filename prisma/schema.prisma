@@ -652,12 +652,25 @@ model ServiceScore {
   // TestOrders. 0-100 range, no confidence adjustment.
   rawScore         Float    @default(0)
 
-  // sampleCount × confidence pair. confidence = min(1,
-  // sampleCount/10). weightedScore = rawScore × confidence —
-  // what the dashboard ranking + UI use.
+  // sampleCount × Bayesian smoothing pair.
+  //   weightedScore = (rawScore × n + PRIOR × WEIGHT) / (n + WEIGHT)
+  //   with PRIOR=50, WEIGHT=5 — a service with 0 samples lands
+  //   at 50, a service with 5 samples is 50/50 with the prior, a
+  //   service with 30+ samples is essentially raw.
+  // confidence is kept as a cheap "how trusted is this row?"
+  // signal for the UI; same formula as before (min(1, n/10))
+  // surfaced for transparency, doesn't drive math anymore.
   sampleCount      Int      @default(0)
   confidence       Float    @default(0)
   weightedScore    Float    @default(0)
+
+  // Per-service averaged metrics surfaced in the dashboard
+  // tables. Both averaged across the 30 orders that fed
+  // rawScore.
+  //   avgTimeToFiftyMin — minutes from placement to 50% delivery
+  //   avgDropPct        — % drop between peak and final measure
+  avgTimeToFiftyMin Float?
+  avgDropPct        Float?
 
   computedAt       DateTime @default(now())
 
