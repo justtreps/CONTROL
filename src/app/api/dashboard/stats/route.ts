@@ -1,10 +1,14 @@
 // Aggregated payload for the root dashboard. Every field is a
-// single DB query (or cheap aggregation) — the 30 s module-level
-// cache absorbs the polling load (client refreshes every 10 s, so
-// we serve ~3 requests per cached compute).
+// single DB query (or cheap aggregation). A short module-level
+// cache absorbs the 10s polling load.
 //
-// Sections keep the response shape predictable so the client only
-// re-renders what actually changed.
+// Cache TTL was 30s — too long. Each Vercel function instance
+// holds its own cache, so a stale snapshot could survive across
+// multiple polls when traffic landed on a warm instance. After
+// the scoring formula change, operators were seeing weighted
+// scores 60s+ behind the DB. TTL is now 5s — still absorbs ~50%
+// of the polling load (client polls every 10s) without retaining
+// stale data long enough to confuse the ranking.
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -16,17 +20,25 @@ export const maxDuration = 20;
 
 type CachedPayload = { at: number; data: unknown };
 let cache: CachedPayload | null = null;
-const CACHE_TTL_MS = 30_000;
+const CACHE_TTL_MS = 5_000;
 
 export async function GET() {
   if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
     return NextResponse.json(cache.data, {
-      headers: { "x-cache": "HIT" },
+      headers: {
+        "x-cache": "HIT",
+        "Cache-Control": "no-store, max-age=0",
+      },
     });
   }
   const data = await build();
   cache = { at: Date.now(), data };
-  return NextResponse.json(data, { headers: { "x-cache": "MISS" } });
+  return NextResponse.json(data, {
+    headers: {
+      "x-cache": "MISS",
+      "Cache-Control": "no-store, max-age=0",
+    },
+  });
 }
 
 async function build() {
