@@ -299,11 +299,18 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
         })
         .catch(() => null);
     }
-    // Lifecycle: NEW → TESTING. Service-wide updateMany so all
-    // candidacies for this service flip together.
+    // Lifecycle: NEW or PLACEMENT_FAILED → TESTING. Including
+    // PLACEMENT_FAILED is critical for the balance-retry path —
+    // services that bounced for balance reasons live in
+    // PLACEMENT_FAILED, and a successful retry must promote them
+    // to TESTING + flip isEligible back on so the routing layer
+    // sees them as live again.
     await prisma.productServiceCandidate.updateMany({
-      where: { serviceId: service.id, lifecycleStatus: "NEW" },
-      data: { lifecycleStatus: "TESTING" },
+      where: {
+        serviceId: service.id,
+        lifecycleStatus: { in: ["NEW", "PLACEMENT_FAILED"] },
+      },
+      data: { lifecycleStatus: "TESTING", isEligible: true },
     });
     // Clear any prior balance / placement error stamp now that
     // BulkMedya accepted the order. The BalanceRetryCard hides
