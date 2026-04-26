@@ -42,7 +42,11 @@ export default async function ServicesPage({
     where: { active: true, platform, serviceType: type },
     orderBy: { name: "asc" },
     include: {
+      // Filter out legacy rows (sampleCount=0) so the displayed
+      // currentScore matches the new Bayesian formula. Same fix
+      // pattern as the dashboard top/flop query.
       scores: {
+        where: { sampleCount: { gt: 0 } },
         orderBy: { computedAt: "desc" },
         take: 30,
       },
@@ -118,8 +122,15 @@ export default async function ServicesPage({
     where: { ...scopeWhere, classificationManualReview: true },
   });
 
+  // Featured "MEILLEUR" card — was previously
+  // rows.find(currentScore !== null) which picked the first
+  // ALPHABETICAL service with a score (rows sorted by name).
+  // Fix: pick the highest currentScore. Falls back to the first
+  // row when no service has been scored yet.
   const top =
-    rows.find((r) => r.currentScore !== null) ??
+    rows
+      .filter((r) => r.currentScore !== null)
+      .sort((a, b) => (b.currentScore ?? 0) - (a.currentScore ?? 0))[0] ??
     (rows.length ? rows[0] : null);
 
   return (
