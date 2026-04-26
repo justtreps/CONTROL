@@ -263,7 +263,13 @@ async function build() {
   // New approach: pull the LATEST ServiceScore per service via
   // distinct-on serviceId, then sort + slice in app code. This
   // guarantees the score we rank on is current.
+  // Filter out legacy ServiceScore rows from before the
+  // speed-dominated formula landed — those have rawScore=0 +
+  // sampleCount=0 (column @default) but currentScore stamped
+  // with the old multiplicative metric. They'd otherwise pollute
+  // the top of the ranking with stale 80+ values.
   const latestPerService = await prisma.serviceScore.findMany({
+    where: { sampleCount: { gt: 0 } },
     distinct: ["serviceId"],
     orderBy: [{ serviceId: "asc" }, { computedAt: "desc" }],
     include: {
