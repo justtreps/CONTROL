@@ -16,10 +16,11 @@ import { attemptPlaceOrder } from "@/lib/testbot";
 import { acquireKeyForNewJob, withApiKey } from "@/lib/rapidapi/key-manager";
 import type { Service } from "@prisma/client";
 
-// 200 tests/hour = 24 * 200 = 4800/day ceiling. With ~1000
-// MONITORED services at steady state we can retest each one ~4×/
-// day; at ~3000 MONITORED we retest each ~1.5×/day. That matches
-// the daily-retest spec (once per 24h per service).
+// 200 tests/hour = 24 * 200 = 4800/day ceiling. Combined with
+// the 8h per-service cutoff, each eligible service retests up
+// to 3×/day (every 8h). With ~700 QUALIFIED+MONITORED services
+// at steady state, throughput is ~700×3/24 = 88/hour, well
+// under the 200/h cap.
 const RETESTS_PER_HOUR = 200;
 const PER_TEST_WALL_MS_BUDGET = 10_000;
 const CONCURRENCY = 5;
@@ -40,15 +41,20 @@ export async function POST(req: Request) {
     });
   }
 
-  const cutoff = new Date(Date.now() - 24 * 60 * 60_000);
+  // 8h per-service cutoff = max 3 retests/day per service.
+  // Earlier 24h cutoff capped retests at 1×/day which made the
+  // 30-test moving-average score impossibly slow to fill.
+  const cutoff = new Date(Date.now() - 8 * 60 * 60_000);
 
-  // Candidates with lifecycleStatus=MONITORED whose service was
-  // last tested ≥24h ago (or never). Group by service so each
-  // service is retested once per tick even if it's a candidate
-  // for multiple products.
+  // Candidates with lifecycleStatus IN (QUALIFIED, MONITORED).
+  // QUALIFIED was excluded before — bug: a service needs ≥2
+  // delivered TestOrders to flip QUALIFIED → MONITORED, and the
+  // 2nd order can only come from a retest. Excluding QUALIFIED
+  // from retests created a catch-22 where 491 services sat at
+  // n=1 forever waiting for a 2nd test that never came.
   const cands = await prisma.productServiceCandidate.findMany({
     where: {
-      lifecycleStatus: "MONITORED",
+      lifecycleStatus: { in: ["QUALIFIED", "MONITORED"] },
       isEligible: true,
       forceExcluded: false,
       service: {
