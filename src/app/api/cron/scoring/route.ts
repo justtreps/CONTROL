@@ -3,7 +3,7 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { runScoringEngine } from "@/lib/scoring";
 import { getSystemToggles } from "@/lib/system/toggles";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {

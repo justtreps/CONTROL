@@ -153,8 +153,14 @@ export async function runScoringEngine(): Promise<ScoringResult> {
   result.accountsConsumedByMeasurement = consumed.byMeasurement;
   result.accountsConsumedByTimeout = consumed.byTimeout;
 
+  // Only loop services with ≥ 1 completed TestOrder. Saves
+  // ~4 000 wasted iterations on out-of-scope services that have
+  // never been tested.
   const services = await prisma.service.findMany({
-    where: { active: true },
+    where: {
+      active: true,
+      testOrders: { some: { status: "completed" } },
+    },
     select: { id: true },
   });
 
