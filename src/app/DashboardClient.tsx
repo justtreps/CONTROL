@@ -131,6 +131,18 @@ type Stats = {
       permanentlyFailed: number;
     };
   };
+  balanceRetry?: {
+    failedCount: number;
+    minBudgetUsd: number;
+    sample: Array<{
+      id: number;
+      name: string;
+      platform: string;
+      cost: number;
+      error: string;
+      erroredAt: string;
+    }>;
+  };
 };
 type ServiceRow = {
   id: number;
@@ -320,6 +332,17 @@ export function DashboardClient({
       {stats.catalogueSync && (
         <Section title="DERNIÈRE SYNC CATALOGUE">
           <CatalogueSyncCard sync={stats.catalogueSync} onChanged={refresh} />
+        </Section>
+      )}
+
+      {/* Balance retry card — only renders when there's actually
+          a backlog of balance-failed services. */}
+      {stats.balanceRetry && stats.balanceRetry.failedCount > 0 && (
+        <Section title="BALANCE BULKMEDYA — RETRY">
+          <BalanceRetryCard
+            budget={stats.balanceRetry}
+            onChanged={refresh}
+          />
         </Section>
       )}
 
@@ -1366,6 +1389,105 @@ function SyncCell({
       <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
         {subtle}
       </span>
+    </div>
+  );
+}
+
+function BalanceRetryCard({
+  budget,
+  onChanged,
+}: {
+  budget: NonNullable<Stats["balanceRetry"]>;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  async function retry() {
+    if (busy) return;
+    if (
+      !confirm(
+        `Lancer le retry sur ${budget.failedCount} commandes failed ? Une probe sera tentée d'abord pour valider que la balance est OK.`
+      )
+    )
+      return;
+    setBusy(true);
+    setFeedback("Probe en cours…");
+    try {
+      const res = await fetch("/api/balance/retry-failed", {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setFeedback(
+          `OK · probe svc#${data.probeServiceId} passée · ${data.queueSize} commandes queued (${data.mode})`
+        );
+        onChanged();
+      } else if (data.error === "balance_still_insufficient") {
+        setFeedback(
+          `❌ Balance insuffisante (probe svc#${data.probeServiceId} a re-fail). Recharger encore.`
+        );
+      } else {
+        setFeedback(`Erreur: ${data.error ?? "inconnue"}`);
+      }
+    } catch (e) {
+      setFeedback(`Erreur: ${(e as Error).message.slice(0, 80)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="border-y border-[#666666]/20 p-5 md:p-6 bg-[#030303] flex flex-col gap-4">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span
+            className="font-mono text-[10px] tracking-widest uppercase border px-2 py-0.5 text-[#FFCC00] border-[#FFCC00]"
+          >
+            BALANCE INSUFFISANTE
+          </span>
+          <span className="font-mono text-[11px] text-white tracking-widest tabular-nums">
+            {budget.failedCount} COMMANDES EN ATTENTE · MIN ${budget.minBudgetUsd.toFixed(2)} POUR RELANCER
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={retry}
+          disabled={busy}
+          className="interactive border border-[#00CC66] text-[#00CC66] hover:bg-[#00CC66] hover:text-black transition-colors px-3 py-1.5 font-mono text-[11px] tracking-widest uppercase disabled:opacity-60"
+        >
+          [ J&apos;AI RECHARGÉ — RELANCER ]
+        </button>
+      </div>
+      <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase normal-case leading-relaxed">
+        💸 Pour rattraper les <span className="text-white tabular-nums">{budget.failedCount}</span> commandes qui ont fail balance dans les 24 dernières heures, recharge minimum <span className="text-[#00CC66] tabular-nums">${budget.minBudgetUsd.toFixed(2)}</span> sur BulkMedya. Le bouton fait un probe avec le service le moins cher d&apos;abord pour valider que la balance est OK avant de relancer la batch entière.
+      </div>
+      {budget.sample.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {budget.sample.map((s) => (
+            <div
+              key={s.id}
+              className="font-mono text-[10px] text-[#666666] tracking-widest uppercase border border-[#666666]/20 p-3 bg-[#0D0D0D] flex flex-col gap-1"
+            >
+              <div className="text-white truncate normal-case">
+                #{s.id} {s.name.slice(0, 70)}
+              </div>
+              <div className="flex justify-between">
+                <span>{s.platform}</span>
+                <span className="text-[#FFCC00] tabular-nums">${s.cost.toFixed(2)}</span>
+              </div>
+              <div className="text-[#666666] text-[9px] truncate normal-case">
+                err: {s.error.slice(0, 80)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {feedback && (
+        <div className="font-mono text-[10px] text-[#FFCC00] tracking-widest uppercase">
+          {feedback}
+        </div>
+      )}
     </div>
   );
 }

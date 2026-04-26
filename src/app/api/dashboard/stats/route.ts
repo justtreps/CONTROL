@@ -441,6 +441,12 @@ async function build() {
   );
   const catalogueSync = await getCatalogueSyncStatus();
 
+  // ── BulkMedya balance retry budget ───────────────────────────
+  const { getBalanceRetryBudget } = await import(
+    "@/lib/balance/retry-budget"
+  );
+  const balanceRetry = await getBalanceRetryBudget();
+
   return {
     generatedAt: new Date().toISOString(),
     globalStats,
@@ -457,6 +463,7 @@ async function build() {
     bruteCampaign,
     catalogueLifecycle,
     catalogueSync,
+    balanceRetry,
   };
 }
 

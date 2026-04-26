@@ -246,7 +246,20 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
           })
           .catch(() => null);
       }
-      return { kind: "bulkmedya_failed", reason: String(order.error).slice(0, 200) };
+      // Stamp the error on Service so /api/balance/retry-budget
+      // can find balance-related rejections + compute the
+      // recharge amount needed to retry them.
+      const reason = String(order.error).slice(0, 500);
+      await prisma.service
+        .update({
+          where: { id: service.id },
+          data: {
+            lastPlacementError: reason,
+            lastPlacementErrorAt: new Date(),
+          },
+        })
+        .catch(() => null);
+      return { kind: "bulkmedya_failed", reason: reason.slice(0, 200) };
     }
 
     // Write the TestOrder + T+0 baseline measurement inline.

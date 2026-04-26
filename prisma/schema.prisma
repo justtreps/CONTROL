@@ -69,6 +69,14 @@ model Service {
   // manually if BulkMedya re-adds the service.
   removedFromProviderAt DateTime?
 
+  // Last BulkMedya error message + timestamp captured at
+  // placement time. Used by /api/balance/retry-budget to count
+  // services that bounced for balance reasons (neutral_balance,
+  // insufficient_balance, etc.) and compute the minimum recharge
+  // amount to retry just those.
+  lastPlacementError    String?
+  lastPlacementErrorAt  DateTime?
+
   testOrders      TestOrder[]
   scores          ServiceScore[]
   productCandidacies ProductServiceCandidate[]

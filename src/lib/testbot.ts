@@ -430,6 +430,18 @@ export async function attemptPlaceOrder({
 
     if ("error" in order) {
       await releaseHeld();
+      const reason = String(order.error).slice(0, 500);
+      // Stamp the error on Service so /api/balance/retry-budget
+      // can find balance-related rejections.
+      await prisma.service
+        .update({
+          where: { id: service.id },
+          data: {
+            lastPlacementError: reason,
+            lastPlacementErrorAt: new Date(),
+          },
+        })
+        .catch(() => null);
       // Emit service.died — any workflow listening on the event bus
       // can react (dispatcher would be a forceExcluded toggle on
       // the ProductServiceCandidate, a notify, etc.). Best-effort;
@@ -438,7 +450,7 @@ export async function attemptPlaceOrder({
       await emit("service.died", {
         serviceId: service.id,
         bulkmedyaId: service.bulkmedyaId,
-        reason: String(order.error).slice(0, 200),
+        reason: reason.slice(0, 200),
       });
       return { kind: "skip", reason: `bulkmedya: ${order.error}` };
     }
