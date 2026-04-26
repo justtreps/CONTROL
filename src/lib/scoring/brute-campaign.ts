@@ -405,12 +405,27 @@ export async function runBruteCampaignTick(): Promise<BruteTickResult> {
           where: { serviceId: sid },
           data: { lifecycleStatus: "PLACEMENT_FAILED", isEligible: false },
         });
+        // Stamp the actual reason so the BalanceRetryCard can
+        // distinguish balance-bounced vs other-reason fails.
+        // bulkmedya_failed has its own stamp inside placeBruteOne;
+        // we cover thrown outcomes here so 'service_not_found',
+        // 'max_below_floor', or runtime exceptions are visible.
+        const reason = (outcome as { reason?: string }).reason ?? outcome.kind;
+        if (outcome.kind !== "bulkmedya_failed") {
+          await prisma.service
+            .update({
+              where: { id: sid },
+              data: {
+                lastPlacementError: `${outcome.kind}: ${reason}`.slice(0, 500),
+                lastPlacementErrorAt: new Date(),
+              },
+            })
+            .catch(() => null);
+        }
         result.failed++;
         failed.add(sid);
         placed.add(sid); // mark to skip on next tick
-        console.warn(
-          `[brute] svc#${sid} ${outcome.kind}: ${(outcome as { reason?: string }).reason ?? ""}`
-        );
+        console.warn(`[brute] svc#${sid} ${outcome.kind}: ${reason}`);
       }
       flushAccum++;
     };
