@@ -29,6 +29,7 @@ import {
   onMeasurementWritten,
   onTestCompleted,
 } from "@/lib/catalogue/lifecycle";
+import { withApiKey } from "@/lib/rapidapi/key-manager";
 
 // ── Tuning knobs ────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
@@ -91,9 +92,31 @@ export async function runPoller(): Promise<PollerResult> {
     take: MAX_ORDERS_PER_TICK,
   });
 
+  // Round-robin RapidAPI keys per-order. Without this wrap,
+  // currentKey() returns null for every poll → every oracle
+  // call falls through to the legacy env-var fallback → only
+  // one key's quota gets consumed and rate_limiter:legacy
+  // saturates while the second active key sits idle.
+  const activeKeys = await prisma.rapidApiKey.findMany({
+    where: { provider: "instagram", status: "active" },
+    select: { id: true, token: true, provider: true },
+  });
+
   for (let i = 0; i < orders.length; i += POLL_CONCURRENCY) {
     const wave = orders.slice(i, i + POLL_CONCURRENCY);
-    await Promise.all(wave.map((o) => pollOne(o, result)));
+    await Promise.all(
+      wave.map((o, j) => {
+        const key = activeKeys.length
+          ? activeKeys[(i + j) % activeKeys.length]
+          : null;
+        if (!key) return pollOne(o, result);
+        return withApiKey(
+          { id: key.id, token: key.token, provider: key.provider },
+          undefined,
+          () => pollOne(o, result)
+        );
+      })
+    );
   }
 
   return result;

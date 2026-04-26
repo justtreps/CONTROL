@@ -94,11 +94,17 @@ export async function runAllDetectors(): Promise<EngineResult> {
       });
       result.created++;
     } else {
+      // Active alert re-fires every detector tick (every 2 min)
+      // as long as the underlying condition stays true. Bumping
+      // triggerCount on EVERY tick produced 1000+ counts within
+      // a day for stable conditions like dry_run_off_with_testbot
+      // — meaningless noise. We now only refresh content + bump
+      // lastTriggeredAt; triggerCount stays at its initial 1
+      // until the alert auto-resolves and re-fires fresh.
       await prisma.alert.update({
         where: { id: existingId },
         data: {
           lastTriggeredAt: new Date(),
-          triggerCount: { increment: 1 },
           // Refresh content — severity + numbers may have moved.
           severity: hit.severity,
           title: hit.title,
