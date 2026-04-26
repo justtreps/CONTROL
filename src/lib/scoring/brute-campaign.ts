@@ -305,9 +305,17 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
       where: { serviceId: service.id, lifecycleStatus: "NEW" },
       data: { lifecycleStatus: "TESTING" },
     });
+    // Clear any prior balance / placement error stamp now that
+    // BulkMedya accepted the order. The BalanceRetryCard hides
+    // services without a recent error, so successful retries
+    // empty out the card automatically.
     await prisma.service.update({
       where: { id: service.id },
-      data: { lastTestedAt: new Date() },
+      data: {
+        lastTestedAt: new Date(),
+        lastPlacementError: null,
+        lastPlacementErrorAt: null,
+      },
     });
     return { kind: "placed", testOrderId: testOrder.id };
   } catch (e) {

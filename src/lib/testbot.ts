@@ -485,9 +485,16 @@ export async function attemptPlaceOrder({
     // obsolescence filter has a fresh signal. Denormalised max of
     // TestOrder.placedAt; far cheaper than a JOIN + GROUP BY on the
     // review page every render.
+    // Also clear any lingering placement error stamp — the
+    // BalanceRetryCard will automatically empty out as services
+    // place successfully.
     await prisma.service.update({
       where: { id: service.id },
-      data: { lastTestedAt: new Date() },
+      data: {
+        lastTestedAt: new Date(),
+        lastPlacementError: null,
+        lastPlacementErrorAt: null,
+      },
     });
 
     if (postPick) {
