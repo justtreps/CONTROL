@@ -5,6 +5,7 @@
 import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { runCampaignTick } from "@/lib/scoring/campaign";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 // 300 s ceiling. Observed: each placement is ~8-10 s wall-time
 // (oracle + realism sample + BulkMedya + DB writes) → a 10-
@@ -14,6 +15,13 @@ export const maxDuration = 300;
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  // testBotEnabled gates this runner — it places real BulkMedya
+  // orders. If the operator killed the testbot, the campaign
+  // shouldn't keep burning BulkMedya budget.
+  const toggles = await getSystemToggles();
+  if (!toggles.testBotEnabled) {
+    return NextResponse.json({ ok: true, skipped: "test_bot_disabled" });
   }
   try {
     const r = await runCampaignTick();

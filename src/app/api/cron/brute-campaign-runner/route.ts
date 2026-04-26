@@ -7,12 +7,20 @@
 import { NextResponse } from "next/server";
 import { verifyCronAuth } from "@/lib/cron-auth";
 import { runBruteCampaignTick } from "@/lib/scoring/brute-campaign";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  // testBotEnabled gates this runner — brute placement = real
+  // BulkMedya orders. Stop burning budget when the operator
+  // kills the testbot.
+  const toggles = await getSystemToggles();
+  if (!toggles.testBotEnabled) {
+    return NextResponse.json({ ok: true, skipped: "test_bot_disabled" });
   }
   try {
     const r = await runBruteCampaignTick();
