@@ -398,9 +398,12 @@ export async function attemptPlaceOrder({
     // informational (it scores the followers sample for fake-vs-
     // real signal) — losing it shouldn't block the placement.
     // Tolerate any failure here, fall back to neutral realism.
-    let sample: { realismScore: number | null; realismData: unknown } = {
+    let sample: {
+      realismScore: number | null;
+      realismData: import("@prisma/client").Prisma.InputJsonValue;
+    } = {
       realismScore: null,
-      realismData: {},
+      realismData: {} as import("@prisma/client").Prisma.InputJsonValue,
     };
     try {
       sample = await fetchFollowerSnapshot(
