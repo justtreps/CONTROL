@@ -9,7 +9,13 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { runPoller } from "@/lib/testbot/poller";
 
-export const maxDuration = 60;
+// 60s was bottlenecking the poller — observed ~218 polls/h
+// vs MAX_ORDERS_PER_TICK=500 cap because each tick exited at the
+// 60s deadline mid-batch. With 2700+ running orders on a 12h
+// cadence we need ~225 polls/h steady-state, but a backlog of
+// 1600+ due polls accumulates without headroom. 300s lets the
+// poller drain the cap when needed.
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   if (!verifyCronAuth(req)) {

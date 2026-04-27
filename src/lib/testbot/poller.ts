@@ -154,13 +154,20 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
   const isDelivered = deliveredQty >= order.targetQuantity;
   const shouldFinalise = isSunset || isDelivered;
 
-  // Checkpoint name stays unique per age so the Measurement
-  // upsert's @@unique([testOrderId, checkpoint]) constraint never
-  // fires. "T+7d" reserved for the terminal write so the scoring
-  // engine's existing 7-day reads keep working.
-  const checkpointName = shouldFinalise
-    ? "T+7d"
-    : `poll-${Math.round(ageMs / 60000)}min`;
+  // Checkpoint name reflects WHY this is the terminal measurement,
+  // not just "is terminal". A service that delivered fully in 30
+  // minutes used to land with checkpoint='T+7d' which lied to the
+  // operator about the test age. Now:
+  //   • isSunset (age >= 7d, no full delivery)         → "T+7d"
+  //   • isDelivered (peak >= target, before 7d sunset) → "completed"
+  //   • mid-poll                                       → "poll-{min}min"
+  // Scoring engine reads `hasSevenDay` as a boolean flag — having
+  // a separate label for early-completion is purely informational,
+  // doesn't change the score, but makes the /logs view honest.
+  let checkpointName: string;
+  if (isSunset) checkpointName = "T+7d";
+  else if (isDelivered) checkpointName = "completed";
+  else checkpointName = `poll-${Math.round(ageMs / 60000)}min`;
 
   await prisma.measurement.upsert({
     where: {
