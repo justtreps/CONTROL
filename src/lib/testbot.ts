@@ -391,14 +391,28 @@ export async function attemptPlaceOrder({
       account = { ...account, username: currentUsername };
     }
 
-    // Realism sample still comes from fetchFollowerSnapshot (it does
-    // a /followers call and scores the sample). Baseline count comes
-    // from the oracle — it's the authoritative number at placement time.
-    const sample = await fetchFollowerSnapshot(
-      service.platform as Platform,
-      currentUsername,
-      oracle.userId
-    );
+    // Realism sample is best-effort — fetchFollowerSnapshot used
+    // to throw on a private/ghost account or any unexpected
+    // response shape, propagating to the outer catch and turning
+    // the whole placement into kind:'skip'. Realism is purely
+    // informational (it scores the followers sample for fake-vs-
+    // real signal) — losing it shouldn't block the placement.
+    // Tolerate any failure here, fall back to neutral realism.
+    let sample: { realismScore: number | null; realismData: unknown } = {
+      realismScore: null,
+      realismData: {},
+    };
+    try {
+      sample = await fetchFollowerSnapshot(
+        service.platform as Platform,
+        currentUsername,
+        oracle.userId
+      );
+    } catch (e) {
+      console.warn(
+        `[testbot] fetchFollowerSnapshot fallback for svc#${service.id} acct#${account.id}: ${(e as Error).message.slice(0, 120)}`
+      );
+    }
     const baseline = {
       count: oracle.followerCount,
       realismScore: sample.realismScore,
