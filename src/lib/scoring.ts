@@ -269,14 +269,20 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const rawScore =
       completionPtsAvg + speedPtsAvg + dropPtsAvg + costPtsAvg;
 
-    // Bayesian smoothing. Lowered prior weight 5 → 2 so the
-    // raw signal dominates: 1131 services were stuck in a
-    // 50-58 band because (raw+250)/6 squashed everything.
-    // (raw*n + 50*2)/(n+2) gives more swing while still
-    // protecting against a single lucky test.
+    // Bayesian smoothing. Lowered prior weight 5 → 2 → 1.
+    // With weight 2 the n=1 ceiling was (raw+100)/3 = 66.7 — top
+    // services capped at 67 even with a perfect raw=100. Prior
+    // weight 1 unlocks:
+    //   n=1, raw=100 → (100+50)/2 = 75
+    //   n=1, raw=50  → (50+50)/2  = 50  (prior anchor)
+    //   n=1, raw=0   → (0+50)/2   = 25
+    //   n=2, raw=100 → (200+50)/3 = 83
+    //   n=5, raw=100 → (500+50)/6 = 92
+    // Real spread per sample-count tier; ranking actually picks
+    // top performers instead of compressing them.
     const sampleCount = orders.length;
     const PRIOR = 50;
-    const PRIOR_WEIGHT = 2;
+    const PRIOR_WEIGHT = 1;
     const weightedScore =
       (rawScore * sampleCount + PRIOR * PRIOR_WEIGHT) /
       (sampleCount + PRIOR_WEIGHT);
