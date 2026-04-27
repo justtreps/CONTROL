@@ -16,14 +16,14 @@ import { attemptPlaceOrder } from "@/lib/testbot";
 import { acquireKeyForNewJob, withApiKey } from "@/lib/rapidapi/key-manager";
 import type { Service } from "@prisma/client";
 
-// 200 tests/hour = 24 * 200 = 4800/day ceiling. Combined with
-// the 8h per-service cutoff, each eligible service retests up
-// to 3×/day (every 8h). With ~700 QUALIFIED+MONITORED services
-// at steady state, throughput is ~700×3/24 = 88/hour, well
-// under the 200/h cap.
+// Per-tick caps. Must fit inside maxDuration=300s. Observed
+// per-test wall-time for attemptPlaceOrder: ~3-5s normal, up to
+// 15s on retry chains. CONCURRENCY=5 with RETESTS_PER_HOUR=200
+// caused 504 timeouts at 300s. Bumped concurrency to 12 so the
+// drain runs in ~50-70s steady, ~150s worst-case.
 const RETESTS_PER_HOUR = 200;
 const PER_TEST_WALL_MS_BUDGET = 10_000;
-const CONCURRENCY = 5;
+const CONCURRENCY = 12;
 
 export const maxDuration = 300;
 
