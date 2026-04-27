@@ -25,10 +25,11 @@ type OrderWithMeasurements = TestOrder & { measurements: Measurement[] };
 
 export type OrderScore = {
   orderId: number;
-  // Sub-scores (0-40, 0-50, 0-10) — additive to total raw 0-100.
+  // Sub-scores. 0-30 / 0-50 / 0-5 / 0-15 = total 100.
   completionPts: number;
   speedPts: number;
   dropPts: number;
+  costPts: number;
   // Raw metrics surfaced for the dashboard + drawer.
   completionPct: number;        // delivered / target, 0-1
   timeToFiftyMin: number | null; // null if 50% never reached
@@ -39,17 +40,32 @@ export type OrderScore = {
   hasDelivery: boolean;         // peak > baseline
 };
 
-// Speed bracket — minutes from placement until 50% of target
-// delivered. Faster = higher pts (max 50). Bracketed instead of
-// continuous so a 1h:01m service doesn't get a perceptible
-// penalty vs 0h:59m, but a 6h vs 12h gap is sharp.
+// Score component weights — sum to 100.
+//
+// Calibration history: completion was 40 pts and drop was 10
+// pts but observation showed completion saturated at 1.0 and
+// drop saturated at 0 % across virtually every QUALIFIED
+// service. Both dimensions degenerated to a fixed +50 offset
+// that compressed the total into a 50-60 band. Reduced their
+// weights and added COST_EFFICIENCY which actually varies per
+// service to widen the score distribution.
+//
+// Speed remains 50 pts — it's the only dimension that produces
+// real variance across the catalog (and the variance ceiling is
+// limited by the 12h polling cadence — a service that delivers
+// in 30 min still measures as "delivered ≤ 12h").
+const COMPLETION_PTS_MAX = 30;
+const SPEED_PTS_MAX = 50;
+const DROP_PTS_MAX = 5;
+const COST_PTS_MAX = 15;
+
 const SPEED_BRACKETS: Array<[number, number]> = [
-  [60, 50],         // < 1h
-  [180, 40],        // 1-3h
-  [360, 30],        // 3-6h
-  [720, 20],        // 6-12h
-  [1440, 10],       // 12-24h
-  [2880, 5],        // 24-48h
+  [60, SPEED_PTS_MAX],         // < 1h
+  [180, 40],                    // 1-3h
+  [360, 30],                    // 3-6h
+  [720, 20],                    // 6-12h
+  [1440, 10],                   // 12-24h
+  [2880, 5],                    // 24-48h
 ];
 
 function speedPtsFor(timeToFiftyMin: number | null): number {
@@ -60,16 +76,28 @@ function speedPtsFor(timeToFiftyMin: number | null): number {
   return 0;
 }
 
-// Drop bracket — what % of delivery survived between peak and
-// final (T+7d) measurement. Drop > 30 % = punishment.
+// Drop bracket scaled to the new 0-5 max.
 function dropPtsFor(dropPct: number): number {
-  if (dropPct <= 0) return 10;
-  if (dropPct < 0.10) return 7;
-  if (dropPct < 0.30) return 4;
+  if (dropPct <= 0) return DROP_PTS_MAX;
+  if (dropPct < 0.10) return Math.round(DROP_PTS_MAX * 0.7);
+  if (dropPct < 0.30) return Math.round(DROP_PTS_MAX * 0.4);
   return 0;
 }
 
-export function computeOrderScore(order: OrderWithMeasurements): OrderScore {
+// Cost percentile → points. Ranked across all currently-active
+// scorable services so we always have a fresh distribution.
+function costPtsFor(costPercentile: number): number {
+  // Lower percentile = cheaper = better.
+  if (costPercentile <= 0.25) return COST_PTS_MAX;            // top 25 % cheapest
+  if (costPercentile <= 0.50) return Math.round(COST_PTS_MAX * 0.66);
+  if (costPercentile <= 0.75) return Math.round(COST_PTS_MAX * 0.33);
+  return 0;
+}
+
+export function computeOrderScore(
+  order: OrderWithMeasurements,
+  costPercentile = 0.5,
+): OrderScore {
   const measurementsSorted = [...order.measurements].sort(
     (a, b) => a.checkedAt.getTime() - b.checkedAt.getTime()
   );
@@ -107,16 +135,18 @@ export function computeOrderScore(order: OrderWithMeasurements): OrderScore {
     dropPct = Math.min(1, Math.max(0, (netPeak - netAtLast) / netPeak));
   }
 
-  const completionPts = completionPct * 40;
+  const completionPts = completionPct * COMPLETION_PTS_MAX;
   const speedPts = speedPtsFor(timeToFiftyMin);
   const dropPts = dropPtsFor(dropPct);
-  const final = completionPts + speedPts + dropPts; // 0-100
+  const costPts = costPtsFor(costPercentile);
+  const final = completionPts + speedPts + dropPts + costPts; // 0-100
 
   return {
     orderId: order.id,
     completionPts,
     speedPts,
     dropPts,
+    costPts,
     completionPct,
     timeToFiftyMin,
     dropPct,
@@ -161,8 +191,26 @@ export async function runScoringEngine(): Promise<ScoringResult> {
       active: true,
       testOrders: { some: { status: "completed" } },
     },
-    select: { id: true },
+    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
   });
+
+  // Cost percentile thresholds for COST_EFFICIENCY scoring. Sort
+  // ALL active scorable services by per-test cost, then use
+  // quartile thresholds to map each service's cost to a percentile
+  // rank in computeOrderScore. Computed once per scoring run so
+  // we don't re-sort per service.
+  const costs = services
+    .map((s) => {
+      const qty = Math.max(20, s.minQuantity);
+      if (s.maxQuantity > 0 && qty > s.maxQuantity) return null;
+      return { id: s.id, cost: (s.ratePerK * qty) / 1000 };
+    })
+    .filter((v): v is { id: number; cost: number } => v !== null)
+    .sort((a, b) => a.cost - b.cost);
+  const costRankByService = new Map<number, number>();
+  for (let i = 0; i < costs.length; i++) {
+    costRankByService.set(costs[i].id, costs.length > 1 ? i / (costs.length - 1) : 0.5);
+  }
 
   for (const { id: serviceId } of services) {
     // Pull MOVING_AVG_WINDOW × 3 so the RULE 1 filter below has
@@ -207,7 +255,8 @@ export async function runScoringEngine(): Promise<ScoringResult> {
       continue;
     }
 
-    const scores = orders.map(computeOrderScore);
+    const costPercentile = costRankByService.get(serviceId) ?? 0.5;
+    const scores = orders.map((o) => computeOrderScore(o, costPercentile));
 
     const avg = (pick: (s: OrderScore) => number) =>
       scores.reduce((acc, s) => acc + pick(s), 0) / scores.length;
@@ -216,16 +265,18 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const completionPtsAvg = avg((s) => s.completionPts);
     const speedPtsAvg = avg((s) => s.speedPts);
     const dropPtsAvg = avg((s) => s.dropPts);
-    const rawScore = completionPtsAvg + speedPtsAvg + dropPtsAvg;
+    const costPtsAvg = avg((s) => s.costPts);
+    const rawScore =
+      completionPtsAvg + speedPtsAvg + dropPtsAvg + costPtsAvg;
 
-    // Bayesian smoothing — pulls low-sample scores toward a
-    // prior of 50 with weight 5. A service with 0 samples
-    // wouldn't be in this loop at all (RULE 1 filter), but a
-    // 1-sample service ends up at (raw + 250)/6 — far less
-    // dominant than its raw value alone.
+    // Bayesian smoothing. Lowered prior weight 5 → 2 so the
+    // raw signal dominates: 1131 services were stuck in a
+    // 50-58 band because (raw+250)/6 squashed everything.
+    // (raw*n + 50*2)/(n+2) gives more swing while still
+    // protecting against a single lucky test.
     const sampleCount = orders.length;
     const PRIOR = 50;
-    const PRIOR_WEIGHT = 5;
+    const PRIOR_WEIGHT = 2;
     const weightedScore =
       (rawScore * sampleCount + PRIOR * PRIOR_WEIGHT) /
       (sampleCount + PRIOR_WEIGHT);
