@@ -15,12 +15,12 @@ export type ScorePoint = {
   t: string;
   total: number;
   completion: number;
-  realism: number;
   speed: number;
   drop: number;
+  cost: number;
 };
 
-type SeriesKey = "total" | "completion" | "realism" | "speed" | "drop";
+type SeriesKey = "total" | "completion" | "speed" | "drop" | "cost";
 
 const SERIES: Array<{
   key: SeriesKey;
@@ -30,9 +30,9 @@ const SERIES: Array<{
 }> = [
   { key: "total", label: "Total", color: "#FFFFFF", width: 2.5 },
   { key: "completion", label: "Livraison", color: "#999999", width: 1.2 },
-  { key: "realism", label: "Réalisme", color: "#777777", width: 1.2 },
-  { key: "speed", label: "Vitesse", color: "#555555", width: 1.2 },
-  { key: "drop", label: "Drop", color: "#333333", width: 1.2 },
+  { key: "speed", label: "Vitesse", color: "#777777", width: 1.2 },
+  { key: "drop", label: "Drop", color: "#555555", width: 1.2 },
+  { key: "cost", label: "Coût", color: "#333333", width: 1.2 },
 ];
 
 function formatTick(iso: string): string {
@@ -83,9 +83,9 @@ export function ServiceDetailCharts({ points }: { points: ScorePoint[] }) {
   const [visible, setVisible] = useState<Record<SeriesKey, boolean>>({
     total: true,
     completion: true,
-    realism: true,
     speed: true,
     drop: true,
+    cost: true,
   });
 
   function toggle(key: SeriesKey) {

@@ -46,13 +46,58 @@ export default async function ServiceDetailPage({
   const sevenDayBaseline =
     service.scores.find((s) => s.computedAt.getTime() >= sevenDaysAgo) ?? null;
 
+  // Cost-efficiency percentile of THIS service across the catalog.
+  // Mirrors the calculation in lib/scoring.ts:runScoringEngine —
+  // computed live so a service whose product/category cost
+  // distribution shifts gets a fresh percentile here.
+  const allScorable = await prisma.service.findMany({
+    where: {
+      active: true,
+      testOrders: { some: { status: "completed" } },
+    },
+    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
+  });
+  const myCost = (() => {
+    const qty = Math.max(20, service.minQuantity);
+    if (service.maxQuantity > 0 && qty > service.maxQuantity) return null;
+    return (service.ratePerK * qty) / 1000;
+  })();
+  const allCosts = allScorable
+    .map((s) => {
+      const qty = Math.max(20, s.minQuantity);
+      if (s.maxQuantity > 0 && qty > s.maxQuantity) return null;
+      return (s.ratePerK * qty) / 1000;
+    })
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+  let costPercentile = 0.5;
+  let costPts = 0;
+  if (myCost !== null && allCosts.length > 1) {
+    const rank = allCosts.findIndex((c) => c >= myCost);
+    costPercentile = rank / (allCosts.length - 1);
+    if (costPercentile <= 0.25) costPts = 15;
+    else if (costPercentile <= 0.50) costPts = 10;
+    else if (costPercentile <= 0.75) costPts = 5;
+    else costPts = 0;
+  }
+  // Display 0-100 normalized: cost component is 0-15 pts → ×6.66
+  const costScoreDisplay = Math.round((costPts / 15) * 100);
+
+  // Drop is stored on legacy 0-50 scale (dropPtsAvg × 10, max
+  // 5 × 10). Rescale to 0-100 so the breakdown is consistent.
+  const dropDisplay = (s: number) => Math.min(100, s * 2);
+
   const scorePoints: ScorePoint[] = service.scores.map((s) => ({
     t: s.computedAt.toISOString(),
     total: round1(s.currentScore),
     completion: round1(s.completionFactor * 100),
-    realism: round1(s.realismScore),
     speed: round1(s.speedScore),
-    drop: round1(s.dropScore),
+    drop: round1(dropDisplay(s.dropScore)),
+    // Cost is steady per service (depends only on ratePerK +
+    // quantity vs catalog distribution) so we replicate the
+    // current value across all historic points. Future: store
+    // costPercentile on ServiceScore for true historical accuracy.
+    cost: costScoreDisplay,
   }));
 
   const subScores = [
@@ -70,21 +115,21 @@ export default async function ServiceDetailPage({
     },
     {
       num: "03",
-      label: "Réalisme",
-      value: latest?.realismScore ?? null,
-      old: sevenDayBaseline?.realismScore ?? null,
-    },
-    {
-      num: "04",
       label: "Vitesse",
       value: latest?.speedScore ?? null,
       old: sevenDayBaseline?.speedScore ?? null,
     },
     {
-      num: "05",
+      num: "04",
       label: "Drop",
-      value: latest?.dropScore ?? null,
-      old: sevenDayBaseline?.dropScore ?? null,
+      value: latest ? dropDisplay(latest.dropScore) : null,
+      old: sevenDayBaseline ? dropDisplay(sevenDayBaseline.dropScore) : null,
+    },
+    {
+      num: "05",
+      label: "Coût",
+      value: costScoreDisplay,
+      old: costScoreDisplay,
     },
   ];
 
