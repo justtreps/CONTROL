@@ -87,51 +87,123 @@ export default async function ServiceDetailPage({
   // 5 × 10). Rescale to 0-100 so the breakdown is consistent.
   const dropDisplay = (s: number) => Math.min(100, s * 2);
 
-  const scorePoints: ScorePoint[] = service.scores.map((s) => ({
-    t: s.computedAt.toISOString(),
-    total: round1(s.currentScore),
-    completion: round1(s.completionFactor * 100),
-    speed: round1(s.speedScore),
-    drop: round1(dropDisplay(s.dropScore)),
-    // Cost is steady per service (depends only on ratePerK +
-    // quantity vs catalog distribution) so we replicate the
-    // current value across all historic points. Future: store
-    // costPercentile on ServiceScore for true historical accuracy.
-    cost: costScoreDisplay,
-  }));
+  // Bayesian smoothing constants — must match
+  // lib/scoring.ts:runScoringEngine. With PRIOR_WEIGHT=1, the
+  // anchor for n=0 is 50; with n=1 a raw=100 sub-score weights
+  // to (100+50)/2 = 75 — same math as the global weighted score.
+  // This is the fix for the "Total 75 vs all subs 100" mismatch:
+  // we now apply the SAME Bayesian smoothing to each sub before
+  // display, so the numbers reconcile.
+  const PRIOR = 50;
+  const PRIOR_WEIGHT = 1;
+  const bayesian = (raw: number | null, n: number): number | null => {
+    if (raw === null) return null;
+    return (raw * n + PRIOR * PRIOR_WEIGHT) / (n + PRIOR_WEIGHT);
+  };
+  const sampleCount = latest?.sampleCount ?? 0;
 
-  const subScores = [
+  // Build raw + weighted views per sub-score. The chart uses
+  // weighted to match the Total line; the breakdown shows
+  // weighted big + raw subtitle for transparency.
+  const subRawNow = latest
+    ? {
+        completion: latest.completionFactor * 100,
+        speed: latest.speedScore,
+        drop: dropDisplay(latest.dropScore),
+        cost: costScoreDisplay,
+      }
+    : null;
+  const subRawOld = sevenDayBaseline
+    ? {
+        completion: sevenDayBaseline.completionFactor * 100,
+        speed: sevenDayBaseline.speedScore,
+        drop: dropDisplay(sevenDayBaseline.dropScore),
+        cost: costScoreDisplay,
+      }
+    : null;
+
+  const scorePoints: ScorePoint[] = service.scores.map((s) => {
+    const n = s.sampleCount;
+    return {
+      t: s.computedAt.toISOString(),
+      total: round1(s.currentScore),
+      completion: round1(bayesian(s.completionFactor * 100, n) ?? 0),
+      speed: round1(bayesian(s.speedScore, n) ?? 0),
+      drop: round1(bayesian(dropDisplay(s.dropScore), n) ?? 0),
+      cost: round1(bayesian(costScoreDisplay, n) ?? 0),
+    };
+  });
+
+  const subScores: Array<{
+    num: string;
+    label: string;
+    value: number | null;
+    old: number | null;
+    raw: number | null;
+  }> = [
     {
       num: "01",
       label: "Score total",
       value: latest?.currentScore ?? null,
       old: sevenDayBaseline?.currentScore ?? null,
+      raw: latest?.rawScore ?? null,
     },
     {
       num: "02",
       label: "Livraison",
-      value: latest ? latest.completionFactor * 100 : null,
-      old: sevenDayBaseline ? sevenDayBaseline.completionFactor * 100 : null,
+      value: bayesian(subRawNow?.completion ?? null, sampleCount),
+      old: bayesian(
+        subRawOld?.completion ?? null,
+        sevenDayBaseline?.sampleCount ?? 0
+      ),
+      raw: subRawNow?.completion ?? null,
     },
     {
       num: "03",
       label: "Vitesse",
-      value: latest?.speedScore ?? null,
-      old: sevenDayBaseline?.speedScore ?? null,
+      value: bayesian(subRawNow?.speed ?? null, sampleCount),
+      old: bayesian(
+        subRawOld?.speed ?? null,
+        sevenDayBaseline?.sampleCount ?? 0
+      ),
+      raw: subRawNow?.speed ?? null,
     },
     {
       num: "04",
       label: "Drop",
-      value: latest ? dropDisplay(latest.dropScore) : null,
-      old: sevenDayBaseline ? dropDisplay(sevenDayBaseline.dropScore) : null,
+      value: bayesian(subRawNow?.drop ?? null, sampleCount),
+      old: bayesian(
+        subRawOld?.drop ?? null,
+        sevenDayBaseline?.sampleCount ?? 0
+      ),
+      raw: subRawNow?.drop ?? null,
     },
     {
       num: "05",
       label: "Coût",
-      value: costScoreDisplay,
-      old: costScoreDisplay,
+      value: bayesian(subRawNow?.cost ?? null, sampleCount),
+      old: bayesian(
+        subRawOld?.cost ?? null,
+        sevenDayBaseline?.sampleCount ?? 0
+      ),
+      raw: subRawNow?.cost ?? null,
     },
   ];
+
+  // Confidence label — drives the colored chip next to the
+  // breakdown header so the operator sees at a glance how much
+  // weight to put on these numbers.
+  const confidenceLabel = (() => {
+    if (sampleCount === 0)
+      return { text: "AUCUN TEST RULE-1", color: "#666666" };
+    if (sampleCount === 1)
+      return { text: `n=1 — CONFIANCE FAIBLE`, color: "#FF3300" };
+    if (sampleCount < 5)
+      return { text: `n=${sampleCount} — CONFIANCE MOYENNE`, color: "#FFCC00" };
+    if (sampleCount < 10)
+      return { text: `n=${sampleCount} — CONFIANCE BONNE`, color: "#00CC66" };
+    return { text: `n=${sampleCount} — CONFIANCE HAUTE`, color: "#00FF88" };
+  })();
 
   const orderCards = service.testOrders.map((o) => {
     const ms = o.measurements;
@@ -238,6 +310,23 @@ export default async function ServiceDetailPage({
             >
               Décomposition<br />du Score.
             </h2>
+            <div className="flex flex-col gap-3 mt-2">
+              <span
+                className="font-mono text-[10px] tracking-widest uppercase border px-2 py-1 w-max"
+                style={{
+                  color: confidenceLabel.color,
+                  borderColor: confidenceLabel.color,
+                }}
+              >
+                [ {confidenceLabel.text} ]
+              </span>
+              <p className="font-mono text-[10px] text-[#666666] tracking-widest leading-relaxed normal-case">
+                Score affiché = pondéré Bayesian sur n={sampleCount} test
+                {sampleCount > 1 ? "s" : ""}. Avec n=1, chaque sub-score
+                tend vers 50 (anchor neutre); à n=10+ il converge vers
+                sa valeur brute. Total = somme pondérée des composantes.
+              </p>
+            </div>
           </div>
           <div className="md:col-span-8 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8 lg:gap-10 pt-6 md:pt-0">
             {subScores.map((s) => {
@@ -252,6 +341,16 @@ export default async function ServiceDetailPage({
                   <div className="brand font-display text-4xl md:text-5xl tabular-nums text-white">
                     {s.value !== null ? s.value.toFixed(0) : "—"}
                   </div>
+                  {s.raw !== null && s.num !== "01" && (
+                    <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                      RAW {s.raw.toFixed(0)} · n={sampleCount}
+                    </div>
+                  )}
+                  {s.num === "01" && s.raw !== null && (
+                    <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                      RAW {s.raw.toFixed(0)} · n={sampleCount}
+                    </div>
+                  )}
                   {delta !== null && (
                     <div
                       className={`font-mono text-xs tracking-widest uppercase ${
