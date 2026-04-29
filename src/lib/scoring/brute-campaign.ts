@@ -28,7 +28,7 @@
 import { prisma } from "@/lib/prisma";
 import { placeOrder } from "@/lib/bulkmedya";
 import { getSystemToggles } from "@/lib/system/toggles";
-import { withApiKey } from "@/lib/rapidapi/key-manager";
+import { flushUsage, withApiKey } from "@/lib/rapidapi/key-manager";
 import { testCostUsd, testQuantityFor } from "./test-quantity";
 
 const DEFAULT_MAX_COST_USD = 5;
@@ -446,6 +446,11 @@ export async function runBruteCampaignTick(): Promise<BruteTickResult> {
     if (FLUSH_EVERY_WAVE) await flush();
   }
   await flush();
+  // RapidAPI usage counters need a manual drain too — withApiKey
+  // doesn't auto-flush like withAssignedKey does. Without this,
+  // the last batch of recordApiCall increments is lost when the
+  // Vercel lambda terminates.
+  await flushUsage();
 
   result.remaining = campaign.targetServiceIds.length - placed.size;
   if (result.remaining <= 0) {

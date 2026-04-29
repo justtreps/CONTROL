@@ -30,7 +30,7 @@ import type { Prisma, Service } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { attemptPlaceOrder } from "@/lib/testbot";
 import { getSystemToggles } from "@/lib/system/toggles";
-import { withApiKey } from "@/lib/rapidapi/key-manager";
+import { flushUsage, withApiKey } from "@/lib/rapidapi/key-manager";
 import { testCostUsd } from "./test-quantity";
 
 // BATCH_SIZE = placements attempted per cron tick.
@@ -406,6 +406,11 @@ export async function runCampaignTick(): Promise<TickResult> {
   }
   // Final flush guarantees the last wave lands.
   await flush();
+  // Drain RapidAPI usage counters too — withApiKey doesn't auto-
+  // flush like withAssignedKey does, so without this the last
+  // batch of recordApiCall increments never reaches the DB and
+  // quotaUsed undercounts on every campaign tick.
+  await flushUsage();
 
   result.remaining = campaign.targetServiceIds.length - placed.size;
   return result;

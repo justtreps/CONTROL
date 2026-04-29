@@ -29,7 +29,7 @@ import {
   onMeasurementWritten,
   onTestCompleted,
 } from "@/lib/catalogue/lifecycle";
-import { withApiKey } from "@/lib/rapidapi/key-manager";
+import { withApiKey, flushUsage } from "@/lib/rapidapi/key-manager";
 
 // ── Tuning knobs ────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
@@ -118,6 +118,14 @@ export async function runPoller(): Promise<PollerResult> {
       })
     );
   }
+
+  // recordApiCall() under withApiKey writes into an in-memory
+  // pending Map flushed on a 5 s setInterval. Vercel kills the
+  // lambda the moment runPoller() returns, so without this explicit
+  // flush the LAST batch of usage (potentially hundreds of calls
+  // for a 500-order tick) is silently dropped — quotaUsed under-
+  // counts and the round-robin LRU stops working as intended.
+  await flushUsage();
 
   return result;
 }

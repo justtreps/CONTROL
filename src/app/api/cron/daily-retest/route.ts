@@ -13,7 +13,11 @@ import { verifyCronAuth } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { attemptPlaceOrder } from "@/lib/testbot";
-import { acquireKeyForNewJob, withApiKey } from "@/lib/rapidapi/key-manager";
+import {
+  acquireKeyForNewJob,
+  flushUsage,
+  withApiKey,
+} from "@/lib/rapidapi/key-manager";
 import type { Service } from "@prisma/client";
 
 // Per-tick caps. Must fit inside maxDuration=300s. Observed
@@ -136,6 +140,11 @@ export async function POST(req: Request) {
       })
     );
   }
+
+  // Drain in-memory usage counter before Vercel kills the lambda.
+  // Otherwise the last batch of recordApiCall() increments — up to
+  // RETESTS_PER_HOUR × oracle calls — silently disappears.
+  await flushUsage();
 
   return NextResponse.json(result);
 }
