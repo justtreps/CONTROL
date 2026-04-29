@@ -467,7 +467,12 @@ export const detectProductLowAvg: Detector = async () => {
         forceExcluded: false,
         currentScore: { not: null },
       },
-      orderBy: [{ rank: { sort: "asc", nulls: "last" } }],
+      // Live currentScore — rank lags by up to 10 min and could
+      // shadow a freshly-scored top service out of this sample.
+      orderBy: [
+        { currentScore: { sort: "desc", nulls: "last" } },
+        { id: "asc" },
+      ],
       take: 3,
       select: { currentScore: true },
     });
