@@ -149,12 +149,6 @@ type ServiceRow = {
   name: string;
   platform: string;
   score: number;
-  // rawScore + sampleCount kept on the type for backwards compat
-  // with the API payload, but no longer surfaced in the dashboard
-  // table. With the new last-test scoring, sampleCount is always
-  // 1 and rawScore == score, so they don't add information.
-  rawScore: number;
-  sampleCount: number;
   timeToFiftyMin: number | null;
   dropPct: number | null;
   lastTestedAt: string | null;

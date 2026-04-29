@@ -516,7 +516,7 @@ export const detectOrderApiFailRate: Detector = async () => {
       severity: rate > 0.2 ? "critical" : "warning",
       title: `Taux d'échec /api/order = ${pct(failed, total)}%`,
       description: `${failed}/${total} commandes MyBoost ont échoué sur la dernière heure.`,
-      explanation: `Seuils : >5 % warning, >20 % critical. Causes possibles : BulkMedya provider down (cascade de 502/503), all_keys_capped, service-type que MyBoost envoie qu'on n'a pas de candidate pour, DRY_RUN désactivé alors que les clés ne sont pas valides.`,
+      explanation: `Seuils : >5 % warning, >20 % critical. Causes possibles : BulkMedya provider down (cascade de 502/503), all_keys_capped, service-type que MyBoost envoie qu'on n'a pas de candidate pour, mode LIVE actif alors que les clés ne sont pas valides.`,
       impact: "MyBoost doit fallback sur son routing legacy → perte de la valeur ajoutée de CONTROL.",
       suggestedAction:
         "Check /logs pour les erreurs récentes. Si BulkMedya retourne des erreurs consistantes, ping leur support. Si c'est un service-type non couvert, élargir le catalogue.",

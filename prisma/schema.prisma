@@ -601,7 +601,6 @@ model TestOrder {
   dryRun           Boolean  @default(false)
 
   measurements     Measurement[]
-  polls            TestPoll[]
 
   @@index([serviceId, placedAt])
   @@index([status, placedAt])
@@ -610,21 +609,12 @@ model TestOrder {
   @@index([status, nextPollAt])
 }
 
-// Audit log of every adaptive-polling tick on a TestOrder. Scoring
-// doesn't read this — it's purely for the UI timeline + cost audit.
-// Measurement still owns the canonical checkpoint rows scoring reads.
-model TestPoll {
-  id              Int      @id @default(autoincrement())
-  testOrder       TestOrder @relation(fields: [testOrderId], references: [id], onDelete: Cascade)
-  testOrderId     Int
-  polledAt        DateTime @default(now())
-  deliveredQty    Int
-  delta           Int      // this tick's delta vs previous poll
-  targetStatus    String   // 'ok' | 'private' | 'deleted' | 'banned'
-  intervalMsBefore Int     // the interval that preceded this poll (for audit)
-
-  @@index([testOrderId, polledAt])
-}
+// Note: the TestPoll model (audit log of every adaptive-polling
+// tick) was removed when the testbot moved to fixed-cadence
+// polling. Measurement now owns the canonical checkpoint rows
+// scoring reads. The DB table can be dropped via `prisma db push`
+// — keeping the rows around as legacy audit data is harmless but
+// unused.
 
 model Measurement {
   id           Int      @id @default(autoincrement())

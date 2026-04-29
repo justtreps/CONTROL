@@ -4,12 +4,18 @@ import { DashboardHeader } from "@/components/DashboardHeader";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { prisma } from "@/lib/prisma";
 import {
+  computeCostPercentileForService,
+  pickLatestScorableTest,
+} from "@/lib/scoring";
+import {
   ServiceDetailCharts,
   type ScorePoint,
 } from "./ServiceDetailCharts";
 import { ServiceDetailActions } from "./ServiceDetailActions";
 
 export const dynamic = "force-dynamic";
+
+const SUB_MAX = 25;
 
 export default async function ServiceDetailPage({
   params,
@@ -46,86 +52,51 @@ export default async function ServiceDetailPage({
   const sevenDayBaseline =
     service.scores.find((s) => s.computedAt.getTime() >= sevenDaysAgo) ?? null;
 
-  // Cost-efficiency percentile of THIS service across the catalog.
-  // Mirrors the calculation in lib/scoring.ts:runScoringEngine —
-  // computed live so a service whose product/category cost
-  // distribution shifts gets a fresh percentile here.
-  const allScorable = await prisma.service.findMany({
-    where: {
-      active: true,
-      testOrders: { some: { status: "completed" } },
-    },
-    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
+  // Cost percentile + scorable test picker share their definition
+  // with lib/scoring.ts. Inlining either of those calculations here
+  // is a math-drift trap — the detail page used to use a bracket
+  // formula (15/10/5/0) and a `status="completed"` cohort filter,
+  // both of which diverged from the engine's linear-percentile +
+  // polled-cohort formula. The Coût sub-score shown on the page
+  // didn't add up to the headline currentScore. Now we call the
+  // same helpers the engine calls so they cannot drift.
+  const costPercentile = await computeCostPercentileForService(id);
+  const coutSub = SUB_MAX * (1 - Math.min(1, Math.max(0, costPercentile)));
+
+  // The "latest scorable test" the engine used. Falls back to null
+  // if the service has zero polled tests. Use this for the
+  // freshness chip + the "dernier test placé" caption — anything
+  // that previously said "dernier test FINALISÉ" lied when the
+  // service had a fresh running-but-polled test that overrode the
+  // older completed one in the score.
+  const scorableOrder = await pickLatestScorableTest(id);
+  const latestTestAt = scorableOrder?.completedAt ?? null;
+  const latestTestPlacedAt = scorableOrder?.placedAt ?? null;
+
+  // The Coût sub-score is computed live (off the *current* catalog
+  // cost distribution), not stored per-snapshot in ServiceScore. So
+  // we can't honestly chart its history — we only know today's
+  // value. Reverse-engineer it from each snapshot's
+  //   total = livraison + vitesse + drop + coût
+  // which is exact since the engine writes all four directly. This
+  // way the cost line moves with whatever percentile that snapshot
+  // implied, not a flat line of today's value (the previous bug
+  // made every historical "coût" point identical to the current
+  // value, which read like a stable cost while the score wobbled).
+  const scorePoints: ScorePoint[] = service.scores.map((s) => {
+    const livraison = s.completionFactor * SUB_MAX;
+    const vitesse = s.speedScore;
+    const drop = s.dropScore;
+    const cost = Math.max(0, s.currentScore - livraison - vitesse - drop);
+    return {
+      t: s.computedAt.toISOString(),
+      total: round1(s.currentScore),
+      completion: round1(livraison),
+      speed: round1(vitesse),
+      drop: round1(drop),
+      cost: round1(cost),
+    };
   });
-  const myCost = (() => {
-    const qty = Math.max(20, service.minQuantity);
-    if (service.maxQuantity > 0 && qty > service.maxQuantity) return null;
-    return (service.ratePerK * qty) / 1000;
-  })();
-  const allCosts = allScorable
-    .map((s) => {
-      const qty = Math.max(20, s.minQuantity);
-      if (s.maxQuantity > 0 && qty > s.maxQuantity) return null;
-      return (s.ratePerK * qty) / 1000;
-    })
-    .filter((v): v is number => v !== null)
-    .sort((a, b) => a - b);
-  let costPercentile = 0.5;
-  let costPts = 0;
-  if (myCost !== null && allCosts.length > 1) {
-    const rank = allCosts.findIndex((c) => c >= myCost);
-    costPercentile = rank / (allCosts.length - 1);
-    if (costPercentile <= 0.25) costPts = 15;
-    else if (costPercentile <= 0.50) costPts = 10;
-    else if (costPercentile <= 0.75) costPts = 5;
-    else costPts = 0;
-  }
-  // Display 0-100 normalized: cost component is 0-15 pts → ×6.66
-  const costScoreDisplay = Math.round((costPts / 15) * 100);
-
-  // Drop is stored on legacy 0-50 scale (dropPtsAvg × 10, max
-  // 5 × 10). Rescale to 0-100 so the breakdown is consistent.
-  // dropDisplay was the legacy 0-50 → 0-100 rescale. Removed
-  // with the scoring refactor: ServiceScore.dropScore now
-  // stores the 0-25 sub-score directly.
-
-  // New scoring model: ServiceScore.currentScore = score of the
-  // LATEST scorable TestOrder, no Bayesian smoothing, no moving
-  // average. Each sub-score column is stored on a 0-25 scale and
-  // displayed directly. Total = sum of 4 subs (max 100).
-  //
-  // ServiceScore.completionFactor stays 0-1 so we multiply by 25
-  // for the breakdown UI.
-  // ServiceScore.speedScore is 0-25 (vitessePts).
-  // ServiceScore.dropScore is 0-25 (dropPts).
-  // Cost is computed live (live percentile) and rendered in the
-  // same 0-25 scale.
-
-  const SUB_MAX = 25;
-
-  // costScoreDisplay was computed in 0-100 scale earlier in this
-  // file. Convert to 0-25 for the new breakdown.
-  const coutSub = costScoreDisplay !== null
-    ? (costScoreDisplay / 100) * SUB_MAX
-    : null;
-
-  // Service.lastTestedAt + finalize timestamp from the latest
-  // scorable test, surfaced in the UI footer so the operator
-  // knows how fresh the score is.
-  const latestScorableOrder = service.testOrders.find(
-    (o) => o.status === "completed" || o.status === "completed_partial"
-  ) ?? null;
-  const latestTestAt = latestScorableOrder?.completedAt ?? null;
-  const latestTestPlacedAt = latestScorableOrder?.placedAt ?? null;
-
-  const scorePoints: ScorePoint[] = service.scores.map((s) => ({
-    t: s.computedAt.toISOString(),
-    total: round1(s.currentScore),
-    completion: round1(s.completionFactor * SUB_MAX),
-    speed: round1(s.speedScore),
-    drop: round1(s.dropScore),
-    cost: coutSub !== null ? round1(coutSub) : 0,
-  }));
 
   const subScores: Array<{
     num: string;
@@ -171,12 +142,16 @@ export default async function ServiceDetailPage({
     },
   ];
 
-  // Freshness chip — based on how old the latest scorable test is.
+  // Freshness chip — based on how old the latest *scorable* test
+  // is. We anchor on placedAt (not completedAt) because the engine
+  // now scores on placed-but-still-running tests too: a test placed
+  // 2h ago that's already polled once is fresher than a completed
+  // test from 5 days ago, even though the latter has a completedAt.
   const freshnessLabel = (() => {
-    if (!latestTestAt) {
-      return { text: "AUCUN TEST FINALISÉ", color: "#666666" };
+    if (!latestTestPlacedAt) {
+      return { text: "AUCUN TEST POLLÉ", color: "#666666" };
     }
-    const ageH = (Date.now() - latestTestAt.getTime()) / 3600_000;
+    const ageH = (Date.now() - latestTestPlacedAt.getTime()) / 3600_000;
     if (ageH < 12) return { text: `TEST < 12H — FRAIS`, color: "#00FF88" };
     if (ageH < 36) return { text: `TEST ${Math.round(ageH)}H — RÉCENT`, color: "#00CC66" };
     if (ageH < 72) return { text: `TEST ${Math.round(ageH)}H — DÛ POUR RETEST`, color: "#FFCC00" };
@@ -308,10 +283,9 @@ export default async function ServiceDetailPage({
                 <p className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
                   Dernier test placé{" "}
                   {latestTestPlacedAt.toISOString().slice(0, 10)} ·{" "}
-                  finalisé{" "}
                   {latestTestAt
-                    ? latestTestAt.toISOString().slice(0, 10)
-                    : "—"}
+                    ? `finalisé ${latestTestAt.toISOString().slice(0, 10)}`
+                    : "EN COURS"}
                 </p>
               )}
             </div>

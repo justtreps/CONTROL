@@ -266,20 +266,11 @@ async function build() {
   );
 
   // ── Top / bottom services ─────────────────────────────────────
-  // Bug fix: we previously queried `take: 10 ORDER BY currentScore`
-  // directly on ServiceScore which is append-only. A service that
-  // scored 80 last week then 5 today would surface in topRows on
-  // its OLD row. The de-dup map then kept the latest (5) but the
-  // selection had already happened on stale data.
-  //
-  // New approach: pull the LATEST ServiceScore per service via
-  // distinct-on serviceId, then sort + slice in app code. This
-  // guarantees the score we rank on is current.
-  // Filter out legacy ServiceScore rows from before the
-  // speed-dominated formula landed — those have rawScore=0 +
-  // sampleCount=0 (column @default) but currentScore stamped
-  // with the old multiplicative metric. They'd otherwise pollute
-  // the top of the ranking with stale 80+ values.
+  // Pull the latest ServiceScore per service via distinct-on
+  // serviceId so the ranking can never lock onto a stale row.
+  // sampleCount > 0 filters out legacy rows from before the
+  // last-test-only refactor (those default to sampleCount=0 with
+  // a stale currentScore from the old Bayesian engine).
   const latestPerService = await prisma.serviceScore.findMany({
     where: { sampleCount: { gt: 0 } },
     distinct: ["serviceId"],
@@ -304,37 +295,22 @@ async function build() {
     .filter((r) => r.service.active)
     .sort((a, b) => a.currentScore - b.currentScore);
 
-  const topServices = sortedDesc.slice(0, 10).map((r) => ({
+  const toRow = (r: (typeof latestPerService)[number]) => ({
     id: r.service.id,
     name: r.service.name,
     platform: r.service.platform,
     score: Math.round(r.currentScore * 10) / 10,
-    rawScore: Math.round(r.rawScore * 10) / 10,
-    sampleCount: r.sampleCount,
     timeToFiftyMin: r.avgTimeToFiftyMin
       ? Math.round(r.avgTimeToFiftyMin)
       : null,
-    dropPct: r.avgDropPct !== null
-      ? Math.round(r.avgDropPct * 1000) / 10
-      : null,
+    dropPct:
+      r.avgDropPct !== null
+        ? Math.round(r.avgDropPct * 1000) / 10
+        : null,
     lastTestedAt: r.service.lastTestedAt?.toISOString() ?? null,
-  }));
-
-  const bottomServices = sortedAscActive.slice(0, 10).map((r) => ({
-    id: r.service.id,
-    name: r.service.name,
-    platform: r.service.platform,
-    score: Math.round(r.currentScore * 10) / 10,
-    rawScore: Math.round(r.rawScore * 10) / 10,
-    sampleCount: r.sampleCount,
-    timeToFiftyMin: r.avgTimeToFiftyMin
-      ? Math.round(r.avgTimeToFiftyMin)
-      : null,
-    dropPct: r.avgDropPct !== null
-      ? Math.round(r.avgDropPct * 1000) / 10
-      : null,
-    lastTestedAt: r.service.lastTestedAt?.toISOString() ?? null,
-  }));
+  });
+  const topServices = sortedDesc.slice(0, 10).map(toRow);
+  const bottomServices = sortedAscActive.slice(0, 10).map(toRow);
 
   // ── Recent events (mix of TestOrders + Alerts) ────────────────
   const [recentOrders, recentAlerts] = await Promise.all([

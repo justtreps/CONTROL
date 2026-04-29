@@ -18,8 +18,14 @@ export type ServiceRow = {
   refillSupported: boolean;
   testOrderCount: number;
   currentScore: number | null;
-  completionFactor: number | null;
-  realismScore: number | null;
+  // All three are stored on a 0-25 scale in ServiceScore
+  // (completionFactor is 0-1 → multiplied by 25 server-side before
+  // it lands here). The table rescales to 0-100 for ScoreBadge so
+  // the cell colour aligns with the headline score's tier.
+  // realismScore is gone — the post-Bayesian engine doesn't measure
+  // realism, the column was always 0 and looked like every service
+  // had a realism failure.
+  livraisonPts: number | null;
   speedScore: number | null;
   dropScore: number | null;
   history: number[];
@@ -29,6 +35,12 @@ export type ServiceRow = {
   targetCountry: string | null;
   classificationManualReview: boolean;
 };
+
+// Stored sub-score (0-25) → display value (0-100) so ScoreBadge's
+// 80/60 thresholds line up with the headline score's tiering.
+function pctOf25(v: number | null): number | null {
+  return v === null ? null : (v / 25) * 100;
+}
 
 type SortKey = "score" | "name" | "rate" | "orders";
 type PoolFilter =
@@ -168,7 +180,6 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
               <th className="text-center px-3 py-3 font-normal">Score</th>
               <th className="text-left px-3 py-3 font-normal">Tendance</th>
               <th className="text-center px-3 py-3 font-normal">Livr.</th>
-              <th className="text-center px-3 py-3 font-normal">Réal.</th>
               <th className="text-center px-3 py-3 font-normal">Vit.</th>
               <th className="text-center px-3 py-3 font-normal">Drop</th>
               <th className="text-right px-3 py-3 font-normal">Tarif/k</th>
@@ -216,23 +227,13 @@ export function ServicesTable({ rows }: { rows: ServiceRow[] }) {
                   <Sparkline values={r.history} />
                 </td>
                 <td className="px-3 py-3 text-center">
-                  <ScoreBadge
-                    score={
-                      r.completionFactor !== null
-                        ? r.completionFactor * 100
-                        : null
-                    }
-                    size="sm"
-                  />
+                  <ScoreBadge score={pctOf25(r.livraisonPts)} size="sm" />
                 </td>
                 <td className="px-3 py-3 text-center">
-                  <ScoreBadge score={r.realismScore} size="sm" />
+                  <ScoreBadge score={pctOf25(r.speedScore)} size="sm" />
                 </td>
                 <td className="px-3 py-3 text-center">
-                  <ScoreBadge score={r.speedScore} size="sm" />
-                </td>
-                <td className="px-3 py-3 text-center">
-                  <ScoreBadge score={r.dropScore} size="sm" />
+                  <ScoreBadge score={pctOf25(r.dropScore)} size="sm" />
                 </td>
                 <td className="px-3 py-3 text-right font-mono text-xs text-white tabular-nums">
                   {r.ratePerK.toFixed(2)}

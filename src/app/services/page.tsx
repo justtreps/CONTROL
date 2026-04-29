@@ -42,9 +42,11 @@ export default async function ServicesPage({
     where: { active: true, platform, serviceType: type },
     orderBy: { name: "asc" },
     include: {
-      // Filter out legacy rows (sampleCount=0) so the displayed
-      // currentScore matches the new Bayesian formula. Same fix
-      // pattern as the dashboard top/flop query.
+      // sampleCount > 0 filter excludes legacy ServiceScore rows
+      // from before the last-test scoring refactor (those were
+      // written with sampleCount=0 default and stale Bayesian-era
+      // currentScore values). The new engine writes sampleCount=1
+      // on every row, so this filter just gates legacy noise out.
       scores: {
         where: { sampleCount: { gt: 0 } },
         orderBy: { computedAt: "desc" },
@@ -73,8 +75,10 @@ export default async function ServicesPage({
       refillSupported: s.refillSupported,
       testOrderCount: s._count.testOrders,
       currentScore: latest?.currentScore ?? null,
-      completionFactor: latest?.completionFactor ?? null,
-      realismScore: latest?.realismScore ?? null,
+      // completionFactor is stored 0-1; multiply by 25 here so the
+      // table cell receives a 0-25 sub-score in the same units as
+      // speedScore + dropScore.
+      livraisonPts: latest ? latest.completionFactor * 25 : null,
       speedScore: latest?.speedScore ?? null,
       dropScore: latest?.dropScore ?? null,
       history,

@@ -79,6 +79,51 @@ function coutPtsFor(costPercentile: number): number {
   return SUB_MAX * (1 - Math.min(1, Math.max(0, costPercentile)));
 }
 
+// Live cost percentile for a single service across the same cohort
+// runScoringEngine uses (active services with ≥1 polled TestOrder).
+// Exported so the /services/[id] detail page can show the SAME
+// percentile the scoring engine used. Previously the detail page
+// rolled its own filter (`status="completed"`) and its own bracket
+// formula (15/10/5/0) — both diverged from the engine's linear
+// percentile. Operators saw a Coût sub-score on the detail page
+// that didn't add up to the displayed total.
+export async function computeCostPercentileForService(
+  serviceId: number
+): Promise<number> {
+  const me = await prisma.service.findUnique({
+    where: { id: serviceId },
+    select: { ratePerK: true, minQuantity: true, maxQuantity: true },
+  });
+  if (!me) return 0.5;
+  const myQty = Math.max(20, me.minQuantity);
+  if (me.maxQuantity > 0 && myQty > me.maxQuantity) return 0.5;
+  const myCost = (me.ratePerK * myQty) / 1000;
+
+  const all = await prisma.service.findMany({
+    where: {
+      active: true,
+      testOrders: {
+        some: { measurements: { some: { checkpoint: { not: "T+0" } } } },
+      },
+    },
+    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
+  });
+  const costs = all
+    .map((s) => {
+      const qty = Math.max(20, s.minQuantity);
+      if (s.maxQuantity > 0 && qty > s.maxQuantity) return null;
+      return { id: s.id, cost: (s.ratePerK * qty) / 1000 };
+    })
+    .filter((v): v is { id: number; cost: number } => v !== null)
+    .sort((a, b) => a.cost - b.cost);
+  if (costs.length <= 1) return 0.5;
+  const idx = costs.findIndex((c) => c.id === serviceId);
+  if (idx >= 0) return idx / (costs.length - 1);
+  // Service not in the polled-cohort — splice myCost in by rank.
+  const rank = costs.filter((c) => c.cost < myCost).length;
+  return rank / (costs.length - 1);
+}
+
 export function computeOrderScore(
   order: OrderWithMeasurements,
   costPercentile = 0.5,
@@ -171,7 +216,13 @@ export const SCORABLE_STATUSES = ["completed", "completed_partial"];
 //
 // If the latest by placedAt has no polls yet, we pick the next-
 // latest that does have polls.
-async function pickLatestScorableTest(serviceId: number) {
+//
+// Exported (named on `pickLatestScorableTest`) so the service
+// detail page can render the *same* test the scoring engine used
+// instead of re-deriving its own (which previously diverged —
+// detail showed "completed test from last week", score was based
+// on a running test from yesterday).
+export async function pickLatestScorableTest(serviceId: number) {
   // Pull the 5 most recent placements + their measurements.
   // 5 is enough: a service that has 5 just-placed tests with
   // zero polls is genuinely brand-new and deserves a null score.
