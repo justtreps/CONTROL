@@ -127,6 +127,17 @@ export async function runPoller(): Promise<PollerResult> {
   // counts and the round-robin LRU stops working as intended.
   await flushUsage();
 
+  // One-line audit log per tick. The previous version was silent,
+  // so when the poller stopped advancing orders (eg. all polls
+  // hitting oracle errors and rescheduling +1h), there was no
+  // signal in the Vercel function logs explaining why.
+  console.log(
+    `[testbot-poll] inspected=${orders.length} polled=${result.ordersPolled} ` +
+      `finalised=${result.ordersFinalised} ` +
+      `rescheduledOnError=${result.ordersRescheduledOnError} ` +
+      `errors=${result.errors.length}`
+  );
+
   return result;
 }
 
