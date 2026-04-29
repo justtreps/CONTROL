@@ -167,8 +167,13 @@ export async function routeOrder(
   }
 
   // Eligible candidates for this product + this quantity window.
-  // rank ASC (null last) is the source of truth for routing order —
-  // the scoring engine maintains it.
+  //
+  // Source-of-truth is currentScore DESC, NOT rank ASC. rank is
+  // recomputed only by the 10-min scoring cron's recomputeRanks(),
+  // while currentScore is updated inline by rescoreSingleService on
+  // every poll. With rank as primary sort the router would pick a
+  // freshly-scored top service SECOND because its rank lagged the
+  // poll. id ASC is the deterministic tiebreaker on equal scores.
   const candidates = await prisma.productServiceCandidate.findMany({
     where: {
       productId: product.id,
@@ -181,7 +186,6 @@ export async function routeOrder(
       },
     },
     orderBy: [
-      { rank: { sort: "asc", nulls: "last" } },
       { currentScore: { sort: "desc", nulls: "last" } },
       { id: "asc" },
     ],

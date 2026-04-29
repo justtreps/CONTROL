@@ -2,11 +2,28 @@
 //
 // Follower pool: one account = one test for its entire lifetime.
 // Engagement pool: one POST = one test (a single parent account can
-// contribute N posts). Both flows sit inside a Prisma $transaction so
-// concurrent callers can't flip the same row 'available' → 'assigned' twice.
+// contribute N posts). Both flows must guarantee that two concurrent
+// callers can never claim the same row.
+//
+// Concurrency model — compare-and-swap, not transaction isolation:
+// PostgreSQL default isolation is read-committed, which means two
+// concurrent transactions BOTH see the row at status='available'
+// before either commits. A naive findFirst-then-update inside a
+// $transaction therefore lets both callers update the same row, and
+// both think they own the account. We instead issue updateMany with
+// a compound `{ id, status: 'available' }` where-clause: the second
+// caller's updateMany matches zero rows (status is already
+// 'assigned' from the first caller's commit), `count === 0`, and we
+// re-roll. Bounded loop so a hot-pool can't spin forever.
+//
+// Country filter is layered on top: try the exact-country pool
+// first, fall back to country-less. Confidence floor defaults to
+// 'medium'.
 
 import { prisma } from "@/lib/prisma";
 import type { TestAccount, TestPost } from "@prisma/client";
+
+const MAX_PICK_ATTEMPTS = 8;
 
 export async function pickAndAssignAccount({
   platform,
@@ -31,23 +48,21 @@ export async function pickAndAssignAccount({
   minCountryConfidence?: "high" | "medium" | "low" | "unknown";
 }): Promise<TestAccount | null> {
   const minConf = minCountryConfidence ?? "medium";
-  // Confidence enum order — higher index = stronger signal. We match
-  // a row if its confidence appears at or after `minConf` in this list.
   const confOrder = ["unknown", "low", "medium", "high"];
   const minConfIdx = confOrder.indexOf(minConf);
   const acceptableConfs = confOrder.slice(minConfIdx);
 
-  return prisma.$transaction(async (tx) => {
-    const baseWhere = {
-      platform,
-      status: "available",
-      ...(accountType ? { accountType } : {}),
-    };
+  const baseWhere = {
+    platform,
+    status: "available",
+    ...(accountType ? { accountType } : {}),
+  };
 
+  for (let attempt = 0; attempt < MAX_PICK_ATTEMPTS; attempt++) {
     // 1st try: exact country match with acceptable confidence.
-    let candidate = null;
+    let candidate: TestAccount | null = null;
     if (targetCountry) {
-      candidate = await tx.testAccount.findFirst({
+      candidate = await prisma.testAccount.findFirst({
         where: {
           ...baseWhere,
           detectedCountry: targetCountry,
@@ -56,17 +71,19 @@ export async function pickAndAssignAccount({
         orderBy: { firstSeenAt: "asc" },
       });
     }
-    // 2nd try: no country filter (global service OR couldn't match).
     if (!candidate) {
-      candidate = await tx.testAccount.findFirst({
+      candidate = await prisma.testAccount.findFirst({
         where: baseWhere,
         orderBy: { firstSeenAt: "asc" },
       });
     }
     if (!candidate) return null;
 
-    return tx.testAccount.update({
-      where: { id: candidate.id },
+    // Compare-and-swap: update only fires if the row is STILL
+    // 'available'. count===0 means another caller raced us;
+    // pick a different candidate.
+    const claim = await prisma.testAccount.updateMany({
+      where: { id: candidate.id, status: "available" },
       data: {
         status: "assigned",
         assignedAt: new Date(),
@@ -74,7 +91,12 @@ export async function pickAndAssignAccount({
         active: false,
       },
     });
-  });
+    if (claim.count === 1) {
+      return prisma.testAccount.findUnique({ where: { id: candidate.id } });
+    }
+    // Lost the race — loop to pick another candidate.
+  }
+  return null;
 }
 
 // Engagement pool pick-and-assign. Atomically flips ONE TestPost
@@ -99,17 +121,17 @@ export async function pickAndAssignPost({
   const minConfIdx = confOrder.indexOf(minConf);
   const acceptableConfs = confOrder.slice(minConfIdx);
 
-  return prisma.$transaction(async (tx) => {
-    const baseWhere = {
-      platform,
-      status: "available",
-    };
-
-    // 1st try: post whose parent account detectedCountry matches with
-    // acceptable confidence.
+  // Same compare-and-swap loop as pickAndAssignAccount. See the
+  // module-level comment for why $transaction-with-findFirst-then-
+  // update is unsafe under read-committed isolation.
+  const baseWhere = {
+    platform,
+    status: "available",
+  };
+  for (let attempt = 0; attempt < MAX_PICK_ATTEMPTS; attempt++) {
     let candidate: (TestPost & { testAccount: TestAccount }) | null = null;
     if (targetCountry) {
-      candidate = await tx.testPost.findFirst({
+      candidate = await prisma.testPost.findFirst({
         where: {
           ...baseWhere,
           testAccount: {
@@ -121,9 +143,8 @@ export async function pickAndAssignPost({
         orderBy: { firstSeenAt: "asc" },
       });
     }
-    // 2nd try: no country filter.
     if (!candidate) {
-      candidate = await tx.testPost.findFirst({
+      candidate = await prisma.testPost.findFirst({
         where: baseWhere,
         include: { testAccount: true },
         orderBy: { firstSeenAt: "asc" },
@@ -131,8 +152,8 @@ export async function pickAndAssignPost({
     }
     if (!candidate) return null;
 
-    const updated = await tx.testPost.update({
-      where: { id: candidate.id },
+    const claim = await prisma.testPost.updateMany({
+      where: { id: candidate.id, status: "available" },
       data: {
         status: "assigned",
         assignedAt: new Date(),
@@ -140,8 +161,15 @@ export async function pickAndAssignPost({
         active: false,
       },
     });
-    return { post: updated, account: candidate.testAccount };
-  });
+    if (claim.count === 1) {
+      const updated = await prisma.testPost.findUnique({
+        where: { id: candidate.id },
+      });
+      if (!updated) return null;
+      return { post: updated, account: candidate.testAccount };
+    }
+  }
+  return null;
 }
 
 export async function consumeAccount(testAccountId: number): Promise<void> {
