@@ -200,30 +200,17 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
   });
 
   if (shouldFinalise) {
-    await prisma.testOrder.update({
-      where: { id: order.id },
-      data: {
-        status: "completed",
-        completedAt: new Date(),
-        lastHealthCheckAt: new Date(),
-        nextPollAt: null,
-      },
-    });
-    // Terminal-state lifecycle: only fires DEAD transitions (T+7d
-    // sunset for TESTING, 2-consecutive-zero rule for QUALIFIED/
-    // MONITORED). Up-transitions already happened in the per-poll
-    // hook above.
-    await onTestCompleted({
-      serviceId: order.serviceId,
-      testOrderId: order.id,
-      deliveredQty,
-    }).catch((e) => {
-      result.errors.push({
-        orderId: order.id,
-        reason: `lifecycle_finalize: ${(e as Error).message.slice(0, 80)}`,
-      });
-    });
-    result.ordersFinalised++;
+    await finaliseOrder(order, deliveredQty, "completed", result);
+    return;
+  }
+
+  // Stagnation detection — if the last 3 measurements (including
+  // this one) show identical actualCount AND age ≥ 24h, the
+  // delivery has plateaued. Auto-finalize as 'completed_partial'
+  // so the score engine can compute a real (low) value instead of
+  // waiting another 4 days for the T+7d sunset.
+  if (await isStagnant(order.id, currentCount, ageMs)) {
+    await finaliseOrder(order, deliveredQty, "completed_partial", result);
     return;
   }
 
@@ -234,6 +221,73 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
       nextPollAt: new Date(Date.now() + POLL_INTERVAL_MS),
     },
   });
+}
+
+const STAGNATION_MIN_AGE_MS = 24 * 60 * 60_000;
+const STAGNATION_REQUIRED_REPEATS = 3;
+
+async function isStagnant(
+  testOrderId: number,
+  currentCount: number,
+  ageMs: number
+): Promise<boolean> {
+  if (ageMs < STAGNATION_MIN_AGE_MS) return false;
+  // Pull the last N measurements (excluding T+0 baseline) for
+  // this order, ordered newest-first. We just wrote one this
+  // tick so it's included.
+  const recent = await prisma.measurement.findMany({
+    where: {
+      testOrderId,
+      checkpoint: { not: "T+0" },
+    },
+    orderBy: { checkedAt: "desc" },
+    take: STAGNATION_REQUIRED_REPEATS,
+  });
+  if (recent.length < STAGNATION_REQUIRED_REPEATS) return false;
+  // All of the last N must equal the current count.
+  return recent.every((m) => m.actualCount === currentCount);
+}
+
+async function finaliseOrder(
+  order: OrderRow,
+  deliveredQty: number,
+  status: "completed" | "completed_partial",
+  result: PollerResult
+): Promise<void> {
+  await prisma.testOrder.update({
+    where: { id: order.id },
+    data: {
+      status,
+      completedAt: new Date(),
+      lastHealthCheckAt: new Date(),
+      nextPollAt: null,
+    },
+  });
+  // Terminal lifecycle hook (DEAD transitions etc.) — covers both
+  // completed and completed_partial.
+  await onTestCompleted({
+    serviceId: order.serviceId,
+    testOrderId: order.id,
+    deliveredQty,
+  }).catch((e) => {
+    result.errors.push({
+      orderId: order.id,
+      reason: `lifecycle_finalize: ${(e as Error).message.slice(0, 80)}`,
+    });
+  });
+  // Recompute the service's score IMMEDIATELY so the dashboard
+  // reflects the new test outcome without waiting for the 10-min
+  // scoring cron tick. Best-effort.
+  try {
+    const { rescoreSingleService } = await import("@/lib/scoring");
+    await rescoreSingleService(order.serviceId);
+  } catch (e) {
+    result.errors.push({
+      orderId: order.id,
+      reason: `rescore: ${(e as Error).message.slice(0, 80)}`,
+    });
+  }
+  result.ordersFinalised++;
 }
 
 async function rescheduleOnError(

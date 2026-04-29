@@ -87,122 +87,98 @@ export default async function ServiceDetailPage({
   // 5 × 10). Rescale to 0-100 so the breakdown is consistent.
   const dropDisplay = (s: number) => Math.min(100, s * 2);
 
-  // Bayesian smoothing constants — must match
-  // lib/scoring.ts:runScoringEngine. With PRIOR_WEIGHT=1, the
-  // anchor for n=0 is 50; with n=1 a raw=100 sub-score weights
-  // to (100+50)/2 = 75 — same math as the global weighted score.
-  // This is the fix for the "Total 75 vs all subs 100" mismatch:
-  // we now apply the SAME Bayesian smoothing to each sub before
-  // display, so the numbers reconcile.
-  const PRIOR = 50;
-  const PRIOR_WEIGHT = 1;
-  const bayesian = (raw: number | null, n: number): number | null => {
-    if (raw === null) return null;
-    return (raw * n + PRIOR * PRIOR_WEIGHT) / (n + PRIOR_WEIGHT);
-  };
-  const sampleCount = latest?.sampleCount ?? 0;
+  // New scoring model: ServiceScore.currentScore = score of the
+  // LATEST scorable TestOrder, no Bayesian smoothing, no moving
+  // average. Each sub-score column is stored on a 0-25 scale and
+  // displayed directly. Total = sum of 4 subs (max 100).
+  //
+  // ServiceScore.completionFactor stays 0-1 so we multiply by 25
+  // for the breakdown UI.
+  // ServiceScore.speedScore is 0-25 (vitessePts).
+  // ServiceScore.dropScore is 0-25 (dropPts).
+  // Cost is computed live (live percentile) and rendered in the
+  // same 0-25 scale.
 
-  // Build raw + weighted views per sub-score. The chart uses
-  // weighted to match the Total line; the breakdown shows
-  // weighted big + raw subtitle for transparency.
-  const subRawNow = latest
-    ? {
-        completion: latest.completionFactor * 100,
-        speed: latest.speedScore,
-        drop: dropDisplay(latest.dropScore),
-        cost: costScoreDisplay,
-      }
-    : null;
-  const subRawOld = sevenDayBaseline
-    ? {
-        completion: sevenDayBaseline.completionFactor * 100,
-        speed: sevenDayBaseline.speedScore,
-        drop: dropDisplay(sevenDayBaseline.dropScore),
-        cost: costScoreDisplay,
-      }
+  const SUB_MAX = 25;
+
+  // costScoreDisplay was computed in 0-100 scale earlier in this
+  // file. Convert to 0-25 for the new breakdown.
+  const coutSub = costScoreDisplay !== null
+    ? (costScoreDisplay / 100) * SUB_MAX
     : null;
 
-  const scorePoints: ScorePoint[] = service.scores.map((s) => {
-    const n = s.sampleCount;
-    return {
-      t: s.computedAt.toISOString(),
-      total: round1(s.currentScore),
-      completion: round1(bayesian(s.completionFactor * 100, n) ?? 0),
-      speed: round1(bayesian(s.speedScore, n) ?? 0),
-      drop: round1(bayesian(dropDisplay(s.dropScore), n) ?? 0),
-      cost: round1(bayesian(costScoreDisplay, n) ?? 0),
-    };
-  });
+  // Service.lastTestedAt + finalize timestamp from the latest
+  // scorable test, surfaced in the UI footer so the operator
+  // knows how fresh the score is.
+  const latestScorableOrder = service.testOrders.find(
+    (o) => o.status === "completed" || o.status === "completed_partial"
+  ) ?? null;
+  const latestTestAt = latestScorableOrder?.completedAt ?? null;
+  const latestTestPlacedAt = latestScorableOrder?.placedAt ?? null;
+
+  const scorePoints: ScorePoint[] = service.scores.map((s) => ({
+    t: s.computedAt.toISOString(),
+    total: round1(s.currentScore),
+    completion: round1(s.completionFactor * SUB_MAX),
+    speed: round1(s.speedScore),
+    drop: round1(s.dropScore),
+    cost: coutSub !== null ? round1(coutSub) : 0,
+  }));
 
   const subScores: Array<{
     num: string;
     label: string;
     value: number | null;
     old: number | null;
-    raw: number | null;
+    max: number;
   }> = [
     {
       num: "01",
       label: "Score total",
       value: latest?.currentScore ?? null,
       old: sevenDayBaseline?.currentScore ?? null,
-      raw: latest?.rawScore ?? null,
+      max: 100,
     },
     {
       num: "02",
       label: "Livraison",
-      value: bayesian(subRawNow?.completion ?? null, sampleCount),
-      old: bayesian(
-        subRawOld?.completion ?? null,
-        sevenDayBaseline?.sampleCount ?? 0
-      ),
-      raw: subRawNow?.completion ?? null,
+      value: latest ? latest.completionFactor * SUB_MAX : null,
+      old: sevenDayBaseline ? sevenDayBaseline.completionFactor * SUB_MAX : null,
+      max: SUB_MAX,
     },
     {
       num: "03",
       label: "Vitesse",
-      value: bayesian(subRawNow?.speed ?? null, sampleCount),
-      old: bayesian(
-        subRawOld?.speed ?? null,
-        sevenDayBaseline?.sampleCount ?? 0
-      ),
-      raw: subRawNow?.speed ?? null,
+      value: latest?.speedScore ?? null,
+      old: sevenDayBaseline?.speedScore ?? null,
+      max: SUB_MAX,
     },
     {
       num: "04",
       label: "Drop",
-      value: bayesian(subRawNow?.drop ?? null, sampleCount),
-      old: bayesian(
-        subRawOld?.drop ?? null,
-        sevenDayBaseline?.sampleCount ?? 0
-      ),
-      raw: subRawNow?.drop ?? null,
+      value: latest?.dropScore ?? null,
+      old: sevenDayBaseline?.dropScore ?? null,
+      max: SUB_MAX,
     },
     {
       num: "05",
       label: "Coût",
-      value: bayesian(subRawNow?.cost ?? null, sampleCount),
-      old: bayesian(
-        subRawOld?.cost ?? null,
-        sevenDayBaseline?.sampleCount ?? 0
-      ),
-      raw: subRawNow?.cost ?? null,
+      value: coutSub,
+      old: coutSub,
+      max: SUB_MAX,
     },
   ];
 
-  // Confidence label — drives the colored chip next to the
-  // breakdown header so the operator sees at a glance how much
-  // weight to put on these numbers.
-  const confidenceLabel = (() => {
-    if (sampleCount === 0)
-      return { text: "AUCUN TEST RULE-1", color: "#666666" };
-    if (sampleCount === 1)
-      return { text: `n=1 — CONFIANCE FAIBLE`, color: "#FF3300" };
-    if (sampleCount < 5)
-      return { text: `n=${sampleCount} — CONFIANCE MOYENNE`, color: "#FFCC00" };
-    if (sampleCount < 10)
-      return { text: `n=${sampleCount} — CONFIANCE BONNE`, color: "#00CC66" };
-    return { text: `n=${sampleCount} — CONFIANCE HAUTE`, color: "#00FF88" };
+  // Freshness chip — based on how old the latest scorable test is.
+  const freshnessLabel = (() => {
+    if (!latestTestAt) {
+      return { text: "AUCUN TEST FINALISÉ", color: "#666666" };
+    }
+    const ageH = (Date.now() - latestTestAt.getTime()) / 3600_000;
+    if (ageH < 12) return { text: `TEST < 12H — FRAIS`, color: "#00FF88" };
+    if (ageH < 36) return { text: `TEST ${Math.round(ageH)}H — RÉCENT`, color: "#00CC66" };
+    if (ageH < 72) return { text: `TEST ${Math.round(ageH)}H — DÛ POUR RETEST`, color: "#FFCC00" };
+    return { text: `TEST ${Math.round(ageH)}H — STALE`, color: "#FF3300" };
   })();
 
   const orderCards = service.testOrders.map((o) => {
@@ -302,7 +278,7 @@ export default async function ServiceDetailPage({
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12 border-b border-[#666666]/20 pb-16 md:pb-24">
           <div className="md:col-span-4 min-w-0 flex flex-col justify-between gap-6 md:gap-8">
             <div className="font-mono text-xs text-[#FF3300] tracking-widest">
-              [ DÉCOMPOSITION DU SCORE | MOYENNE 30J ]
+              [ DÉCOMPOSITION DU SCORE | DERNIER TEST ]
             </div>
             <h2
               className="brand font-display tracking-tight uppercase leading-none text-white break-words"
@@ -314,18 +290,28 @@ export default async function ServiceDetailPage({
               <span
                 className="font-mono text-[10px] tracking-widest uppercase border px-2 py-1 w-max"
                 style={{
-                  color: confidenceLabel.color,
-                  borderColor: confidenceLabel.color,
+                  color: freshnessLabel.color,
+                  borderColor: freshnessLabel.color,
                 }}
               >
-                [ {confidenceLabel.text} ]
+                [ {freshnessLabel.text} ]
               </span>
               <p className="font-mono text-[10px] text-[#666666] tracking-widest leading-relaxed normal-case">
-                Score affiché = pondéré Bayesian sur n={sampleCount} test
-                {sampleCount > 1 ? "s" : ""}. Avec n=1, chaque sub-score
-                tend vers 50 (anchor neutre); à n=10+ il converge vers
-                sa valeur brute. Total = somme pondérée des composantes.
+                Score = livraison + vitesse + drop + coût (4 × 25 = 100).
+                Calculé sur le DERNIER TestOrder finalisé. Plus de moyenne
+                mobile, plus de smoothing — chaque retest réécrit le
+                score. Service testé régulièrement = score à jour.
               </p>
+              {latestTestPlacedAt && (
+                <p className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                  Dernier test placé{" "}
+                  {latestTestPlacedAt.toISOString().slice(0, 10)} ·{" "}
+                  finalisé{" "}
+                  {latestTestAt
+                    ? latestTestAt.toISOString().slice(0, 10)
+                    : "—"}
+                </p>
+              )}
             </div>
           </div>
           <div className="md:col-span-8 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8 lg:gap-10 pt-6 md:pt-0">
@@ -340,18 +326,11 @@ export default async function ServiceDetailPage({
                   </h3>
                   <div className="brand font-display text-4xl md:text-5xl tabular-nums text-white">
                     {s.value !== null ? s.value.toFixed(0) : "—"}
+                    <span className="text-[#666666] text-base md:text-lg ml-2">
+                      / {s.max}
+                    </span>
                   </div>
-                  {s.raw !== null && s.num !== "01" && (
-                    <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-                      RAW {s.raw.toFixed(0)} · n={sampleCount}
-                    </div>
-                  )}
-                  {s.num === "01" && s.raw !== null && (
-                    <div className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-                      RAW {s.raw.toFixed(0)} · n={sampleCount}
-                    </div>
-                  )}
-                  {delta !== null && (
+                  {delta !== null && Math.abs(delta) > 0.01 && (
                     <div
                       className={`font-mono text-xs tracking-widest uppercase ${
                         delta > 0

@@ -206,7 +206,14 @@ export async function onTestCompleted(params: {
     const lastThree = await prisma.testOrder.findMany({
       where: {
         serviceId: params.serviceId,
-        status: { in: ["completed", "aborted_target_died", "aborted_other"] },
+        status: {
+          in: [
+            "completed",
+            "completed_partial",
+            "aborted_target_died",
+            "aborted_other",
+          ],
+        },
       },
       include: { measurements: true },
       orderBy: { completedAt: "desc" },

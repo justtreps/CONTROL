@@ -1,4 +1,5 @@
-// Service-level scoring engine.
+// Service-level scoring engine — last-test-only, transparent
+// additive 4×25 = 100. No moving average, no Bayesian.
 //
 // RULE 1 (business): A service's currentScore stays null / gets
 //   reset until AT LEAST ONE TestOrder on the service has a
@@ -9,14 +10,14 @@
 // RULE 2 (business): This file MUST NOT read BulkMedya status /
 //   progress / remains. Scoring inputs are strictly: TestOrder
 //   fields + Measurement (actualCount, realismScore) + time
-//   deltas. If a future refactor adds a BulkMedya call here, it is
-//   a regression — the comment above and the test below should
-//   catch it. (Verified: lib/bulkmedya.ts exports only placeOrder,
+//   deltas. (Verified: lib/bulkmedya.ts exports only placeOrder,
 //   fetchServices, syncServices — no getOrderStatus or similar.)
 //
-// If you need to surface BulkMedya state in the UI, do it in the
-// /logs page reading the field as audit-only. Never feed it back
-// into currentScore.
+// SCORING — single formula, no smoothing:
+//   score = LIVRAISON(0-25) + VITESSE(0-25) + DROP(0-25) + COÛT(0-25)
+//   Service.currentScore = score of LATEST completed (or
+//   completed_partial) TestOrder. Each new test overwrites.
+
 import { prisma } from "@/lib/prisma";
 import { consumeCompletedAssignments } from "@/lib/pool/assign";
 import type { Measurement, TestOrder } from "@prisma/client";
@@ -25,73 +26,57 @@ type OrderWithMeasurements = TestOrder & { measurements: Measurement[] };
 
 export type OrderScore = {
   orderId: number;
-  // Sub-scores. 0-30 / 0-50 / 0-5 / 0-15 = total 100.
-  completionPts: number;
-  speedPts: number;
+  // Sub-scores, each 0-25, additive to total 0-100.
+  livraisonPts: number;
+  vitessePts: number;
   dropPts: number;
-  costPts: number;
-  // Raw metrics surfaced for the dashboard + drawer.
+  coutPts: number;
+  // Raw metrics for UI / debug.
   completionPct: number;        // delivered / target, 0-1
   timeToFiftyMin: number | null; // null if 50% never reached
-  dropPct: number;              // (peak - final) / peak, 0-1; 0 if no peak
+  dropPct: number;              // (peak - last) / peak, 0-1
   // Aggregate.
   final: number;                // 0-100
-  hasSevenDay: boolean;
   hasDelivery: boolean;         // peak > baseline
 };
 
-// Score component weights — sum to 100.
-//
-// Calibration history: completion was 40 pts and drop was 10
-// pts but observation showed completion saturated at 1.0 and
-// drop saturated at 0 % across virtually every QUALIFIED
-// service. Both dimensions degenerated to a fixed +50 offset
-// that compressed the total into a 50-60 band. Reduced their
-// weights and added COST_EFFICIENCY which actually varies per
-// service to widen the score distribution.
-//
-// Speed remains 50 pts — it's the only dimension that produces
-// real variance across the catalog (and the variance ceiling is
-// limited by the 12h polling cadence — a service that delivers
-// in 30 min still measures as "delivered ≤ 12h").
-const COMPLETION_PTS_MAX = 30;
-const SPEED_PTS_MAX = 50;
-const DROP_PTS_MAX = 5;
-const COST_PTS_MAX = 15;
+const SUB_MAX = 25;
 
-const SPEED_BRACKETS: Array<[number, number]> = [
-  [60, SPEED_PTS_MAX],         // < 1h
-  [180, 40],                    // 1-3h
-  [360, 30],                    // 3-6h
-  [720, 20],                    // 6-12h
-  [1440, 10],                   // 12-24h
-  [2880, 5],                    // 24-48h
+// Vitesse bracket — minutes from placement to first measurement
+// where delivered ≥ 50% of target. No delivery → 0.
+const VITESSE_BRACKETS: Array<[number, number]> = [
+  [60, 25],     // < 1h
+  [180, 22],    // 1-3h
+  [360, 18],    // 3-6h
+  [720, 15],    // 6-12h
+  [1440, 12],   // 12-24h
+  [2880, 6],    // 24-48h
+  [Infinity, 2],// 48h+
 ];
 
-function speedPtsFor(timeToFiftyMin: number | null): number {
+function vitessePtsFor(timeToFiftyMin: number | null): number {
   if (timeToFiftyMin === null) return 0;
-  for (const [threshold, pts] of SPEED_BRACKETS) {
+  for (const [threshold, pts] of VITESSE_BRACKETS) {
     if (timeToFiftyMin <= threshold) return pts;
   }
+  return 2;
+}
+
+// Drop bracket. No delivery → 0 (not measurable).
+function dropPtsFor(dropPct: number, hasDelivery: boolean): number {
+  if (!hasDelivery) return 0;
+  if (dropPct <= 0) return 25;
+  if (dropPct < 0.10) return 22;
+  if (dropPct < 0.20) return 18;
+  if (dropPct < 0.30) return 12;
+  if (dropPct < 0.50) return 6;
   return 0;
 }
 
-// Drop bracket scaled to the new 0-5 max.
-function dropPtsFor(dropPct: number): number {
-  if (dropPct <= 0) return DROP_PTS_MAX;
-  if (dropPct < 0.10) return Math.round(DROP_PTS_MAX * 0.7);
-  if (dropPct < 0.30) return Math.round(DROP_PTS_MAX * 0.4);
-  return 0;
-}
-
-// Cost percentile → points. Ranked across all currently-active
-// scorable services so we always have a fresh distribution.
-function costPtsFor(costPercentile: number): number {
-  // Lower percentile = cheaper = better.
-  if (costPercentile <= 0.25) return COST_PTS_MAX;            // top 25 % cheapest
-  if (costPercentile <= 0.50) return Math.round(COST_PTS_MAX * 0.66);
-  if (costPercentile <= 0.75) return Math.round(COST_PTS_MAX * 0.33);
-  return 0;
+// Cost percentile → 0-25. Linear: cheapest = 25, most expensive
+// = 0. costPercentile is 0..1 across the catalog (precomputed).
+function coutPtsFor(costPercentile: number): number {
+  return SUB_MAX * (1 - Math.min(1, Math.max(0, costPercentile)));
 }
 
 export function computeOrderScore(
@@ -108,11 +93,14 @@ export function computeOrderScore(
       ? order.baselineCount
       : Math.max(...measurementsSorted.map((m) => m.actualCount));
   const delivered = Math.max(0, peakCount - order.baselineCount);
-  const completionPct = Math.min(1, delivered / Math.max(1, order.targetQuantity));
+  const completionPct = Math.min(
+    1,
+    delivered / Math.max(1, order.targetQuantity)
+  );
+  const hasDelivery = peakCount > order.baselineCount;
 
-  // ── Speed: minutes from placement to first measurement where
-  //    delivered ≥ 50 % of target. Linear-scan postBaseline rows
-  //    sorted ascending by checkedAt (already sorted above).
+  // Vitesse: minutes to first measurement where delivered ≥ 50%
+  // of target.
   const fiftyTargetCount =
     order.baselineCount + order.targetQuantity * 0.5;
   const fiftyHit = postBaseline.find((m) => m.actualCount >= fiftyTargetCount);
@@ -120,39 +108,34 @@ export function computeOrderScore(
     ? (fiftyHit.checkedAt.getTime() - order.placedAt.getTime()) / 60_000
     : null;
 
-  // ── Drop: between peakCount and the most recent post-baseline
-  //    measurement. We don't gate on T+7d existing — the
-  //    interim drop signal still informs the score on services
-  //    that haven't reached the sunset yet.
+  // Drop: (peak - latest) / peak. Zero if no delivery.
   const lastMeas = postBaseline.length > 0
     ? postBaseline[postBaseline.length - 1]
     : null;
-  const sevenDay = postBaseline.find((m) => m.checkpoint === "T+7d");
   let dropPct = 0;
-  if (lastMeas && peakCount > order.baselineCount) {
+  if (lastMeas && hasDelivery) {
     const netPeak = peakCount - order.baselineCount;
     const netAtLast = Math.max(0, lastMeas.actualCount - order.baselineCount);
     dropPct = Math.min(1, Math.max(0, (netPeak - netAtLast) / netPeak));
   }
 
-  const completionPts = completionPct * COMPLETION_PTS_MAX;
-  const speedPts = speedPtsFor(timeToFiftyMin);
-  const dropPts = dropPtsFor(dropPct);
-  const costPts = costPtsFor(costPercentile);
-  const final = completionPts + speedPts + dropPts + costPts; // 0-100
+  const livraisonPts = completionPct * SUB_MAX;
+  const vitessePts = vitessePtsFor(timeToFiftyMin);
+  const dropPts = dropPtsFor(dropPct, hasDelivery);
+  const coutPts = coutPtsFor(costPercentile);
+  const final = livraisonPts + vitessePts + dropPts + coutPts;
 
   return {
     orderId: order.id,
-    completionPts,
-    speedPts,
+    livraisonPts,
+    vitessePts,
     dropPts,
-    costPts,
+    coutPts,
     completionPct,
     timeToFiftyMin,
     dropPct,
     final,
-    hasSevenDay: Boolean(sevenDay),
-    hasDelivery: peakCount > order.baselineCount,
+    hasDelivery,
   };
 }
 
@@ -164,7 +147,11 @@ export type ScoringResult = {
   accountsConsumedByTimeout: number;
 };
 
-const MOVING_AVG_WINDOW = 30;
+// Statuses that count as terminal "we have a final test result"
+// — both completed (full delivery or T+7d sunset) and the new
+// completed_partial (stagnation auto-finalize). Aborted variants
+// stay excluded — they didn't produce a measurable signal.
+export const SCORABLE_STATUSES = ["completed", "completed_partial"];
 
 export async function runScoringEngine(): Promise<ScoringResult> {
   const result: ScoringResult = {
@@ -177,28 +164,28 @@ export async function runScoringEngine(): Promise<ScoringResult> {
 
   // Pre-pass: flip assigned → consumed for any account whose test
   // has progressed past the T+0 baseline (or been stuck for 48h+).
-  // Runs here instead of dedicated cron because scoring is the
-  // natural "end-of-test" signal, and it fires every 10 min anyway.
   const consumed = await consumeCompletedAssignments();
   result.accountsConsumedByMeasurement = consumed.byMeasurement;
   result.accountsConsumedByTimeout = consumed.byTimeout;
 
-  // Only loop services with ≥ 1 completed TestOrder. Saves
-  // ~4 000 wasted iterations on out-of-scope services that have
-  // never been tested.
+  // Only loop services with ≥ 1 scorable TestOrder.
   const services = await prisma.service.findMany({
     where: {
       active: true,
-      testOrders: { some: { status: "completed" } },
+      testOrders: { some: { status: { in: SCORABLE_STATUSES } } },
     },
-    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
+    select: {
+      id: true,
+      ratePerK: true,
+      minQuantity: true,
+      maxQuantity: true,
+    },
   });
 
-  // Cost percentile thresholds for COST_EFFICIENCY scoring. Sort
-  // ALL active scorable services by per-test cost, then use
-  // quartile thresholds to map each service's cost to a percentile
-  // rank in computeOrderScore. Computed once per scoring run so
-  // we don't re-sort per service.
+  // Cost percentile thresholds for COÛT scoring. Sort all active
+  // scorable services by per-test cost, map service.id → 0..1
+  // percentile rank. Recomputed each scoring run so distribution
+  // stays fresh as the catalog evolves.
   const costs = services
     .map((s) => {
       const qty = Math.max(20, s.minQuantity);
@@ -209,149 +196,161 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     .sort((a, b) => a.cost - b.cost);
   const costRankByService = new Map<number, number>();
   for (let i = 0; i < costs.length; i++) {
-    costRankByService.set(costs[i].id, costs.length > 1 ? i / (costs.length - 1) : 0.5);
+    costRankByService.set(
+      costs[i].id,
+      costs.length > 1 ? i / (costs.length - 1) : 0.5
+    );
   }
 
   for (const { id: serviceId } of services) {
-    // Pull MOVING_AVG_WINDOW × 3 so the RULE 1 filter below has
-    // enough raw orders to survive even on services where many
-    // tests ran but nothing was actually delivered yet.
-    const rawOrders = await prisma.testOrder.findMany({
+    // Pull the LATEST scorable TestOrder. No moving average, no
+    // backfill window — the most recent test is the authoritative
+    // signal. If a service degrades, its next retest reflects it
+    // immediately; if it improves, same.
+    const latest = await prisma.testOrder.findFirst({
       where: {
         serviceId,
-        // Only count fully-completed tests in the moving average.
-        // Aborted-target-died rows (auto-retry chain) are discarded
-        // so a dead target can't drag a service's score down.
-        status: "completed",
-        measurements: { some: { checkpoint: { not: "T+0" } } },
+        status: { in: SCORABLE_STATUSES },
       },
       include: { measurements: true },
-      orderBy: { placedAt: "desc" },
-      take: MOVING_AVG_WINDOW * 3,
+      orderBy: [
+        { completedAt: { sort: "desc", nulls: "last" } },
+        { placedAt: "desc" },
+      ],
     });
 
-    // RULE 1 enforcement — keep only orders where at least one
-    // RapidAPI measurement shows actualCount strictly above
-    // baselineCount. No measured delivery → order is not eligible
-    // for scoring. BulkMedya status is intentionally ignored.
-    const orders = rawOrders
-      .filter((o) => {
-        const peak = Math.max(
-          o.baselineCount,
-          ...o.measurements.map((m) => m.actualCount)
-        );
-        return peak > o.baselineCount;
-      })
-      .slice(0, MOVING_AVG_WINDOW);
-
-    if (orders.length === 0) {
-      // If a prior scoring run stamped a currentScore on this
-      // service but no order survives the RULE 1 filter anymore
-      // (data drift, re-scrape, whatever), reset the stale score
-      // so the /services + routing layer don't keep picking a
-      // service based on a hallucinated signal.
+    if (!latest) {
       await resetStaleScore(serviceId);
       result.servicesSkipped++;
       continue;
     }
 
+    // RULE 1: only score orders with measured delivery > 0. A
+    // 'completed_partial' that delivered nothing still gets a
+    // score row — we want completion=0, vitesse=0, drop=0,
+    // coût=positive (the service is just bad/slow). The score is
+    // honest at <30/100 and the operator can act.
+    const peak = Math.max(
+      latest.baselineCount,
+      ...latest.measurements.map((m) => m.actualCount)
+    );
+    // Even with peak == baseline (no delivery), we still write
+    // the score row — the user wants a score that drops to 0
+    // when the latest test fails, not a service silently absent
+    // from rankings.
+
     const costPercentile = costRankByService.get(serviceId) ?? 0.5;
-    const scores = orders.map((o) => computeOrderScore(o, costPercentile));
+    const score = computeOrderScore(latest, costPercentile);
 
-    const avg = (pick: (s: OrderScore) => number) =>
-      scores.reduce((acc, s) => acc + pick(s), 0) / scores.length;
-
-    // Sub-scores feeding rawScore (additive, 0-100).
-    const completionPtsAvg = avg((s) => s.completionPts);
-    const speedPtsAvg = avg((s) => s.speedPts);
-    const dropPtsAvg = avg((s) => s.dropPts);
-    const costPtsAvg = avg((s) => s.costPts);
-    const rawScore =
-      completionPtsAvg + speedPtsAvg + dropPtsAvg + costPtsAvg;
-
-    // Bayesian smoothing. Lowered prior weight 5 → 2 → 1.
-    // With weight 2 the n=1 ceiling was (raw+100)/3 = 66.7 — top
-    // services capped at 67 even with a perfect raw=100. Prior
-    // weight 1 unlocks:
-    //   n=1, raw=100 → (100+50)/2 = 75
-    //   n=1, raw=50  → (50+50)/2  = 50  (prior anchor)
-    //   n=1, raw=0   → (0+50)/2   = 25
-    //   n=2, raw=100 → (200+50)/3 = 83
-    //   n=5, raw=100 → (500+50)/6 = 92
-    // Real spread per sample-count tier; ranking actually picks
-    // top performers instead of compressing them.
-    const sampleCount = orders.length;
-    const PRIOR = 50;
-    const PRIOR_WEIGHT = 1;
-    const weightedScore =
-      (rawScore * sampleCount + PRIOR * PRIOR_WEIGHT) /
-      (sampleCount + PRIOR_WEIGHT);
-
-    // Confidence kept as a UI hint (not used in math anymore).
-    const confidence = Math.min(1, sampleCount / 10);
-
-    // Aggregate metrics for the dashboard top/flop tables.
-    const timesToFifty = scores
-      .map((s) => s.timeToFiftyMin)
-      .filter((v): v is number => v !== null);
-    const avgTimeToFiftyMin =
-      timesToFifty.length > 0
-        ? timesToFifty.reduce((a, b) => a + b, 0) / timesToFifty.length
-        : null;
-    const avgDropPct = avg((s) => s.dropPct);
-
+    // Persist. ServiceScore is append-only history — every run
+    // creates a fresh row. The latest row is what /services and
+    // dashboard read.
     await prisma.serviceScore.create({
       data: {
         serviceId,
-        // currentScore = weightedScore so any legacy reader
-        // (RoutingDecision audit, /services list, etc.) gets the
-        // smoothed view automatically.
-        currentScore: weightedScore,
-        // Legacy sub-score columns kept for backwards compat —
-        // we now store them as "X / 100" normalized so the old
-        // schema readers don't see scale shifts.
-        completionFactor: avg((s) => s.completionPct),
+        // currentScore = the only score that matters. No
+        // weighted/raw split anymore.
+        currentScore: score.final,
+        // Sub-scores stored as their 0-25 values directly.
+        // completionFactor stays 0-1 for backwards compat.
+        completionFactor: score.completionPct,
         realismScore: 0, // realism dropped from the formula
-        speedScore: speedPtsAvg * 2, // 0-100 scale
-        dropScore: dropPtsAvg * 10, // 0-100 scale
-        rawScore,
-        sampleCount,
-        confidence,
-        weightedScore,
-        avgTimeToFiftyMin,
-        avgDropPct,
+        speedScore: score.vitessePts, // 0-25
+        dropScore: score.dropPts,     // 0-25
+        // Legacy fields kept null/zero — no Bayesian, no average.
+        rawScore: score.final,
+        sampleCount: 1,
+        confidence: 1,
+        weightedScore: score.final,
+        avgTimeToFiftyMin: score.timeToFiftyMin,
+        avgDropPct: score.dropPct,
       },
     });
 
-    // Fan out the weighted score to every candidacy row pointing
-    // at this service. Routing + dashboard tables read
-    // candidate.currentScore for ranking; weighted is what we
-    // want them to see.
+    // Fan out to every candidacy row pointing at this service.
     await prisma.productServiceCandidate.updateMany({
       where: { serviceId },
-      data: { currentScore: weightedScore, lastScoredAt: new Date() },
+      data: { currentScore: score.final, lastScoredAt: new Date() },
     });
 
     result.servicesScored++;
     result.rowsWritten++;
   }
 
-  // Re-rank every product's candidates. Top rank = 1 for the best
-  // scored, ineligible / forceExcluded rows get rank=null (sit out
-  // of the routing order entirely).
   await recomputeRanks();
-
   return result;
 }
 
-// Called when the RULE 1 filter leaves zero scorable orders for a
-// service that previously had a currentScore. Nulls out the
-// denormalised currentScore on every candidate row so routing
-// stops treating the service as ranked. ServiceScore history is
-// append-only (currentScore is non-nullable in that table), so
-// we don't insert a placeholder — the absence of a fresh row is
-// the signal that the service fell out of the scored set. No-op
-// when there's nothing to reset.
+// Compute + persist a single service's score from its latest
+// scorable TestOrder. Called by the lifecycle hook on test
+// completion so a score appears within seconds of finalize, not
+// at the 10-min scoring cron tick.
+export async function rescoreSingleService(serviceId: number): Promise<number | null> {
+  const svc = await prisma.service.findUnique({
+    where: { id: serviceId },
+    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true, active: true },
+  });
+  if (!svc || !svc.active) return null;
+
+  const latest = await prisma.testOrder.findFirst({
+    where: { serviceId, status: { in: SCORABLE_STATUSES } },
+    include: { measurements: true },
+    orderBy: [
+      { completedAt: { sort: "desc", nulls: "last" } },
+      { placedAt: "desc" },
+    ],
+  });
+  if (!latest) return null;
+
+  // Fast-path cost percentile — single DB scan over active
+  // services. Fine for one-shot calls.
+  const allCosts = await prisma.service.findMany({
+    where: {
+      active: true,
+      testOrders: { some: { status: { in: SCORABLE_STATUSES } } },
+    },
+    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
+  });
+  const costs = allCosts
+    .map((s) => {
+      const qty = Math.max(20, s.minQuantity);
+      if (s.maxQuantity > 0 && qty > s.maxQuantity) return null;
+      return { id: s.id, cost: (s.ratePerK * qty) / 1000 };
+    })
+    .filter((v): v is { id: number; cost: number } => v !== null)
+    .sort((a, b) => a.cost - b.cost);
+  const idx = costs.findIndex((c) => c.id === serviceId);
+  const costPercentile = idx < 0
+    ? 0.5
+    : costs.length > 1
+      ? idx / (costs.length - 1)
+      : 0.5;
+
+  const score = computeOrderScore(latest, costPercentile);
+  await prisma.serviceScore.create({
+    data: {
+      serviceId,
+      currentScore: score.final,
+      completionFactor: score.completionPct,
+      realismScore: 0,
+      speedScore: score.vitessePts,
+      dropScore: score.dropPts,
+      rawScore: score.final,
+      sampleCount: 1,
+      confidence: 1,
+      weightedScore: score.final,
+      avgTimeToFiftyMin: score.timeToFiftyMin,
+      avgDropPct: score.dropPct,
+    },
+  });
+  await prisma.productServiceCandidate.updateMany({
+    where: { serviceId },
+    data: { currentScore: score.final, lastScoredAt: new Date() },
+  });
+  return score.final;
+}
+
+// Called when no scorable TestOrder remains for a service.
 async function resetStaleScore(serviceId: number): Promise<void> {
   const stale = await prisma.productServiceCandidate.count({
     where: { serviceId, currentScore: { not: null } },
@@ -364,8 +363,6 @@ async function resetStaleScore(serviceId: number): Promise<void> {
 }
 
 // Rewrites ProductServiceCandidate.rank for every active product.
-// Called at the end of runScoringEngine and exposed so the catalogue
-// page can offer a "rescorer" button.
 export async function recomputeRanks(): Promise<void> {
   const products = await prisma.myBoostProduct.findMany({
     where: { isActive: true },
@@ -384,19 +381,14 @@ export async function recomputeRanks(): Promise<void> {
       ],
       select: { id: true, currentScore: true },
     });
-    // Assign rank 1..N to the in-order rows, null to the rest.
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      // null currentScore rows land at the tail — keep rank null so
-      // the router only falls back to them once every scored one
-      // has been tried.
       const rank = r.currentScore == null ? null : i + 1;
       await prisma.productServiceCandidate.update({
         where: { id: r.id },
         data: { rank },
       });
     }
-    // Ineligible / forceExcluded rows — clear rank.
     await prisma.productServiceCandidate.updateMany({
       where: {
         productId: p.id,
