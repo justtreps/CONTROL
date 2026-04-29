@@ -98,6 +98,13 @@ function coutPtsFor(costPercentile: number): number {
 // formula (15/10/5/0) — both diverged from the engine's linear
 // percentile. Operators saw a Coût sub-score on the detail page
 // that didn't add up to the displayed total.
+//
+// Services with broken pricing data (ratePerK <= 0 or minQuantity
+// <= 0) are excluded. Without this filter, a service whose
+// BulkMedya row had a 0-rate column would compute cost=0, land at
+// percentile=0 (cheapest), and pocket the full 25 cost points —
+// the scoring engine literally REWARDED broken catalog rows. We
+// filter on construction now so the cohort represents real prices.
 export async function computeCostPercentileForService(
   serviceId: number
 ): Promise<number> {
@@ -106,6 +113,7 @@ export async function computeCostPercentileForService(
     select: { ratePerK: true, minQuantity: true, maxQuantity: true },
   });
   if (!me) return 0.5;
+  if (me.ratePerK <= 0 || me.minQuantity <= 0) return 0.5;
   const myQty = Math.max(20, me.minQuantity);
   if (me.maxQuantity > 0 && myQty > me.maxQuantity) return 0.5;
   const myCost = (me.ratePerK * myQty) / 1000;
@@ -113,6 +121,8 @@ export async function computeCostPercentileForService(
   const all = await prisma.service.findMany({
     where: {
       active: true,
+      ratePerK: { gt: 0 },
+      minQuantity: { gt: 0 },
       testOrders: {
         some: { measurements: { some: { checkpoint: { not: "T+0" } } } },
       },
@@ -280,9 +290,15 @@ export async function runScoringEngine(): Promise<ScoringResult> {
   // Only loop services with ≥ 1 TestOrder that's been polled at
   // least once (a measurement beyond T+0). Status doesn't matter
   // for the loop filter — pickLatestScorableTest decides.
+  // Pricing-broken rows (ratePerK<=0 or minQuantity<=0) are excluded
+  // from the cost cohort: leaving them in would flush the percentile
+  // 0 (cheapest) and they'd score the full 25 cost points despite
+  // being unsellable.
   const services = await prisma.service.findMany({
     where: {
       active: true,
+      ratePerK: { gt: 0 },
+      minQuantity: { gt: 0 },
       testOrders: {
         some: { measurements: { some: { checkpoint: { not: "T+0" } } } },
       },
@@ -395,10 +411,12 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
 
   // Fast-path cost percentile — single DB scan over active
   // services with at least 1 polled TestOrder (matches the loop
-  // filter in runScoringEngine).
+  // filter in runScoringEngine, including the rate>0 guard).
   const allCosts = await prisma.service.findMany({
     where: {
       active: true,
+      ratePerK: { gt: 0 },
+      minQuantity: { gt: 0 },
       testOrders: {
         some: { measurements: { some: { checkpoint: { not: "T+0" } } } },
       },

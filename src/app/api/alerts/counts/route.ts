@@ -1,6 +1,7 @@
-// Small payload for the GlobalAlertBanner — polled every 30s by
-// the top-bar component. Returns only active + acknowledged
-// counters, keyed by severity.
+// Small payload for live alert counters. Two consumers:
+//   • GlobalAlertBanner (top-bar) — polls every 30 s
+//   • /alertes AlertsList chips    — polls every 10 s
+// Returns BOTH shape conventions so neither has to remap.
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -8,7 +9,7 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const [critical, warning, info] = await Promise.all([
+  const [critical, warning, info, acknowledged, resolved] = await Promise.all([
     prisma.alert.count({
       where: { status: "active", severity: "critical" },
     }),
@@ -18,15 +19,22 @@ export async function GET() {
     prisma.alert.count({
       where: { status: "active", severity: "info" },
     }),
+    prisma.alert.count({ where: { status: "acknowledged" } }),
+    prisma.alert.count({
+      where: { status: { in: ["resolved", "auto_resolved"] } },
+    }),
   ]);
-  const acknowledged = await prisma.alert.count({
-    where: { status: "acknowledged" },
-  });
   return NextResponse.json({
+    // Banner shape (legacy)
     critical,
     warning,
     info,
     total: critical + warning + info,
     acknowledged,
+    // AlertsList shape (5 chips)
+    crit: critical,
+    warn: warning,
+    ack: acknowledged,
+    resolved,
   });
 }

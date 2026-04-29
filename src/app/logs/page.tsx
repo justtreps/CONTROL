@@ -435,13 +435,18 @@ async function TestbotJournal({
     }),
   ]);
 
-  // Scoring readiness ratio — how many of the last-24h orders have
-  // at least one Measurement with actualCount > baselineCount. This
-  // is the % that would pass RULE 1 today.
+  // Scoring readiness ratio — how many of the last-24h orders pass
+  // RULE 1 today. Definition of RULE 1 (see lib/scoring.ts:
+  // pickLatestScorableTest): "Latest TestOrder by placedAt that has
+  // at least 1 non-T+0 Measurement. Status doesn't matter — running
+  // tests with at least 1 poll count as scorable too." The previous
+  // filter `status: "completed"` undercounted by skipping running
+  // and aborted_* orders that had real polls. Now we include any
+  // non-aborted_pre_oracle status with a polled measurement.
   const eligible24 = await prisma.testOrder.findMany({
-    where: { placedAt: { gte: last24h }, status: "completed" },
+    where: { placedAt: { gte: last24h } },
     include: { measurements: true },
-    take: 500,
+    take: 1000,
   });
   const scorable = eligible24.filter((o) => {
     const peak = Math.max(

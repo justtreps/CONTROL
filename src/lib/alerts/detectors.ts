@@ -857,15 +857,18 @@ export const detectPoolInsufficientAfterCleanup: Detector = async () => {
       title: `Pool IG insuffisant après cleanup (${poolCount} comptes)`,
       description: `La campagne #${c.id} reste pausée : ${poolCount} comptes available après health-check (seuil de reprise 500).`,
       explanation: `Le health-check a invalidé les comptes privés/supprimés. Il reste ${poolCount} comptes actifs (${snapshotCount} au moment du cleanup). Pour relancer la campagne il faut grossir le pool — la recommandation est d'ajouter ~1500 comptes frais via le scraper existant.`,
-      impact:
-        "La campagne #${c.id} ne reprendra pas tant que le pool est sous 500 comptes. Les placements déjà en vol continuent normalement.",
+      impact: `La campagne #${c.id} ne reprendra pas tant que le pool est sous 500 comptes. Les placements déjà en vol continuent normalement.`,
       suggestedAction:
         "Lancer un scrape de 1500 comptes IG via le bouton ci-dessous. Durée estimée 20-40 min selon le rate limit RapidAPI.",
       actionType: "button",
       actionPayload: {
+        // The button click handler in AlertsList expects `body`,
+        // not `payload`. Renaming to match contract — the previous
+        // value would have been swallowed and the fetch would post
+        // {} instead of the platform/count.
         endpoint: "/api/pool/scrape",
         method: "POST",
-        payload: { platform: "instagram", count: 1500 },
+        body: { platform: "instagram", count: 1500 },
         confirm: "Lancer un scrape de 1500 comptes IG ?",
       },
       relatedEntityType: "scoringCampaign",

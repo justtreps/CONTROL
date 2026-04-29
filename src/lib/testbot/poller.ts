@@ -276,8 +276,15 @@ async function finaliseOrder(
   status: "completed" | "completed_partial",
   result: PollerResult
 ): Promise<void> {
-  await prisma.testOrder.update({
-    where: { id: order.id },
+  // Compare-and-swap on status='running' so two overlapping cron
+  // ticks can't both finalise the same order. The previous version
+  // used prisma.update by id only — both ticks would succeed, and
+  // onTestCompleted/rescoreSingleService would fire twice (which
+  // could double-trigger a DEAD lifecycle transition or pollute the
+  // ServiceScore stream with two near-identical inserts within the
+  // dedupe window).
+  const claim = await prisma.testOrder.updateMany({
+    where: { id: order.id, status: "running" },
     data: {
       status,
       completedAt: new Date(),
@@ -285,6 +292,11 @@ async function finaliseOrder(
       nextPollAt: null,
     },
   });
+  if (claim.count === 0) {
+    // Already finalised by another tick — skip the lifecycle/rescore
+    // fan-out so we don't fire it twice.
+    return;
+  }
   // Terminal lifecycle hook (DEAD transitions etc.) — covers both
   // completed and completed_partial.
   await onTestCompleted({

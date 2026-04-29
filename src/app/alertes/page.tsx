@@ -9,11 +9,28 @@ import { AlertsList } from "./AlertsList";
 
 export const dynamic = "force-dynamic";
 
+// Severity DESC by string sort returns "warning" > "info" >
+// "critical" because of ASCII (w=119, i=105, c=99). The alphabet
+// is the wrong direction. Same rank map as /api/alerts/route.ts so
+// the initial server render and subsequent client polls share one
+// definition.
+const SEVERITY_RANK: Record<string, number> = {
+  critical: 3,
+  warning: 2,
+  info: 1,
+};
+
 export default async function AlertsPage() {
-  const alerts = await prisma.alert.findMany({
+  const rawAlerts = await prisma.alert.findMany({
     where: { status: { in: ["active", "acknowledged"] } },
-    orderBy: [{ severity: "desc" }, { lastTriggeredAt: "desc" }],
+    orderBy: { lastTriggeredAt: "desc" },
     take: 200,
+  });
+  const alerts = [...rawAlerts].sort((a, b) => {
+    const sa = SEVERITY_RANK[a.severity] ?? 0;
+    const sb = SEVERITY_RANK[b.severity] ?? 0;
+    if (sa !== sb) return sb - sa;
+    return b.lastTriggeredAt.getTime() - a.lastTriggeredAt.getTime();
   });
   const [crit, warn, info, ack, resolved] = await Promise.all([
     prisma.alert.count({

@@ -54,19 +54,21 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 export function AlertsList({
   initial,
-  counts,
+  counts: initialCounts,
 }: {
   initial: Alert[];
   counts: Counts;
 }) {
   const router = useRouter();
   const [alerts, setAlerts] = useState<Alert[]>(initial);
+  const [counts, setCounts] = useState<Counts>(initialCounts);
   const [statusFilter, setStatusFilter] =
     useState<StatusFilter>("active_or_ack");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
   const [selected, setSelected] = useState<Alert | null>(null);
   const [busy, setBusy] = useState<Record<number, boolean>>({});
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const p = new URLSearchParams({
@@ -75,10 +77,27 @@ export function AlertsList({
       category: categoryFilter,
       limit: "200",
     });
-    const res = await fetch(`/api/alerts?${p}`, { cache: "no-store" });
-    if (!res.ok) return;
-    const d = (await res.json()) as { alerts: Alert[] };
-    setAlerts(d.alerts);
+    // Fetch rows + counts in parallel so the chips don't lag the
+    // table. Without the counts call, the chips were frozen at
+    // the server-rendered first-paint values for the whole session.
+    const [rowsRes, countsRes] = await Promise.all([
+      fetch(`/api/alerts?${p}`, { cache: "no-store" }),
+      fetch(`/api/alerts/counts`, { cache: "no-store" }),
+    ]);
+    if (rowsRes.ok) {
+      const d = (await rowsRes.json()) as { alerts: Alert[] };
+      setAlerts(d.alerts);
+      // Sync the open drawer's selected alert with the latest row
+      // so the EXPLIQUER pane doesn't show stale figures after a
+      // detector tick.
+      setSelected((cur) =>
+        cur ? d.alerts.find((a) => a.id === cur.id) ?? cur : null
+      );
+    }
+    if (countsRes.ok) {
+      const c = (await countsRes.json()) as Counts;
+      setCounts(c);
+    }
   }, [statusFilter, severityFilter, categoryFilter]);
 
   useEffect(() => {
@@ -90,11 +109,28 @@ export function AlertsList({
 
   async function acknowledge(id: number) {
     if (busy[id]) return;
+    setActionError(null);
     setBusy((b) => ({ ...b, [id]: true }));
+    // Optimistic: flip status locally so the row visually updates
+    // before the network round-trip resolves. If the POST fails we
+    // rebuild from the next refresh().
+    setAlerts((rows) =>
+      rows.map((a) =>
+        a.id === id
+          ? { ...a, status: "acknowledged", acknowledgedAt: new Date().toISOString() }
+          : a
+      )
+    );
     try {
-      await fetch(`/api/alerts/${id}/acknowledge`, { method: "POST" });
+      const res = await fetch(`/api/alerts/${id}/acknowledge`, {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await refresh();
       router.refresh();
+    } catch (e) {
+      setActionError(`Acquittement échoué : ${(e as Error).message}`);
+      await refresh(); // re-sync from server truth
     } finally {
       setBusy((b) => ({ ...b, [id]: false }));
     }
@@ -103,11 +139,23 @@ export function AlertsList({
   async function resolve(id: number) {
     if (busy[id]) return;
     if (!confirm("Marquer cette alerte résolue ?")) return;
+    setActionError(null);
     setBusy((b) => ({ ...b, [id]: true }));
+    setAlerts((rows) =>
+      rows.map((a) =>
+        a.id === id
+          ? { ...a, status: "resolved", resolvedAt: new Date().toISOString() }
+          : a
+      )
+    );
     try {
-      await fetch(`/api/alerts/${id}/resolve`, { method: "POST" });
+      const res = await fetch(`/api/alerts/${id}/resolve`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await refresh();
       router.refresh();
+    } catch (e) {
+      setActionError(`Résolution échouée : ${(e as Error).message}`);
+      await refresh();
     } finally {
       setBusy((b) => ({ ...b, [id]: false }));
     }
@@ -121,6 +169,23 @@ export function AlertsList({
 
   return (
     <>
+      {actionError && (
+        <section className="px-4 md:px-8 pb-2">
+          <div
+            className="max-w-7xl mx-auto border border-[#FF3300] bg-[#FF3300]/10 px-4 py-3 flex items-center justify-between gap-4 font-mono text-xs tracking-widest uppercase text-[#FF3300]"
+            role="alert"
+          >
+            <span>[ ERREUR ] {actionError}</span>
+            <button
+              type="button"
+              onClick={() => setActionError(null)}
+              className="interactive border border-[#FF3300] px-2 py-0.5 hover:bg-[#FF3300] hover:text-black transition-colors"
+            >
+              FERMER
+            </button>
+          </div>
+        </section>
+      )}
       {/* Severity counters */}
       <section className="px-4 md:px-8 pb-4">
         <div className="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-5 gap-0 border-y border-[#666666]/20">

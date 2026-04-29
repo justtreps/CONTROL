@@ -109,6 +109,28 @@ export async function POST(req: Request) {
           ? activeKeys[(i + j) % activeKeys.length]
           : null;
         const run = async () => {
+          // Compare-and-swap claim: bump Service.lastTestedAt to
+          // NOW iff it's still < cutoff. If a parallel cron tick
+          // already claimed this service, count===0 and we skip.
+          // Without this, two overlapping ticks (Vercel can fire a
+          // new hourly run before the previous finishes) would
+          // both pick the same `cands` set and both place a real
+          // BulkMedya order on every service in the queue —
+          // doubling the daily budget and exhausting the pool.
+          const claim = await prisma.service.updateMany({
+            where: {
+              id: svc.id,
+              OR: [
+                { lastTestedAt: null },
+                { lastTestedAt: { lt: cutoff } },
+              ],
+            },
+            data: { lastTestedAt: new Date() },
+          });
+          if (claim.count === 0) {
+            result.skipped++;
+            return;
+          }
           const started = Date.now();
           const guard = setTimeout(() => {
             // no-op — attemptPlaceOrder should respect its own
