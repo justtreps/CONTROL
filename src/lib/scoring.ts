@@ -225,20 +225,10 @@ export async function runScoringEngine(): Promise<ScoringResult> {
       continue;
     }
 
-    // RULE 1: only score orders with measured delivery > 0. A
-    // 'completed_partial' that delivered nothing still gets a
-    // score row — we want completion=0, vitesse=0, drop=0,
-    // coût=positive (the service is just bad/slow). The score is
-    // honest at <30/100 and the operator can act.
-    const peak = Math.max(
-      latest.baselineCount,
-      ...latest.measurements.map((m) => m.actualCount)
-    );
-    // Even with peak == baseline (no delivery), we still write
-    // the score row — the user wants a score that drops to 0
-    // when the latest test fails, not a service silently absent
-    // from rankings.
-
+    // 'completed_partial' rows that delivered nothing still get
+    // a score row — completion=0, vitesse=0, drop=0, coût=positive
+    // gives an honest <30/100. The operator can act on that vs
+    // the silent absence we had before.
     const costPercentile = costRankByService.get(serviceId) ?? 0.5;
     const score = computeOrderScore(latest, costPercentile);
 
