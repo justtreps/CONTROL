@@ -149,6 +149,10 @@ type ServiceRow = {
   name: string;
   platform: string;
   score: number;
+  // rawScore + sampleCount kept on the type for backwards compat
+  // with the API payload, but no longer surfaced in the dashboard
+  // table. With the new last-test scoring, sampleCount is always
+  // 1 and rawScore == score, so they don't add information.
   rawScore: number;
   sampleCount: number;
   timeToFiftyMin: number | null;
@@ -857,11 +861,24 @@ function ServicesTable({
               <th className="text-left px-2 py-1 font-normal">#</th>
               <th className="text-left px-2 py-1 font-normal">Service</th>
               <th className="text-left px-2 py-1 font-normal">Plat.</th>
-              <th className="text-right px-2 py-1 font-normal">Score</th>
-              <th className="text-right px-2 py-1 font-normal" title="Raw score before Bayesian smoothing">Raw</th>
-              <th className="text-right px-2 py-1 font-normal" title="Number of TestOrders feeding the moving average">N</th>
-              <th className="text-right px-2 py-1 font-normal" title="Time to 50% delivery">T50</th>
-              <th className="text-right px-2 py-1 font-normal" title="Drop % between peak and final">Drop</th>
+              <th
+                className="text-right px-2 py-1 font-normal"
+                title="Total score 0-100 (livraison + vitesse + drop + coût, chacun 0-25)"
+              >
+                Score
+              </th>
+              <th
+                className="text-right px-2 py-1 font-normal"
+                title="Time to 50% delivery on the latest scored test"
+              >
+                T50
+              </th>
+              <th
+                className="text-right px-2 py-1 font-normal"
+                title="Drop % between peak and final on the latest scored test"
+              >
+                Drop
+              </th>
               {showDisable && <th className="px-2 py-1" />}
             </tr>
           </thead>
@@ -885,12 +902,6 @@ function ServicesTable({
                   style={{ color: accent }}
                 >
                   {r.score.toFixed(1)}
-                </td>
-                <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
-                  {r.rawScore.toFixed(1)}
-                </td>
-                <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
-                  {r.sampleCount}
                 </td>
                 <td className="px-2 py-1.5 font-mono text-[10px] tabular-nums text-right text-[#666666]">
                   {r.timeToFiftyMin === null
