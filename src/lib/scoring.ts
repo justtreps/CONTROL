@@ -44,14 +44,25 @@ const SUB_MAX = 25;
 
 // Vitesse bracket — minutes from placement to first measurement
 // where delivered ≥ 50% of target. No delivery → 0.
+//
+// The poller fires its first tick at T+12h (see testbot.ts:placedAt
+// + 12h). That's the soonest the engine can OBSERVE a delivery,
+// regardless of how fast BulkMedya actually was — so any bracket
+// shorter than 720 min is unreachable. The previous table had
+// [60→25], [180→22], [360→18] entries which painted a misleading
+// picture: operators thought 25-pt deliveries existed somewhere in
+// the catalog when the math literally couldn't produce them.
+//
+// Brackets now reflect what the polling cadence can actually
+// measure. If we ever add an early-cycle poll (T+1h spike), the
+// table can be expanded back. Until then 12h-or-faster is the
+// best-achievable tier.
 const VITESSE_BRACKETS: Array<[number, number]> = [
-  [60, 25],     // < 1h
-  [180, 22],    // 1-3h
-  [360, 18],    // 3-6h
-  [720, 15],    // 6-12h
-  [1440, 12],   // 12-24h
-  [2880, 6],    // 24-48h
-  [Infinity, 2],// 48h+
+  [720, 25],    // ≤12h — observed at first poll = "as fast as we can see"
+  [1440, 18],   // 12-24h
+  [2880, 12],   // 24-48h
+  [4320, 6],    // 48-72h
+  [Infinity, 2],// 72h+
 ];
 
 function vitessePtsFor(timeToFiftyMin: number | null): number {
