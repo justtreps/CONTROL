@@ -153,6 +153,53 @@ export type ScoringResult = {
 // stay excluded — they didn't produce a measurable signal.
 export const SCORABLE_STATUSES = ["completed", "completed_partial"];
 
+// Picks the test we'll score the service on. The rule used to be
+// "latest by completedAt" which was a bug: a service with 3 fresh
+// failing tests still showing 'running' kept its old completed
+// success at the top of the rankings forever. Now the rule is:
+//
+//   Latest TestOrder by placedAt that has at least 1 non-T+0
+//   Measurement. Status doesn't matter — running tests with at
+//   least 1 poll count as scorable too. This way:
+//
+//   • Just-placed test (only T+0 baseline) → not yet scorable,
+//     fall back to previous test
+//   • Running test that's been polled → score on current state
+//     (delivered / target / drop). If it's stagnating, the score
+//     will be low and the operator sees it immediately.
+//   • Completed test → score on final state.
+//
+// If the latest by placedAt has no polls yet, we pick the next-
+// latest that does have polls.
+async function pickLatestScorableTest(serviceId: number) {
+  // Pull the 5 most recent placements + their measurements.
+  // 5 is enough: a service that has 5 just-placed tests with
+  // zero polls is genuinely brand-new and deserves a null score.
+  const recent = await prisma.testOrder.findMany({
+    where: { serviceId },
+    include: {
+      measurements: {
+        where: { checkpoint: { not: "T+0" } },
+        select: { id: true },
+        take: 1,
+      },
+    },
+    orderBy: { placedAt: "desc" },
+    take: 5,
+  });
+  for (const o of recent) {
+    if (o.measurements.length > 0) {
+      // Refetch with all measurements (we only pulled 1 to test).
+      const full = await prisma.testOrder.findUnique({
+        where: { id: o.id },
+        include: { measurements: true },
+      });
+      return full;
+    }
+  }
+  return null;
+}
+
 export async function runScoringEngine(): Promise<ScoringResult> {
   const result: ScoringResult = {
     servicesScored: 0,
@@ -168,11 +215,15 @@ export async function runScoringEngine(): Promise<ScoringResult> {
   result.accountsConsumedByMeasurement = consumed.byMeasurement;
   result.accountsConsumedByTimeout = consumed.byTimeout;
 
-  // Only loop services with ≥ 1 scorable TestOrder.
+  // Only loop services with ≥ 1 TestOrder that's been polled at
+  // least once (a measurement beyond T+0). Status doesn't matter
+  // for the loop filter — pickLatestScorableTest decides.
   const services = await prisma.service.findMany({
     where: {
       active: true,
-      testOrders: { some: { status: { in: SCORABLE_STATUSES } } },
+      testOrders: {
+        some: { measurements: { some: { checkpoint: { not: "T+0" } } } },
+      },
     },
     select: {
       id: true,
@@ -203,21 +254,7 @@ export async function runScoringEngine(): Promise<ScoringResult> {
   }
 
   for (const { id: serviceId } of services) {
-    // Pull the LATEST scorable TestOrder. No moving average, no
-    // backfill window — the most recent test is the authoritative
-    // signal. If a service degrades, its next retest reflects it
-    // immediately; if it improves, same.
-    const latest = await prisma.testOrder.findFirst({
-      where: {
-        serviceId,
-        status: { in: SCORABLE_STATUSES },
-      },
-      include: { measurements: true },
-      orderBy: [
-        { completedAt: { sort: "desc", nulls: "last" } },
-        { placedAt: "desc" },
-      ],
-    });
+    const latest = await pickLatestScorableTest(serviceId);
 
     if (!latest) {
       await resetStaleScore(serviceId);
@@ -232,39 +269,48 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const costPercentile = costRankByService.get(serviceId) ?? 0.5;
     const score = computeOrderScore(latest, costPercentile);
 
-    // Persist. ServiceScore is append-only history — every run
-    // creates a fresh row. The latest row is what /services and
-    // dashboard read.
-    await prisma.serviceScore.create({
-      data: {
-        serviceId,
-        // currentScore = the only score that matters. No
-        // weighted/raw split anymore.
-        currentScore: score.final,
-        // Sub-scores stored as their 0-25 values directly.
-        // completionFactor stays 0-1 for backwards compat.
-        completionFactor: score.completionPct,
-        realismScore: 0, // realism dropped from the formula
-        speedScore: score.vitessePts, // 0-25
-        dropScore: score.dropPts,     // 0-25
-        // Legacy fields kept null/zero — no Bayesian, no average.
-        rawScore: score.final,
-        sampleCount: 1,
-        confidence: 1,
-        weightedScore: score.final,
-        avgTimeToFiftyMin: score.timeToFiftyMin,
-        avgDropPct: score.dropPct,
-      },
+    // Dedupe: skip the insert when the latest row matches this
+    // score within 0.5 pts AND was written < 1h ago. Prevents
+    // ServiceScore bloat (was ~1838 rows × 6/h × 24h = 264k/day).
+    const previous = await prisma.serviceScore.findFirst({
+      where: { serviceId },
+      orderBy: { computedAt: "desc" },
+      select: { currentScore: true, computedAt: true },
     });
+    const oneHourAgo = Date.now() - 3600_000;
+    const shouldSkip =
+      previous &&
+      Math.abs(previous.currentScore - score.final) < 0.5 &&
+      previous.computedAt.getTime() > oneHourAgo;
+    if (!shouldSkip) {
+      await prisma.serviceScore.create({
+        data: {
+          serviceId,
+          currentScore: score.final,
+          completionFactor: score.completionPct,
+          realismScore: 0,
+          speedScore: score.vitessePts,
+          dropScore: score.dropPts,
+          rawScore: score.final,
+          sampleCount: 1,
+          confidence: 1,
+          weightedScore: score.final,
+          avgTimeToFiftyMin: score.timeToFiftyMin,
+          avgDropPct: score.dropPct,
+        },
+      });
+      result.rowsWritten++;
+    }
 
     // Fan out to every candidacy row pointing at this service.
+    // Always update PSC.currentScore — denormalisation must stay
+    // fresh even when the ServiceScore insert is skipped.
     await prisma.productServiceCandidate.updateMany({
       where: { serviceId },
       data: { currentScore: score.final, lastScoredAt: new Date() },
     });
 
     result.servicesScored++;
-    result.rowsWritten++;
   }
 
   await recomputeRanks();
@@ -282,22 +328,18 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
   });
   if (!svc || !svc.active) return null;
 
-  const latest = await prisma.testOrder.findFirst({
-    where: { serviceId, status: { in: SCORABLE_STATUSES } },
-    include: { measurements: true },
-    orderBy: [
-      { completedAt: { sort: "desc", nulls: "last" } },
-      { placedAt: "desc" },
-    ],
-  });
+  const latest = await pickLatestScorableTest(serviceId);
   if (!latest) return null;
 
   // Fast-path cost percentile — single DB scan over active
-  // services. Fine for one-shot calls.
+  // services with at least 1 polled TestOrder (matches the loop
+  // filter in runScoringEngine).
   const allCosts = await prisma.service.findMany({
     where: {
       active: true,
-      testOrders: { some: { status: { in: SCORABLE_STATUSES } } },
+      testOrders: {
+        some: { measurements: { some: { checkpoint: { not: "T+0" } } } },
+      },
     },
     select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true },
   });
@@ -317,22 +359,39 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
       : 0.5;
 
   const score = computeOrderScore(latest, costPercentile);
-  await prisma.serviceScore.create({
-    data: {
-      serviceId,
-      currentScore: score.final,
-      completionFactor: score.completionPct,
-      realismScore: 0,
-      speedScore: score.vitessePts,
-      dropScore: score.dropPts,
-      rawScore: score.final,
-      sampleCount: 1,
-      confidence: 1,
-      weightedScore: score.final,
-      avgTimeToFiftyMin: score.timeToFiftyMin,
-      avgDropPct: score.dropPct,
-    },
+
+  // Dedupe ServiceScore writes: poll-driven rescores can fire
+  // every 12h on every TestOrder × 2700+ orders = thousands of
+  // identical-score rows per day. Skip insert when previous
+  // matches within 0.5 pts AND was written < 1h ago.
+  const previous = await prisma.serviceScore.findFirst({
+    where: { serviceId },
+    orderBy: { computedAt: "desc" },
+    select: { currentScore: true, computedAt: true },
   });
+  const oneHourAgo = Date.now() - 3600_000;
+  const shouldSkip =
+    previous &&
+    Math.abs(previous.currentScore - score.final) < 0.5 &&
+    previous.computedAt.getTime() > oneHourAgo;
+  if (!shouldSkip) {
+    await prisma.serviceScore.create({
+      data: {
+        serviceId,
+        currentScore: score.final,
+        completionFactor: score.completionPct,
+        realismScore: 0,
+        speedScore: score.vitessePts,
+        dropScore: score.dropPts,
+        rawScore: score.final,
+        sampleCount: 1,
+        confidence: 1,
+        weightedScore: score.final,
+        avgTimeToFiftyMin: score.timeToFiftyMin,
+        avgDropPct: score.dropPct,
+      },
+    });
+  }
   await prisma.productServiceCandidate.updateMany({
     where: { serviceId },
     data: { currentScore: score.final, lastScoredAt: new Date() },

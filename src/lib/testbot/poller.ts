@@ -221,6 +221,20 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
       nextPollAt: new Date(Date.now() + POLL_INTERVAL_MS),
     },
   });
+
+  // Score lives off the latest test that's been polled at least
+  // once. Every poll changes the latest test's state, so every
+  // poll potentially changes the service score. Rescore inline,
+  // dedupe-protected so we don't bloat ServiceScore.
+  try {
+    const { rescoreSingleService } = await import("@/lib/scoring");
+    await rescoreSingleService(order.serviceId);
+  } catch (e) {
+    result.errors.push({
+      orderId: order.id,
+      reason: `rescore_poll: ${(e as Error).message.slice(0, 80)}`,
+    });
+  }
 }
 
 const STAGNATION_MIN_AGE_MS = 24 * 60 * 60_000;
