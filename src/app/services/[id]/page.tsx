@@ -85,7 +85,9 @@ export default async function ServiceDetailPage({
 
   // Drop is stored on legacy 0-50 scale (dropPtsAvg × 10, max
   // 5 × 10). Rescale to 0-100 so the breakdown is consistent.
-  const dropDisplay = (s: number) => Math.min(100, s * 2);
+  // dropDisplay was the legacy 0-50 → 0-100 rescale. Removed
+  // with the scoring refactor: ServiceScore.dropScore now
+  // stores the 0-25 sub-score directly.
 
   // New scoring model: ServiceScore.currentScore = score of the
   // LATEST scorable TestOrder, no Bayesian smoothing, no moving
