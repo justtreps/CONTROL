@@ -22,12 +22,16 @@ import type { Service } from "@prisma/client";
 
 // Per-tick caps. Must fit inside maxDuration=300s. Observed
 // per-test wall-time for attemptPlaceOrder: ~3-5s normal, up to
-// 15s on retry chains. CONCURRENCY=5 with RETESTS_PER_HOUR=200
-// caused 504 timeouts at 300s. Bumped concurrency to 12 so the
-// drain runs in ~50-70s steady, ~150s worst-case.
-const RETESTS_PER_HOUR = 200;
+// 15s on retry chains. With ~2000 QUALIFIED+MONITORED services
+// on an 8 h cutoff stride, ~250 services become eligible per hour
+// (2000 / 8). Cap of 200 was leaving 50 services/h behind and
+// degrading the 3 x/day target. Bumped to 300 so we have headroom
+// for transient surges (e.g. cron tick after pool refill releases
+// previously-blocked retests). Concurrency 16 keeps the wall time
+// inside ~80 s steady, ~180 s worst-case.
+const RETESTS_PER_HOUR = 300;
 const PER_TEST_WALL_MS_BUDGET = 10_000;
-const CONCURRENCY = 12;
+const CONCURRENCY = 16;
 
 export const maxDuration = 300;
 
@@ -109,28 +113,15 @@ export async function POST(req: Request) {
           ? activeKeys[(i + j) % activeKeys.length]
           : null;
         const run = async () => {
-          // Compare-and-swap claim: bump Service.lastTestedAt to
-          // NOW iff it's still < cutoff. If a parallel cron tick
-          // already claimed this service, count===0 and we skip.
-          // Without this, two overlapping ticks (Vercel can fire a
-          // new hourly run before the previous finishes) would
-          // both pick the same `cands` set and both place a real
-          // BulkMedya order on every service in the queue —
-          // doubling the daily budget and exhausting the pool.
-          const claim = await prisma.service.updateMany({
-            where: {
-              id: svc.id,
-              OR: [
-                { lastTestedAt: null },
-                { lastTestedAt: { lt: cutoff } },
-              ],
-            },
-            data: { lastTestedAt: new Date() },
-          });
-          if (claim.count === 0) {
-            result.skipped++;
-            return;
-          }
+          // The original "claim lastTestedAt before attemptPlaceOrder"
+          // pattern was a self-DOS: failures (no_account, oracle_error,
+          // ghost) bumped the timestamp anyway, so a service that
+          // failed once stayed unreachable for 8 h instead of 1 h
+          // (the eligible-window stride). Cross-tick dedup is now
+          // handled implicitly by pickAndAssignAccount's CAS — two
+          // parallel crons compete for accounts, and at most one
+          // placement per service succeeds because attemptPlaceOrder
+          // stamps lastTestedAt ON SUCCESS (testbot.ts:511).
           const started = Date.now();
           const guard = setTimeout(() => {
             // no-op — attemptPlaceOrder should respect its own
