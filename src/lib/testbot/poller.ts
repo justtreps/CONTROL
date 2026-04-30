@@ -48,12 +48,13 @@ const FINALIZE_AGE_MS = 7 * 24 * 60 * 60_000;     // 7-day sunset
 // ~120 s worst case. Backlog drains slower (100/h vs 500/h) but
 // it actually completes per tick instead of getting killed
 // mid-batch with no progress persisted.
-// Conservative — diagnostic mode while we figure out why
-// production is hitting hard_cap on most polls. 10 polls × 60s
-// hard cap / 4 concurrency = 150s budget — still leaves slack.
-// If most polls succeed: bump back up. If most fail: there's a
-// deeper issue (rate-limit chain, RapidAPI degraded) to fix.
-const MAX_ORDERS_PER_TICK = 10;
+// Conservative — production observed Vercel sin1 → RapidAPI
+// tail latency past 60 s on cold starts. With 120 s hard cap
+// and concurrency 4, 8 polls × 120 s / 4 = 240 s in the worst
+// case (all hit cap). Most polls should land in 5-10 s so real
+// wall-time is ~30 s steady. We can bump this once production
+// stabilises.
+const MAX_ORDERS_PER_TICK = 8;
 const POLL_CONCURRENCY = 4;
 
 // Tick budget — exit cleanly if we approach Vercel's 300 s
@@ -67,13 +68,14 @@ const TICK_BUDGET_MS = 250_000;
 // drain.
 const STALE_NEXT_POLL_MS = 24 * 60 * 60_000;
 
-// Hard per-poll wall-clock cap. fetchOracleFor alone is bounded
-// at ~30 s (25 s timeout + 5 s grace), and pollOne stacks DB
-// writes, lifecycle hooks, and rescore on top. 30 s was cutting
-// off legit polls (observed: 51/51 errors = hard_cap on a
-// production tick). 60 s catches the genuinely hung path while
-// letting the p99 normal poll complete.
-const PER_POLL_HARD_CAP_MS = 60_000;
+// Hard per-poll wall-clock cap. Multiple layers stack:
+// fetchOracleFor (~30 s with timeout), measurement upsert,
+// lifecycle hook updates, testOrder.update. Local profile
+// shows ghost path = 1-3 s, success path = 3-5 s. Production
+// observed 60 s wasn't enough — Vercel sin1 → RapidAPI tail
+// latency stacks past it. 120 s gives the legit path room and
+// catches genuinely stuck calls.
+const PER_POLL_HARD_CAP_MS = 120_000;
 
 // Per-key circuit breaker is in lib/rapidapi/circuit-breaker.ts —
 // shared with scraper/sweep/campaign so a degraded key skipped by
