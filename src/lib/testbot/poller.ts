@@ -275,6 +275,11 @@ export async function runPoller(): Promise<PollerResult> {
 
 async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
   result.ordersPolled++;
+  const t0 = Date.now();
+  const log = (stage: string) => {
+    const ms = Date.now() - t0;
+    if (ms > 1000) console.log(`[pollOne TO#${order.id}] ${stage} t=${ms}ms`);
+  };
 
   let oracle;
   try {
@@ -282,6 +287,7 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
       order.service.platform,
       order.testAccount.userId
     );
+    log("oracle_done");
   } catch (e) {
     // Unexpected throw (network glitch, key switch mid-call, etc.) —
     // reschedule in 1 h and log. We don't cascade to abort because
@@ -335,6 +341,7 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
     },
     update: { actualCount: currentCount },
   });
+  log("measurement_upsert");
 
   // Per-poll qualification — fires on EVERY measurement, not just
   // at finalize. A service that delivers in the first 30 min flips
@@ -349,6 +356,7 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
       reason: `lifecycle_qualify: ${(e as Error).message.slice(0, 80)}`,
     });
   });
+  log("lifecycle_done");
 
   if (shouldFinalise) {
     await finaliseOrder(order, deliveredQty, "completed", result);
@@ -372,6 +380,7 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
       nextPollAt: new Date(Date.now() + POLL_INTERVAL_MS),
     },
   });
+  log("done");
 
   // Inline rescoreSingleService was the dominant cost in production
   // pollOne — every call does a full cohort scan
