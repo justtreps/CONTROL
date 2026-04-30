@@ -217,6 +217,14 @@ const chains = new Map<number, Promise<void>>();
 
 // ── Public API ──────────────────────────────────────────────────────
 
+// Hard ceiling on how long a caller can wait for a rate-limit
+// slot. Without this, a saturated key pins every worker behind a
+// chained acquireWithBackoff loop indefinitely. With this, the
+// caller throws after MAX_SLOT_WAIT_MS and the outer pollOne
+// reschedules the order — better than burning the full Vercel
+// 300 s lambda on a queue.
+const MAX_SLOT_WAIT_MS = 30_000;
+
 export async function waitForIgSlot(keyId: number): Promise<void> {
   const prev = chains.get(keyId) ?? Promise.resolve();
   let release: () => void = () => {};
@@ -226,7 +234,18 @@ export async function waitForIgSlot(keyId: number): Promise<void> {
   chains.set(keyId, next);
   try {
     await prev;
-    await acquireWithBackoff(keyId);
+    await Promise.race([
+      acquireWithBackoff(keyId),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(`rate_limit_slot_wait_timeout_${MAX_SLOT_WAIT_MS}ms`),
+            ),
+          MAX_SLOT_WAIT_MS,
+        ),
+      ),
+    ]);
   } finally {
     release();
   }
