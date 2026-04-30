@@ -437,24 +437,27 @@ async function TestbotJournal({
 
   // Scoring readiness ratio — how many of the last-24h orders pass
   // RULE 1 today. Definition of RULE 1 (see lib/scoring.ts:
-  // pickLatestScorableTest): "Latest TestOrder by placedAt that has
-  // at least 1 non-T+0 Measurement. Status doesn't matter — running
-  // tests with at least 1 poll count as scorable too." The previous
-  // filter `status: "completed"` undercounted by skipping running
-  // and aborted_* orders that had real polls. Now we include any
-  // non-aborted_pre_oracle status with a polled measurement.
+  // pickLatestScorableTest): "TestOrder that has at least 1 non-T+0
+  // Measurement". The previous formula here checked `peak >
+  // baselineCount` (= test that DELIVERED), which is a STRICTER
+  // condition than RULE 1 itself; "scorable" means "polled at all",
+  // not "polled with delivery". Audit reported the mismatch — the
+  // synth card was answering a different question than its label.
+  // Also the measurements include pulled all rows (T+0 included),
+  // so even `length > 0` would have always been true without the
+  // checkpoint filter inside the include.
   const eligible24 = await prisma.testOrder.findMany({
     where: { placedAt: { gte: last24h } },
-    include: { measurements: true },
+    include: {
+      measurements: {
+        where: { checkpoint: { not: "T+0" } },
+        select: { id: true },
+        take: 1,
+      },
+    },
     take: 1000,
   });
-  const scorable = eligible24.filter((o) => {
-    const peak = Math.max(
-      o.baselineCount,
-      ...o.measurements.map((m) => m.actualCount)
-    );
-    return peak > o.baselineCount;
-  }).length;
+  const scorable = eligible24.filter((o) => o.measurements.length > 0).length;
   const scorablePct = eligible24.length > 0
     ? Math.round((scorable / eligible24.length) * 100)
     : null;

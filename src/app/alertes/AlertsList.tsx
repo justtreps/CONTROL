@@ -78,11 +78,16 @@ export function AlertsList({
       limit: "200",
     });
     // Fetch rows + counts in parallel so the chips don't lag the
-    // table. Without the counts call, the chips were frozen at
-    // the server-rendered first-paint values for the whole session.
+    // table. Pass categoryFilter to /counts too so the chip values
+    // match the rows the operator is viewing — otherwise the
+    // CRITIQUE chip shows the global critical count regardless of
+    // active category, and clicking it appears to "fix" missing
+    // alerts that were just hidden by the category filter.
+    const countsParams = new URLSearchParams();
+    if (categoryFilter !== "all") countsParams.set("category", categoryFilter);
     const [rowsRes, countsRes] = await Promise.all([
       fetch(`/api/alerts?${p}`, { cache: "no-store" }),
-      fetch(`/api/alerts/counts`, { cache: "no-store" }),
+      fetch(`/api/alerts/counts?${countsParams}`, { cache: "no-store" }),
     ]);
     if (rowsRes.ok) {
       const d = (await rowsRes.json()) as { alerts: Alert[] };
@@ -505,10 +510,29 @@ function AlertDrawer({
       href?: string;
     };
     if (a.actionType === "link" && p.href) {
+      // The href comes from a detector return value, which is server-
+      // sourced but still non-trusted (a future code change could let
+      // user-controlled text into the field). Reject anything that
+      // isn't a same-origin or http(s) URL — `javascript:` and `data:`
+      // schemes here would execute attacker-controlled JS in the
+      // operator's session.
+      const isSafeHref =
+        p.href.startsWith("/") ||
+        p.href.startsWith("https://") ||
+        p.href.startsWith("http://");
+      if (!isSafeHref) {
+        setActionMsg(`✗ HREF REFUSÉ : ${p.href.slice(0, 60)}`);
+        return;
+      }
       window.location.href = p.href;
       return;
     }
     if (a.actionType !== "button" || !p.endpoint) return;
+    // Same guard: action endpoints must be local API paths.
+    if (!p.endpoint.startsWith("/")) {
+      setActionMsg(`✗ ENDPOINT INVALIDE : ${p.endpoint.slice(0, 60)}`);
+      return;
+    }
     if (p.confirm && !confirm(p.confirm)) return;
     setActionBusy(true);
     setActionMsg(null);

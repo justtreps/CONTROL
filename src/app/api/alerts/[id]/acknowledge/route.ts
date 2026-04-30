@@ -17,14 +17,28 @@ export async function POST(
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
   try {
-    const a = await prisma.alert.update({
-      where: { id },
+    // Compare-and-swap: only flip if still 'active'. Two operators
+    // double-clicking ACK won't race — the second updateMany matches
+    // 0 rows. Also skips a needless write if the detector already
+    // auto-resolved between click and POST.
+    const claim = await prisma.alert.updateMany({
+      where: { id, status: "active" },
       data: {
         status: "acknowledged",
         acknowledgedAt: new Date(),
-        // acknowledgedBy left null in v1 — we don't have per-user auth.
       },
     });
+    if (claim.count === 0) {
+      const cur = await prisma.alert.findUnique({ where: { id } });
+      if (!cur) {
+        return NextResponse.json({ error: "not_found" }, { status: 404 });
+      }
+      return NextResponse.json(
+        { error: "already_terminal", currentStatus: cur.status },
+        { status: 409 }
+      );
+    }
+    const a = await prisma.alert.findUnique({ where: { id } });
     return NextResponse.json({ ok: true, alert: a });
   } catch (e) {
     return NextResponse.json(

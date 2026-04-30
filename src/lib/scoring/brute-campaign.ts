@@ -448,6 +448,21 @@ export async function runBruteCampaignTick(): Promise<BruteTickResult> {
   };
 
   for (let i = 0; i < batch.length; i += CONCURRENCY_BRUTE) {
+    // Cooperative stop check between waves. The /api/scoring/campaign
+    // STOP endpoint flips campaign.status='paused' or 'stopped'; we
+    // exit the loop cleanly so the operator's STOP click materialises
+    // within ~1 wave (~5 s) instead of dragging through the full
+    // BATCH_SIZE_BRUTE.
+    const fresh = await prisma.scoringCampaign.findUnique({
+      where: { id: campaign.id },
+      select: { status: true },
+    });
+    if (!fresh || fresh.status !== "running") {
+      console.log(
+        `[brute] stop signal received (status=${fresh?.status ?? "deleted"}) — exiting batch loop`
+      );
+      break;
+    }
     const wave = batch.slice(i, i + CONCURRENCY_BRUTE);
     await Promise.all(wave.map((sid, j) => placeOne(sid, i + j)));
     if (FLUSH_EVERY_WAVE) await flush();

@@ -400,6 +400,20 @@ export async function runCampaignTick(): Promise<TickResult> {
   };
 
   for (let i = 0; i < batch.length; i += CONCURRENCY) {
+    // Cooperative stop check — operator pause/stop flips
+    // campaign.status. Same pattern as brute-campaign. Exits within
+    // one wave (~3-5 s) of the click instead of grinding through
+    // the full batch.
+    const fresh = await prisma.scoringCampaign.findUnique({
+      where: { id: campaign.id },
+      select: { status: true },
+    });
+    if (!fresh || fresh.status !== "running") {
+      console.log(
+        `[campaign] stop signal (status=${fresh?.status ?? "deleted"}) — exiting batch loop`
+      );
+      break;
+    }
     const wave = batch.slice(i, i + CONCURRENCY);
     await Promise.all(wave.map((sid, j) => placeOne(sid, i + j)));
     if (FLUSH_EVERY_WAVE) await flush();
