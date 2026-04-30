@@ -12,6 +12,7 @@ import { getSystemToggles } from "@/lib/system/toggles";
 import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
 import { markTesting } from "@/lib/catalogue/lifecycle";
 import { testQuantityFor } from "@/lib/scoring/test-quantity";
+import { flushUsage, withApiKey } from "@/lib/rapidapi/key-manager";
 import type { Service, TestAccount, TestPost } from "@prisma/client";
 
 const ACCOUNT_COOLDOWN_HOURS = 48;
@@ -190,56 +191,82 @@ export async function runTestBot(
     if (i < dueTt.length) due.push(dueTt[i]);
   }
 
-  for (const service of due) {
-    result.attempted++;
-    let placed = false;
+  // Round-robin across active RapidAPI keys so the per-key rate
+  // limiter actually spreads load. Without the withApiKey wrap,
+  // currentKey() returns null inside attemptPlaceOrder's oracle
+  // call, recordApiCall() short-circuits, and the placement burns
+  // RapidAPI quota that's never tracked in RapidApiKey.quotaUsed
+  // — observed for 2 days straight on the legacy code path
+  // (lastUsedAt frozen, quotaUsed flat).
+  const activeKeys = await prisma.rapidApiKey.findMany({
+    where: { provider: "instagram", status: "active" },
+    select: { id: true, token: true, provider: true },
+  });
 
-    for (
-      let attempt = 1;
-      attempt <= MAX_PRIVATE_RETRIES && !placed;
-      attempt++
-    ) {
-      const outcome = await attemptPlaceOrder({ service, simulated });
+  for (let s = 0; s < due.length; s++) {
+    const service = due[s];
+    const key = activeKeys.length
+      ? activeKeys[s % activeKeys.length]
+      : null;
 
-      if (outcome.kind === "placed") {
-        result.placed++;
-        placed = true;
+    const placeAttempt = async () => {
+      result.attempted++;
+      let placed = false;
+      for (
+        let attempt = 1;
+        attempt <= MAX_PRIVATE_RETRIES && !placed;
+        attempt++
+      ) {
+        const outcome = await attemptPlaceOrder({ service, simulated });
+        if (outcome.kind === "placed") {
+          result.placed++;
+          placed = true;
+          break;
+        }
+        if (outcome.kind === "retry_private") {
+          result.privateRetries++;
+          result.errors.push({
+            serviceId: service.id,
+            serviceName: service.name,
+            reason: `retry_private_attempt_${attempt}: ${outcome.reason}`,
+          });
+          continue;
+        }
+        if (outcome.kind === "no_account") result.skipped++;
+        result.errors.push({
+          serviceId: service.id,
+          serviceName: service.name,
+          reason: outcome.reason,
+        });
         break;
       }
-
-      if (outcome.kind === "retry_private") {
-        result.privateRetries++;
-        result.errors.push({
-          serviceId: service.id,
-          serviceName: service.name,
-          reason: `retry_private_attempt_${attempt}: ${outcome.reason}`,
-        });
-        continue; // loop to next attempt, fresh account
+      if (!placed && result.errors.length > 0) {
+        const lastPushed = result.errors[result.errors.length - 1];
+        if (lastPushed.reason.startsWith("retry_private_attempt_")) {
+          result.errors.push({
+            serviceId: service.id,
+            serviceName: service.name,
+            reason: `max_private_retries_reached_${MAX_PRIVATE_RETRIES}`,
+          });
+        }
       }
+    };
 
-      // no_account OR skip — non-retryable, escalate to next service
-      if (outcome.kind === "no_account") result.skipped++;
-      result.errors.push({
-        serviceId: service.id,
-        serviceName: service.name,
-        reason: outcome.reason,
-      });
-      break;
-    }
-
-    if (!placed && result.errors.length > 0) {
-      // If we exhausted all retry attempts on private accounts without
-      // placing, log a summary error so the UI surfaces why.
-      const lastPushed = result.errors[result.errors.length - 1];
-      if (lastPushed.reason.startsWith("retry_private_attempt_")) {
-        result.errors.push({
-          serviceId: service.id,
-          serviceName: service.name,
-          reason: `max_private_retries_reached_${MAX_PRIVATE_RETRIES}`,
-        });
-      }
+    if (key) {
+      await withApiKey(
+        { id: key.id, token: key.token, provider: key.provider },
+        undefined,
+        placeAttempt,
+      );
+    } else {
+      await placeAttempt();
     }
   }
+
+  // Drain the in-memory recordApiCall buffer — see the comment in
+  // poller.ts. Without this, the last batch of usage is dropped
+  // when the Vercel lambda terminates.
+  await flushUsage();
 
   return result;
 }

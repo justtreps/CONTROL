@@ -914,6 +914,76 @@ export const detectPoolCleanupInProgress: Detector = async () => {
   ];
 };
 
+// poller_stalled — fires CRITICAL when zero non-T+0 measurements
+// have been written in the last 30 min while there's a backlog of
+// running orders due for poll. This is the alarm that would have
+// caught the 9-hour stall in production: 0 measurements + 3000+
+// orders due = runPoller is throwing or the cron isn't firing.
+export const detectPollerStalled: Detector = async () => {
+  const last30min = new Date(Date.now() - 30 * 60_000);
+  const recentMeas = await prisma.measurement.count({
+    where: {
+      checkpoint: { not: "T+0" },
+      checkedAt: { gte: last30min },
+    },
+  });
+  if (recentMeas > 0) return [];
+  const dueForPoll = await prisma.testOrder.count({
+    where: { status: "running", nextPollAt: { lte: new Date() } },
+  });
+  if (dueForPoll < 50) return []; // tiny backlog, no signal worth firing
+  return [
+    {
+      code: "poller_stalled",
+      category: "testbot",
+      severity: "critical",
+      title: `Poller bloqué — 0 mesures en 30 min, ${dueForPoll} orders en attente`,
+      description: `Aucune Measurement non-T+0 écrite depuis ${last30min.toISOString().slice(11, 19)} UTC. Backlog : ${dueForPoll} TestOrders avec nextPollAt ≤ NOW.`,
+      explanation: `Le cron testbot-poll fire toutes les heures (vercel.json: 0 * * * *) et devrait écrire au moins quelques Measurement par tick. Zéro pendant 30 min = soit la cron ne fire pas (Vercel issue), soit runPoller throw, soit toutes les requêtes RapidAPI hang/échouent. Vérifier : Vercel function logs pour /api/cron/testbot-poll, healthz des clés RapidAPI, RATE_LIMITER backend (Upstash). Le drain du backlog s'arrête → tests fraîchement placés ne progressent plus.`,
+      impact:
+        "Tous les TestOrders en cours stagnent. Plus de finalize, plus de score update. Daily-retest continue de placer mais le pool de scorables ne grossit plus.",
+      suggestedAction:
+        "Curl manuel /api/cron/testbot-poll avec CRON_SECRET pour voir l'erreur. Si stable : redeploy + check fetch timeouts (instagram.ts AbortSignal.timeout) + vérifier clés RapidAPI actives.",
+      actionType: "link",
+      actionPayload: { href: "/logs?view=testbot" },
+    },
+  ];
+};
+
+// pool_critical — fires CRITICAL when an IG/TT pool's available
+// count drops below the auto-recovery threshold (100). Below this
+// daily-retest hits no_account on most attempts and throughput
+// collapses to 1-2 placements per hour.
+export const detectPoolCritical: Detector = async () => {
+  const out: DetectorResult[] = [];
+  for (const platform of ["instagram", "tiktok"] as const) {
+    const count = await prisma.testAccount.count({
+      where: { platform, status: "available", active: true },
+    });
+    if (count >= 100) continue;
+    out.push({
+      code: `pool_critical:${platform}`,
+      category: "pool",
+      severity: count < 30 ? "critical" : "warning",
+      title: `Pool ${platform.toUpperCase()} critique — ${count} accounts disponibles`,
+      description: `Seulement ${count} comptes ${platform} status='available' actifs. Daily-retest et test-bot vont hit 'no_account' sur la majorité des attempts.`,
+      explanation: `Sous 100 comptes, le placement bot voit son taux de succès s'effondrer (chaque attempt qui pioche un compte invalidé = retry → consommation RapidAPI sans placement). Sous 30 = critique : on perd plus de quota qu'on ne place. Soit le scrape n'a pas tourné depuis longtemps, soit 60%+ du pool a été marqué invalid (seeds pourris, comptes IG bannés en chaîne).`,
+      impact:
+        "Daily-retest cap à 5-10 placements/h au lieu de 200. Services qualifiés ne se rafraîchissent plus, scores stagnent.",
+      suggestedAction:
+        "Lancer un scrape manuel depuis /pool — recommandation 1500 comptes pour rebâtir une marge. Audit des seeds (taux d'invalidation enfant >80% = seed pourri à désactiver).",
+      actionType: "button",
+      actionPayload: {
+        endpoint: "/api/pool/scrape",
+        method: "POST",
+        body: { platform, count: 1500, poolType: "follower" },
+        confirm: `Lancer un scrape de 1500 comptes ${platform.toUpperCase()} ?`,
+      },
+    });
+  }
+  return out;
+};
+
 export const DETECTORS: Detector[] = [
   detectKeyNearCap,
   detectKeyCapped,
@@ -921,6 +991,7 @@ export const DETECTORS: Detector[] = [
   detectAllKeysCapped,
   detectRateLimiterSaturated,
   detectPoolBelowMin,
+  detectPoolCritical,
   detectPoolHighInvalidation,
   detectPoolInsufficientAfterCleanup,
   detectPoolCleanupInProgress,
@@ -940,6 +1011,7 @@ export const DETECTORS: Detector[] = [
   detectDryRunOffWithTestbot,
   detectMassCampaignInProgress,
   detectCampaignLowRate,
+  detectPollerStalled,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──
