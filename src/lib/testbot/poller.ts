@@ -48,15 +48,13 @@ const FINALIZE_AGE_MS = 7 * 24 * 60 * 60_000;     // 7-day sunset
 // ~120 s worst case. Backlog drains slower (100/h vs 500/h) but
 // it actually completes per tick instead of getting killed
 // mid-batch with no progress persisted.
-// 30 polls × 60 s hard cap / 12 concurrency = 150 s worst case,
-// well inside the 250 s tick budget. Most polls land in 2-5 s so
-// real wall-time is closer to 20-30 s steady. The throughput
-// (30/h) × 12 ticks/day = 360/day, enough to drain a 1500-order
-// backlog in ~4 days even if every cron firing produced exactly
-// 30 polls. With most ticks finishing well under cap, drain is
-// faster.
-const MAX_ORDERS_PER_TICK = 30;
-const POLL_CONCURRENCY = 12;
+// Conservative — diagnostic mode while we figure out why
+// production is hitting hard_cap on most polls. 10 polls × 60s
+// hard cap / 4 concurrency = 150s budget — still leaves slack.
+// If most polls succeed: bump back up. If most fail: there's a
+// deeper issue (rate-limit chain, RapidAPI degraded) to fix.
+const MAX_ORDERS_PER_TICK = 10;
+const POLL_CONCURRENCY = 4;
 
 // Tick budget — exit cleanly if we approach Vercel's 300 s
 // maxDuration so the lambda returns a payload (with audit log)
