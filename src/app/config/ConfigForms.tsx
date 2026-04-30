@@ -332,19 +332,6 @@ export function ConfigForms({
               <TriggerButton
                 onClick={() =>
                   runTrigger(
-                    "scraper",
-                    "/api/config/run-scraper",
-                    (d) =>
-                      `${d.measurements} MEASUREMENTS / ${d.ordersScanned} ORDERS`
-                  )
-                }
-                running={trigger?.name === "scraper"}
-                label="LANCER LE SCRAPER"
-                disabled={!rapidSet}
-              />
-              <TriggerButton
-                onClick={() =>
-                  runTrigger(
                     "scoring",
                     "/api/config/run-scoring",
                     (d) =>
