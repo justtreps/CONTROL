@@ -50,6 +50,8 @@ import { testCostUsd } from "./test-quantity";
 const BATCH_SIZE = 50;
 const CONCURRENCY = 5;
 const FLUSH_EVERY_WAVE = true; // write campaign progress after each concurrent wave
+const TICK_BUDGET_MS = 250_000;
+const PER_PLACE_HARD_CAP_MS = 30_000;
 const QUOTA_STOP_RATIO = 0.95;
 const ABORT_BURST_MAX = 50;
 const ABORT_BURST_WINDOW_MS = 60 * 60_000;
@@ -399,11 +401,15 @@ export async function runCampaignTick(): Promise<TickResult> {
     }
   };
 
+  const tickStart = Date.now();
+  let budgetExceeded = false;
   for (let i = 0; i < batch.length; i += CONCURRENCY) {
-    // Cooperative stop check — operator pause/stop flips
-    // campaign.status. Same pattern as brute-campaign. Exits within
-    // one wave (~3-5 s) of the click instead of grinding through
-    // the full batch.
+    if (Date.now() - tickStart > TICK_BUDGET_MS) {
+      budgetExceeded = true;
+      console.log(`[campaign] budget exceeded — exiting batch loop`);
+      break;
+    }
+    // Cooperative stop check.
     const fresh = await prisma.scoringCampaign.findUnique({
       where: { id: campaign.id },
       select: { status: true },
@@ -415,11 +421,26 @@ export async function runCampaignTick(): Promise<TickResult> {
       break;
     }
     const wave = batch.slice(i, i + CONCURRENCY);
-    await Promise.all(wave.map((sid, j) => placeOne(sid, i + j)));
+    // Per-placement hard cap — same pattern as brute-campaign.
+    await Promise.all(
+      wave.map((sid, j) =>
+        Promise.race<void>([
+          placeOne(sid, i + j).catch(() => undefined),
+          new Promise<void>((resolve) =>
+            setTimeout(resolve, PER_PLACE_HARD_CAP_MS),
+          ),
+        ]),
+      ),
+    );
     if (FLUSH_EVERY_WAVE) await flush();
   }
   // Final flush guarantees the last wave lands.
   await flush();
+  console.log(
+    `[campaign] tick done batch=${batch.length} placed=${result.placed} ` +
+      `aborted=${result.aborted} skipped=${result.skipped} ` +
+      `elapsed=${Date.now() - tickStart}ms ${budgetExceeded ? "BUDGET_EXCEEDED" : "ok"}`
+  );
   // Drain RapidAPI usage counters too — withApiKey doesn't auto-
   // flush like withAssignedKey does, so without this the last
   // batch of recordApiCall increments never reaches the DB and

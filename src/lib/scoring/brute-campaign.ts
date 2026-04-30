@@ -32,8 +32,10 @@ import { flushUsage, withApiKey } from "@/lib/rapidapi/key-manager";
 import { testCostUsd, testQuantityFor } from "./test-quantity";
 
 const DEFAULT_MAX_COST_USD = 5;
-const BATCH_SIZE_BRUTE = 200;
-const CONCURRENCY_BRUTE = 50;
+const BATCH_SIZE_BRUTE = 100;
+const CONCURRENCY_BRUTE = 25;
+const TICK_BUDGET_MS = 250_000;
+const PER_PLACE_HARD_CAP_MS = 30_000;
 const FLUSH_EVERY_WAVE = true;
 const BRUTE_MARKER = "brute_mode";
 
@@ -447,12 +449,16 @@ export async function runBruteCampaignTick(): Promise<BruteTickResult> {
     }
   };
 
+  const tickStart = Date.now();
+  let budgetExceeded = false;
   for (let i = 0; i < batch.length; i += CONCURRENCY_BRUTE) {
-    // Cooperative stop check between waves. The /api/scoring/campaign
-    // STOP endpoint flips campaign.status='paused' or 'stopped'; we
-    // exit the loop cleanly so the operator's STOP click materialises
-    // within ~1 wave (~5 s) instead of dragging through the full
-    // BATCH_SIZE_BRUTE.
+    // Tick budget — exit cleanly before Vercel's 300 s maxDuration.
+    if (Date.now() - tickStart > TICK_BUDGET_MS) {
+      budgetExceeded = true;
+      console.log(`[brute] budget exceeded — exiting batch loop`);
+      break;
+    }
+    // Cooperative stop check between waves.
     const fresh = await prisma.scoringCampaign.findUnique({
       where: { id: campaign.id },
       select: { status: true },
@@ -464,10 +470,28 @@ export async function runBruteCampaignTick(): Promise<BruteTickResult> {
       break;
     }
     const wave = batch.slice(i, i + CONCURRENCY_BRUTE);
-    await Promise.all(wave.map((sid, j) => placeOne(sid, i + j)));
+    // Per-placement hard cap via Promise.race — even with the
+    // RapidAPI fetch guard, placeBruteOne stacks DB + BulkMedya +
+    // lifecycle. 30 s ceiling per placement keeps tail latency
+    // bounded.
+    await Promise.all(
+      wave.map((sid, j) => {
+        return Promise.race<void>([
+          placeOne(sid, i + j).catch(() => undefined),
+          new Promise<void>((resolve) =>
+            setTimeout(resolve, PER_PLACE_HARD_CAP_MS),
+          ),
+        ]);
+      }),
+    );
     if (FLUSH_EVERY_WAVE) await flush();
   }
   await flush();
+  console.log(
+    `[brute] tick done batch=${batch.length} placed=${result.placed} ` +
+      `failed=${result.failed} skipped=${result.skipped} ` +
+      `elapsed=${Date.now() - tickStart}ms ${budgetExceeded ? "BUDGET_EXCEEDED" : "ok"}`
+  );
   // RapidAPI usage counters need a manual drain too — withApiKey
   // doesn't auto-flush like withAssignedKey does. Without this,
   // the last batch of recordApiCall increments is lost when the
