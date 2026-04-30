@@ -32,8 +32,8 @@ import { flushUsage, withApiKey } from "@/lib/rapidapi/key-manager";
 import { testCostUsd, testQuantityFor } from "./test-quantity";
 
 const DEFAULT_MAX_COST_USD = 5;
-const BATCH_SIZE_BRUTE = 100;
-const CONCURRENCY_BRUTE = 25;
+const BATCH_SIZE_BRUTE = 30;
+const CONCURRENCY_BRUTE = 4;
 const TICK_BUDGET_MS = 250_000;
 // 30 s was too tight — placeBruteOne does pool pick + BulkMedya
 // + DB writes. 90 s catches genuinely hung attempts while letting
