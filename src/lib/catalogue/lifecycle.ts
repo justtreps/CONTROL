@@ -223,6 +223,11 @@ export async function onTestCompleted(params: {
             "aborted_other",
           ],
         },
+        // Exclude rows aborted purely for hygiene (e.g. brute-race
+        // duplicate-account cleanup). Those didn't reflect a real
+        // provider failure — penalising the service for them would
+        // wrongly kill it via the 3x-retest rule.
+        NOT: { abortReason: "brute_race_duplicate_account" },
       },
       include: { measurements: true },
       orderBy: { completedAt: "desc" },
