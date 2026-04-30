@@ -36,12 +36,56 @@ const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
 const TRANSIENT_RETRY_MS = 60 * 60_000;           // 1 h retry on oracle error
 const FINALIZE_AGE_MS = 7 * 24 * 60 * 60_000;     // 7-day sunset
 
-// One tick's slice. The hourly cron budget is 60 s — at ~1 s per
-// oracle call and concurrency 8, we can comfortably poll 500+
-// orders per tick. In practice far fewer will be due since each
-// order only becomes due every 12 h.
-const MAX_ORDERS_PER_TICK = 500;
+// 500 was too aggressive — production showed every tick hitting
+// the 300s maxDuration with 0 measurements written. Even at 2-3 s
+// per oracle call × 500 / 8 concurrency = 187 s baseline, but
+// p95 timeouts (25 s × 25 % of polls) push expected wall time
+// past 300 s. Cut to 100 / tick → expected wall ~40-60 s steady,
+// ~120 s worst case. Backlog drains slower (100/h vs 500/h) but
+// it actually completes per tick instead of getting killed
+// mid-batch with no progress persisted.
+const MAX_ORDERS_PER_TICK = 100;
 const POLL_CONCURRENCY = 8;
+
+// Tick budget — exit cleanly if we approach Vercel's 300 s
+// maxDuration so the lambda returns a payload (with audit log)
+// instead of dying on a 504.
+const TICK_BUDGET_MS = 250_000;
+
+// Stale-order fallback: TestOrders whose nextPollAt is older than
+// this without progress get auto-finalised as completed_partial.
+// Prevents the queue from growing indefinitely if a backlog can't
+// drain.
+const STALE_NEXT_POLL_MS = 24 * 60 * 60_000;
+
+// Hard per-poll wall-clock cap. Even with AbortSignal.timeout on
+// the fetch, a poll can spend extra time in DB writes / lifecycle
+// hooks / rescore. Promise.race against this caps the total at
+// ~30 s per poll regardless of where it's stuck — a critical
+// safety net against the Vercel runtime ignoring AbortSignal.
+const PER_POLL_HARD_CAP_MS = 30_000;
+
+// Per-key circuit breaker — track consecutive timeouts in process
+// memory. After CIRCUIT_TRIP_COUNT failures, skip the key for
+// CIRCUIT_COOLDOWN_MS so we don't burn the whole tick on a degraded
+// upstream.
+const CIRCUIT_TRIP_COUNT = 5;
+const CIRCUIT_COOLDOWN_MS = 15 * 60_000;
+const keyFailures = new Map<number, { count: number; trippedAt: number }>();
+function noteKeyFailure(keyId: number): void {
+  const cur = keyFailures.get(keyId) ?? { count: 0, trippedAt: 0 };
+  cur.count++;
+  if (cur.count >= CIRCUIT_TRIP_COUNT) cur.trippedAt = Date.now();
+  keyFailures.set(keyId, cur);
+}
+function noteKeySuccess(keyId: number): void {
+  if (keyFailures.has(keyId)) keyFailures.set(keyId, { count: 0, trippedAt: 0 });
+}
+function isKeyTripped(keyId: number): boolean {
+  const cur = keyFailures.get(keyId);
+  if (!cur || cur.trippedAt === 0) return false;
+  return Date.now() - cur.trippedAt < CIRCUIT_COOLDOWN_MS;
+}
 
 export type PollerResult = {
   ordersPolled: number;
@@ -68,7 +112,28 @@ export async function runPoller(): Promise<PollerResult> {
     errors: [],
   };
 
+  const tickStart = Date.now();
   const now = new Date();
+
+  // Fallback for orders that have aged past STALE_NEXT_POLL_MS
+  // without progress — finalise them as completed_partial so the
+  // queue doesn't grow indefinitely when the poller falls behind.
+  // Cheap one-shot updateMany before the regular drain.
+  const staleCutoff = new Date(now.getTime() - STALE_NEXT_POLL_MS);
+  const stale = await prisma.testOrder.updateMany({
+    where: { status: "running", nextPollAt: { lt: staleCutoff } },
+    data: {
+      status: "completed_partial",
+      completedAt: now,
+      nextPollAt: null,
+    },
+  });
+  if (stale.count > 0) {
+    console.log(
+      `[testbot-poll] auto-finalised ${stale.count} stale orders ` +
+        `(nextPollAt > 24 h ago) as completed_partial`
+    );
+  }
 
   // Pull running orders whose next-poll deadline has passed.
   // Orders placed before the refactor have nextPollAt=null — the
@@ -111,36 +176,84 @@ export async function runPoller(): Promise<PollerResult> {
   // the next 8. With a worker pool, a hang ties up exactly one
   // worker for 25 s while the other 7 keep pulling new orders.
   let cursor = 0;
+  let budgetExceeded = false;
+  // Filter out tripped keys at the start; if all keys are tripped,
+  // we still have a fallback path (key === null → uses env var).
+  const usableKeys = activeKeys.filter((k) => !isKeyTripped(k.id));
+  if (usableKeys.length < activeKeys.length) {
+    console.log(
+      `[testbot-poll] circuit breaker: ${activeKeys.length - usableKeys.length}/${activeKeys.length} keys cooling down`
+    );
+  }
   const workers: Promise<void>[] = [];
   for (let w = 0; w < POLL_CONCURRENCY; w++) {
     workers.push(
       (async () => {
         while (true) {
+          // Tick-level budget — every worker checks before pulling
+          // another order. Once one hits the budget, all workers
+          // wind down within their current poll.
+          if (Date.now() - tickStart > TICK_BUDGET_MS) {
+            budgetExceeded = true;
+            return;
+          }
           const idx = cursor++;
           if (idx >= orders.length) return;
           const o = orders[idx];
-          const key = activeKeys.length
-            ? activeKeys[idx % activeKeys.length]
+          const key = usableKeys.length
+            ? usableKeys[idx % usableKeys.length]
             : null;
-          if (!key) {
-            await pollOne(o, result).catch((e) => {
+          const pollStart = Date.now();
+          let pollFailed = false;
+          // Promise.race timeout — prevents a single hang from
+          // taking down the whole worker. The losing branch resolves
+          // and we continue to the next order; the hung branch keeps
+          // running in the background (it'll never fire DB writes
+          // since fetch already aborted, just a leaked microtask).
+          const hardTimeout = new Promise<void>((resolve) =>
+            setTimeout(resolve, PER_POLL_HARD_CAP_MS),
+          );
+          const pollWork = key
+            ? withApiKey(
+                { id: key.id, token: key.token, provider: key.provider },
+                undefined,
+                () => pollOne(o, result),
+              )
+            : pollOne(o, result);
+          await Promise.race([
+            pollWork.catch((e) => {
+              pollFailed = true;
               result.errors.push({
                 orderId: o.id,
                 reason: `pollOne_throw: ${(e as Error).message.slice(0, 80)}`,
               });
-            });
-            continue;
-          }
-          await withApiKey(
-            { id: key.id, token: key.token, provider: key.provider },
-            undefined,
-            () => pollOne(o, result),
-          ).catch((e) => {
+            }),
+            hardTimeout,
+          ]);
+          // Detect hard-cap timeout — if elapsed >= cap and the poll
+          // didn't bump ordersPolled, we lost the worker for this
+          // order and need to mark it as a failure for the breaker.
+          const hitHardCap = Date.now() - pollStart >= PER_POLL_HARD_CAP_MS;
+          if (hitHardCap) {
+            pollFailed = true;
             result.errors.push({
               orderId: o.id,
-              reason: `pollOne_throw: ${(e as Error).message.slice(0, 80)}`,
+              reason: `hard_cap_${PER_POLL_HARD_CAP_MS}ms`,
             });
-          });
+          }
+          // Per-poll timing observation — the audit log surfaces
+          // the slow-tail. >10 s = a hang the AbortSignal didn't catch.
+          const elapsed = Date.now() - pollStart;
+          if (elapsed > 10_000) {
+            console.warn(
+              `[testbot-poll] slow poll TO#${o.id} ${elapsed}ms key#${key?.id ?? "env"}`
+            );
+          }
+          // Circuit breaker bookkeeping per ALS-key.
+          if (key) {
+            if (pollFailed || elapsed > 20_000) noteKeyFailure(key.id);
+            else noteKeySuccess(key.id);
+          }
         }
       })()
     );
@@ -159,11 +272,13 @@ export async function runPoller(): Promise<PollerResult> {
   // so when the poller stopped advancing orders (eg. all polls
   // hitting oracle errors and rescheduling +1h), there was no
   // signal in the Vercel function logs explaining why.
+  const elapsedMs = Date.now() - tickStart;
   console.log(
     `[testbot-poll] inspected=${orders.length} polled=${result.ordersPolled} ` +
       `finalised=${result.ordersFinalised} ` +
       `rescheduledOnError=${result.ordersRescheduledOnError} ` +
-      `errors=${result.errors.length}`
+      `errors=${result.errors.length} elapsed=${elapsedMs}ms ` +
+      `${budgetExceeded ? "BUDGET_EXCEEDED" : "ok"}`
   );
 
   return result;
