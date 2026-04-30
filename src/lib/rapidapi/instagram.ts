@@ -8,12 +8,16 @@ import {
 
 const HOST = "instagram-scraper-20251.p.rapidapi.com";
 
-// How long to back off on an upstream 429 before retrying. Doubles
-// each attempt, caps at 3 retries total. The rate limiter should
-// make this extremely rare — this is a safety net for burst edge
-// cases or plan-level quota drift.
+// 429 retry budget. Previous: 3 retries with 2/4/8 s backoffs,
+// each fetch up to 25 s = ~114 s worst case stacked into a single
+// pollOne. Production observed every poll hitting the 120 s hard
+// cap because both keys are intermittently rate-limited and the
+// retry chain consumed the full budget. Cut to 1 retry — if
+// RapidAPI is consistently 429ing, more retries won't help, and
+// the outer pollOne already reschedules the order +1 h via
+// rescheduleOnError when the call throws.
 const RATE_LIMIT_BACKOFF_MS = 2000;
-const MAX_429_RETRIES = 3;
+const MAX_429_RETRIES = 1;
 
 // Per-request fetch timeout. Without this, a hung RapidAPI socket
 // blocks the caller indefinitely — and since the poller's wave
