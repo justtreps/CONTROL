@@ -22,15 +22,16 @@ import type { Service } from "@prisma/client";
 
 // Per-tick caps. Must fit inside maxDuration=300s. Observed
 // per-test wall-time for attemptPlaceOrder: ~3-5s normal, up to
-// 15s on retry chains. With ~2000 QUALIFIED+MONITORED services
-// on an 8 h cutoff stride, ~250 services become eligible per hour
-// (2000 / 8). Cap of 200 was leaving 50 services/h behind and
-// degrading the 3 x/day target. Bumped to 300 so we have headroom
-// for transient surges (e.g. cron tick after pool refill releases
-// previously-blocked retests). Concurrency 16 keeps the wall time
-// inside ~80 s steady, ~180 s worst-case.
-const RETESTS_PER_HOUR = 300;
-const PER_TEST_WALL_MS_BUDGET = 10_000;
+// 15s on retry chains, 30s on fetch hard-cap. With pool
+// degradation pushing more attempts onto retry chains, the
+// previous cap of 300 + concurrency 16 was timing out at 300s.
+// Cut the cap and add a tick budget so the function returns a
+// real payload instead of dying on a 504. We deliberately don't
+// chase the 3x/day target on a single tick — daily-retest fires
+// hourly so the system catches up across multiple ticks.
+const RETESTS_PER_HOUR = 100;
+const TICK_BUDGET_MS = 250_000;
+const PER_TEST_WALL_MS_BUDGET = 30_000;
 const CONCURRENCY = 16;
 
 export const maxDuration = 300;
@@ -102,62 +103,75 @@ export async function POST(req: Request) {
     placed: 0,
     skipped: 0,
     aborted: 0,
+    budgetExceeded: false,
   };
   const simulated = !toggles.testBotEnabled || toggles.dryRunMode;
+  const tickStart = Date.now();
 
-  for (let i = 0; i < queue.length; i += CONCURRENCY) {
-    const wave = queue.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      wave.map(async (svc, j) => {
-        const key = activeKeys.length
-          ? activeKeys[(i + j) % activeKeys.length]
-          : null;
-        const run = async () => {
-          // The original "claim lastTestedAt before attemptPlaceOrder"
-          // pattern was a self-DOS: failures (no_account, oracle_error,
-          // ghost) bumped the timestamp anyway, so a service that
-          // failed once stayed unreachable for 8 h instead of 1 h
-          // (the eligible-window stride). Cross-tick dedup is now
-          // handled implicitly by pickAndAssignAccount's CAS — two
-          // parallel crons compete for accounts, and at most one
-          // placement per service succeeds because attemptPlaceOrder
-          // stamps lastTestedAt ON SUCCESS (testbot.ts:511).
-          const started = Date.now();
-          const guard = setTimeout(() => {
-            // no-op — attemptPlaceOrder should respect its own
-            // internal timeouts; this guard exists to silence the
-            // lint's "variable assigned but never read" on a bare
-            // void call.
-          }, PER_TEST_WALL_MS_BUDGET);
-          try {
-            const outcome = await attemptPlaceOrder({ service: svc, simulated });
-            if (outcome.kind === "placed") result.placed++;
-            else if (outcome.kind === "no_account") result.skipped++;
-            else result.aborted++;
-          } catch {
-            result.aborted++;
-          } finally {
-            clearTimeout(guard);
-            void started;
+  // Worker pool — same pattern as testbot-poll. Each worker pulls
+  // from a shared cursor, hard-caps each attempt at 30s via
+  // Promise.race so a slow upstream can't tie up a whole wave.
+  let cursor = 0;
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < CONCURRENCY; w++) {
+    workers.push(
+      (async () => {
+        while (true) {
+          if (Date.now() - tickStart > TICK_BUDGET_MS) {
+            result.budgetExceeded = true;
+            return;
           }
-        };
-        if (key) {
-          await withApiKey(
-            { id: key.id, token: key.token, provider: key.provider },
-            undefined,
-            run
-          );
-        } else {
-          await run();
+          const idx = cursor++;
+          if (idx >= queue.length) return;
+          const svc = queue[idx];
+          const key = activeKeys.length
+            ? activeKeys[idx % activeKeys.length]
+            : null;
+          const run = async () => {
+            try {
+              const outcome = await attemptPlaceOrder({ service: svc, simulated });
+              if (outcome.kind === "placed") result.placed++;
+              else if (outcome.kind === "no_account") result.skipped++;
+              else result.aborted++;
+            } catch {
+              result.aborted++;
+            }
+          };
+          const work = key
+            ? withApiKey(
+                { id: key.id, token: key.token, provider: key.provider },
+                undefined,
+                run,
+              )
+            : run();
+          // Hard cap per attempt — even with the fetch Promise.race
+          // wrapper, full attemptPlaceOrder can stack DB writes,
+          // pool picks, multi-call lifecycle. Cap the whole attempt.
+          await Promise.race([
+            work.catch(() => {
+              result.aborted++;
+            }),
+            new Promise<void>((resolve) =>
+              setTimeout(resolve, PER_TEST_WALL_MS_BUDGET),
+            ),
+          ]);
         }
-      })
+      })()
     );
   }
+  await Promise.all(workers);
 
   // Drain in-memory usage counter before Vercel kills the lambda.
   // Otherwise the last batch of recordApiCall() increments — up to
   // RETESTS_PER_HOUR × oracle calls — silently disappears.
   await flushUsage();
+
+  const elapsed = Date.now() - tickStart;
+  console.log(
+    `[daily-retest] queue=${queue.length} placed=${result.placed} ` +
+      `aborted=${result.aborted} skipped=${result.skipped} ` +
+      `elapsed=${elapsed}ms ${result.budgetExceeded ? "BUDGET_EXCEEDED" : "ok"}`
+  );
 
   return NextResponse.json(result);
 }
