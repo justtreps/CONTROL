@@ -161,60 +161,67 @@ async function placeBruteOne(serviceId: number): Promise<BruteOutcome> {
     let postId: number | null = null;
     let bulkLink = "";
 
+    // Compare-and-swap loop — the previous version used
+    // findFirst-then-update where {id} only, which let 50 concurrent
+    // brute calls all see the same first-available row and all
+    // "succeed" the update because the where-clause didn't pin
+    // status. Result: same testAccount on N TestOrders simultaneously
+    // (observed: account#94 stamped on TO#5618-5624). The CAS pins
+    // status='available' so only one caller wins; the rest re-roll.
+    const MAX_BRUTE_PICK_ATTEMPTS = 8;
     if (isEngagement) {
-      const post = await prisma.testPost.findFirst({
-        where: {
-          status: "available",
-          platform: service.platform,
-        },
-        include: { testAccount: true },
-        orderBy: { firstSeenAt: "asc" },
-      });
-      if (!post) return { kind: "no_pool" };
-      // Atomically flip the post to assigned — we don't have a
-      // testOrderId yet so we use a placeholder; the create
-      // immediately below carries the real id and we patch the
-      // post with assignedTestOrderId after the order lands.
-      const flipped = await prisma.testPost
-        .update({
-          where: { id: post.id },
+      let claimed = false;
+      for (let attempt = 0; attempt < MAX_BRUTE_PICK_ATTEMPTS && !claimed; attempt++) {
+        const post = await prisma.testPost.findFirst({
+          where: { status: "available", platform: service.platform },
+          include: { testAccount: true },
+          orderBy: { firstSeenAt: "asc" },
+        });
+        if (!post) return { kind: "no_pool" };
+        const claim = await prisma.testPost.updateMany({
+          where: { id: post.id, status: "available" },
           data: { status: "assigned", assignedAt: new Date() },
-        })
-        .catch(() => null);
-      if (!flipped) return { kind: "no_pool" };
-      username = post.testAccount.username;
-      baseFollower = post.testAccount.lastFollowerCount ?? 0;
-      testAccountId = post.testAccountId;
-      postId = post.id;
-      bulkLink = post.mediaUrl;
+        });
+        if (claim.count === 0) continue;
+        username = post.testAccount.username;
+        baseFollower = post.testAccount.lastFollowerCount ?? 0;
+        testAccountId = post.testAccountId;
+        postId = post.id;
+        bulkLink = post.mediaUrl;
+        claimed = true;
+      }
+      if (!claimed) return { kind: "no_pool" };
     } else {
-      const account = await prisma.testAccount.findFirst({
-        where: {
-          status: "available",
-          platform: service.platform,
-          accountType: "follower_test",
-        },
-        orderBy: { firstSeenAt: "asc" },
-      });
-      if (!account) return { kind: "no_pool" };
-      const flipped = await prisma.testAccount
-        .update({
-          where: { id: account.id },
+      let claimed = false;
+      for (let attempt = 0; attempt < MAX_BRUTE_PICK_ATTEMPTS && !claimed; attempt++) {
+        const account = await prisma.testAccount.findFirst({
+          where: {
+            status: "available",
+            platform: service.platform,
+            accountType: "follower_test",
+          },
+          orderBy: { firstSeenAt: "asc" },
+        });
+        if (!account) return { kind: "no_pool" };
+        const claim = await prisma.testAccount.updateMany({
+          where: { id: account.id, status: "available" },
           data: {
             status: "assigned",
             assignedAt: new Date(),
             active: false,
           },
-        })
-        .catch(() => null);
-      if (!flipped) return { kind: "no_pool" };
-      username = account.username;
-      baseFollower = account.lastFollowerCount ?? 0;
-      testAccountId = account.id;
-      bulkLink =
-        service.platform === "instagram"
-          ? `https://www.instagram.com/${username}/`
-          : `https://www.tiktok.com/@${username}`;
+        });
+        if (claim.count === 0) continue;
+        username = account.username;
+        baseFollower = account.lastFollowerCount ?? 0;
+        testAccountId = account.id;
+        bulkLink =
+          service.platform === "instagram"
+            ? `https://www.instagram.com/${username}/`
+            : `https://www.tiktok.com/@${username}`;
+        claimed = true;
+      }
+      if (!claimed) return { kind: "no_pool" };
     }
 
     const toggles = await getSystemToggles();
