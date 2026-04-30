@@ -82,17 +82,37 @@ async function call(path: string, attempt = 0): Promise<unknown> {
   // total aggregate throughput.
   await waitForIgSlot(ctx?.id ?? -1);
 
-  const res = await fetch(`https://${HOST}${path}`, {
-    headers: {
-      "x-rapidapi-key": token,
-      "x-rapidapi-host": HOST,
-    },
-    cache: "no-store",
-    // AbortSignal.timeout throws AbortError after FETCH_TIMEOUT_MS;
-    // the outer pollOne already catches throws and reschedules
-    // +1h via rescheduleOnError, so the order isn't lost.
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  // Belt-and-suspender timeout: AbortSignal.timeout is the primary
+  // cap, but we wrap the whole fetch in Promise.race against a
+  // setTimeout that hard-rejects after FETCH_TIMEOUT_MS+5s. If a
+  // Vercel runtime quirk swallows AbortSignal (observed: pre-fix
+  // tickbox showed lambdas hang past 300s despite timeout config),
+  // this race still bounds the call — the outer pollOne / scrape
+  // catches the throw and moves on.
+  const fetchOrTimeout = (): Promise<Response> => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+    return Promise.race<Response>([
+      fetch(`https://${HOST}${path}`, {
+        headers: {
+          "x-rapidapi-key": token,
+          "x-rapidapi-host": HOST,
+        },
+        cache: "no-store",
+        signal: ac.signal,
+      }).finally(() => clearTimeout(timer)),
+      new Promise<Response>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(`Instagram RapidAPI hard timeout @${FETCH_TIMEOUT_MS + 5000}ms`),
+            ),
+          FETCH_TIMEOUT_MS + 5000,
+        ),
+      ),
+    ]);
+  };
+  const res = await fetchOrTimeout();
 
   if (res.status === 429) {
     const body = await res.text().catch(() => "");

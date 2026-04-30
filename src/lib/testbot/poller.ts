@@ -30,6 +30,10 @@ import {
   onTestCompleted,
 } from "@/lib/catalogue/lifecycle";
 import { withApiKey, flushUsage } from "@/lib/rapidapi/key-manager";
+import {
+  isKeyTripped,
+  noteKeyOutcome,
+} from "@/lib/rapidapi/circuit-breaker";
 
 // ── Tuning knobs ────────────────────────────────────────────────
 const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
@@ -65,27 +69,9 @@ const STALE_NEXT_POLL_MS = 24 * 60 * 60_000;
 // safety net against the Vercel runtime ignoring AbortSignal.
 const PER_POLL_HARD_CAP_MS = 30_000;
 
-// Per-key circuit breaker — track consecutive timeouts in process
-// memory. After CIRCUIT_TRIP_COUNT failures, skip the key for
-// CIRCUIT_COOLDOWN_MS so we don't burn the whole tick on a degraded
-// upstream.
-const CIRCUIT_TRIP_COUNT = 5;
-const CIRCUIT_COOLDOWN_MS = 15 * 60_000;
-const keyFailures = new Map<number, { count: number; trippedAt: number }>();
-function noteKeyFailure(keyId: number): void {
-  const cur = keyFailures.get(keyId) ?? { count: 0, trippedAt: 0 };
-  cur.count++;
-  if (cur.count >= CIRCUIT_TRIP_COUNT) cur.trippedAt = Date.now();
-  keyFailures.set(keyId, cur);
-}
-function noteKeySuccess(keyId: number): void {
-  if (keyFailures.has(keyId)) keyFailures.set(keyId, { count: 0, trippedAt: 0 });
-}
-function isKeyTripped(keyId: number): boolean {
-  const cur = keyFailures.get(keyId);
-  if (!cur || cur.trippedAt === 0) return false;
-  return Date.now() - cur.trippedAt < CIRCUIT_COOLDOWN_MS;
-}
+// Per-key circuit breaker is in lib/rapidapi/circuit-breaker.ts —
+// shared with scraper/sweep/campaign so a degraded key skipped by
+// one job is automatically avoided by the others.
 
 export type PollerResult = {
   ordersPolled: number;
@@ -250,10 +236,7 @@ export async function runPoller(): Promise<PollerResult> {
             );
           }
           // Circuit breaker bookkeeping per ALS-key.
-          if (key) {
-            if (pollFailed || elapsed > 20_000) noteKeyFailure(key.id);
-            else noteKeySuccess(key.id);
-          }
+          if (key) noteKeyOutcome(key.id, elapsed, pollFailed);
         }
       })()
     );

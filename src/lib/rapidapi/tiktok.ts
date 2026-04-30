@@ -27,14 +27,30 @@ async function call(path: string): Promise<unknown> {
   const key = await getRapidApiKey();
   if (!key) throw new Error("RapidAPI key not configured");
 
-  const res = await fetch(`https://${HOST}${path}`, {
-    headers: {
-      "x-rapidapi-key": key,
-      "x-rapidapi-host": HOST,
-    },
-    cache: "no-store",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  // Belt-and-suspender timeout — see instagram.ts call() for the
+  // rationale. AbortController + Promise.race outlives any runtime
+  // edge case that swallows AbortSignal.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  const res = await Promise.race<Response>([
+    fetch(`https://${HOST}${path}`, {
+      headers: {
+        "x-rapidapi-key": key,
+        "x-rapidapi-host": HOST,
+      },
+      cache: "no-store",
+      signal: ac.signal,
+    }).finally(() => clearTimeout(timer)),
+    new Promise<Response>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(`TikTok RapidAPI hard timeout @${FETCH_TIMEOUT_MS + 5000}ms`),
+          ),
+        FETCH_TIMEOUT_MS + 5000,
+      ),
+    ),
+  ]);
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
