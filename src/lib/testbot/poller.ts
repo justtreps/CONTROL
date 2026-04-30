@@ -48,8 +48,15 @@ const FINALIZE_AGE_MS = 7 * 24 * 60 * 60_000;     // 7-day sunset
 // ~120 s worst case. Backlog drains slower (100/h vs 500/h) but
 // it actually completes per tick instead of getting killed
 // mid-batch with no progress persisted.
-const MAX_ORDERS_PER_TICK = 100;
-const POLL_CONCURRENCY = 8;
+// 30 polls × 60 s hard cap / 12 concurrency = 150 s worst case,
+// well inside the 250 s tick budget. Most polls land in 2-5 s so
+// real wall-time is closer to 20-30 s steady. The throughput
+// (30/h) × 12 ticks/day = 360/day, enough to drain a 1500-order
+// backlog in ~4 days even if every cron firing produced exactly
+// 30 polls. With most ticks finishing well under cap, drain is
+// faster.
+const MAX_ORDERS_PER_TICK = 30;
+const POLL_CONCURRENCY = 12;
 
 // Tick budget — exit cleanly if we approach Vercel's 300 s
 // maxDuration so the lambda returns a payload (with audit log)
@@ -62,12 +69,13 @@ const TICK_BUDGET_MS = 250_000;
 // drain.
 const STALE_NEXT_POLL_MS = 24 * 60 * 60_000;
 
-// Hard per-poll wall-clock cap. Even with AbortSignal.timeout on
-// the fetch, a poll can spend extra time in DB writes / lifecycle
-// hooks / rescore. Promise.race against this caps the total at
-// ~30 s per poll regardless of where it's stuck — a critical
-// safety net against the Vercel runtime ignoring AbortSignal.
-const PER_POLL_HARD_CAP_MS = 30_000;
+// Hard per-poll wall-clock cap. fetchOracleFor alone is bounded
+// at ~30 s (25 s timeout + 5 s grace), and pollOne stacks DB
+// writes, lifecycle hooks, and rescore on top. 30 s was cutting
+// off legit polls (observed: 51/51 errors = hard_cap on a
+// production tick). 60 s catches the genuinely hung path while
+// letting the p99 normal poll complete.
+const PER_POLL_HARD_CAP_MS = 60_000;
 
 // Per-key circuit breaker is in lib/rapidapi/circuit-breaker.ts —
 // shared with scraper/sweep/campaign so a degraded key skipped by
