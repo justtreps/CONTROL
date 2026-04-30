@@ -31,7 +31,13 @@ import type { Service } from "@prisma/client";
 // hourly so the system catches up across multiple ticks.
 const RETESTS_PER_HOUR = 100;
 const TICK_BUDGET_MS = 250_000;
-const PER_TEST_WALL_MS_BUDGET = 30_000;
+// Each attemptPlaceOrder does 2 RapidAPI calls (oracle baseline +
+// follower sample) + BulkMedya placement + several DB writes. With
+// fetch hard-cap at 30 s each and tail-latency stacking, 90 s
+// gives enough room for the legit p99 case while still catching a
+// genuinely hung attempt. 30 s was cutting off most real
+// placements (observed 92 / 100 timing out, 0 placed).
+const PER_TEST_WALL_MS_BUDGET = 90_000;
 const CONCURRENCY = 16;
 
 export const maxDuration = 300;

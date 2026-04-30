@@ -35,7 +35,10 @@ const DEFAULT_MAX_COST_USD = 5;
 const BATCH_SIZE_BRUTE = 100;
 const CONCURRENCY_BRUTE = 25;
 const TICK_BUDGET_MS = 250_000;
-const PER_PLACE_HARD_CAP_MS = 30_000;
+// 30 s was too tight — placeBruteOne does pool pick + BulkMedya
+// + DB writes. 90 s catches genuinely hung attempts while letting
+// the legit p99 path complete.
+const PER_PLACE_HARD_CAP_MS = 90_000;
 const FLUSH_EVERY_WAVE = true;
 const BRUTE_MARKER = "brute_mode";
 
