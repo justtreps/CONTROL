@@ -206,49 +206,31 @@ async function inMemoryAcquireSlot(
   }
 }
 
-// ── Per-key FIFO chain ──────────────────────────────────────────────
-// Previously one module-level `chain` serialised all callers across
-// all keys. With per-key chains, two workers hitting DIFFERENT keys
-// go through Upstash independently — no artificial serialisation
-// across the multi-key pool. Same process, same key → still serial
-// via the key's chain.
-
-const chains = new Map<number, Promise<void>>();
-
 // ── Public API ──────────────────────────────────────────────────────
+//
+// The previous version chained callers per key via a Map<keyId,
+// Promise> — so 4 concurrent workers on the same key serialised at
+// 30 s timeout each = 120 s before the 4th finished even attempting
+// the acquire. That was overkill: Upstash's Lua eval is already
+// atomic, so concurrent callers can race for slots without local
+// coordination. Removing the chain lets all workers attempt the
+// acquire in parallel and the slowest one resolves in ≤ slot wait.
 
-// Hard ceiling on how long a caller can wait for a rate-limit
-// slot. Without this, a saturated key pins every worker behind a
-// chained acquireWithBackoff loop indefinitely. With this, the
-// caller throws after MAX_SLOT_WAIT_MS and the outer pollOne
-// reschedules the order — better than burning the full Vercel
-// 300 s lambda on a queue.
 const MAX_SLOT_WAIT_MS = 30_000;
 
 export async function waitForIgSlot(keyId: number): Promise<void> {
-  const prev = chains.get(keyId) ?? Promise.resolve();
-  let release: () => void = () => {};
-  const next = new Promise<void>((r) => {
-    release = r;
-  });
-  chains.set(keyId, next);
-  try {
-    await prev;
-    await Promise.race([
-      acquireWithBackoff(keyId),
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(`rate_limit_slot_wait_timeout_${MAX_SLOT_WAIT_MS}ms`),
-            ),
-          MAX_SLOT_WAIT_MS,
-        ),
+  await Promise.race([
+    acquireWithBackoff(keyId),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(`rate_limit_slot_wait_timeout_${MAX_SLOT_WAIT_MS}ms`),
+          ),
+        MAX_SLOT_WAIT_MS,
       ),
-    ]);
-  } finally {
-    release();
-  }
+    ),
+  ]);
 }
 
 async function acquireWithBackoff(keyId: number): Promise<void> {
