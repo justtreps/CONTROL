@@ -102,22 +102,50 @@ export async function runPoller(): Promise<PollerResult> {
     select: { id: true, token: true, provider: true },
   });
 
-  for (let i = 0; i < orders.length; i += POLL_CONCURRENCY) {
-    const wave = orders.slice(i, i + POLL_CONCURRENCY);
-    await Promise.all(
-      wave.map((o, j) => {
-        const key = activeKeys.length
-          ? activeKeys[(i + j) % activeKeys.length]
-          : null;
-        if (!key) return pollOne(o, result);
-        return withApiKey(
-          { id: key.id, token: key.token, provider: key.provider },
-          undefined,
-          () => pollOne(o, result)
-        );
-      })
+  // Worker-pool model — the previous version used Promise.all per
+  // wave, which made every wave block on its slowest pollOne. With
+  // RapidAPI's tail-latency profile (most polls 2-3s, occasional
+  // 25 s hangs that hit the new fetch timeout), wave-based blocking
+  // wasted the budget: 8 fast polls finishing in 3 s sat idle for
+  // 22 more seconds waiting on the slow one, instead of starting
+  // the next 8. With a worker pool, a hang ties up exactly one
+  // worker for 25 s while the other 7 keep pulling new orders.
+  let cursor = 0;
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < POLL_CONCURRENCY; w++) {
+    workers.push(
+      (async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= orders.length) return;
+          const o = orders[idx];
+          const key = activeKeys.length
+            ? activeKeys[idx % activeKeys.length]
+            : null;
+          if (!key) {
+            await pollOne(o, result).catch((e) => {
+              result.errors.push({
+                orderId: o.id,
+                reason: `pollOne_throw: ${(e as Error).message.slice(0, 80)}`,
+              });
+            });
+            continue;
+          }
+          await withApiKey(
+            { id: key.id, token: key.token, provider: key.provider },
+            undefined,
+            () => pollOne(o, result),
+          ).catch((e) => {
+            result.errors.push({
+              orderId: o.id,
+              reason: `pollOne_throw: ${(e as Error).message.slice(0, 80)}`,
+            });
+          });
+        }
+      })()
     );
   }
+  await Promise.all(workers);
 
   // recordApiCall() under withApiKey writes into an in-memory
   // pending Map flushed on a 5 s setInterval. Vercel kills the

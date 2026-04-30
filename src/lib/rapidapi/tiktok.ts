@@ -1,6 +1,11 @@
 import { getRapidApiKey } from "@/lib/config";
 
 const HOST = "tiktok-scraper7.p.rapidapi.com";
+// Per-request fetch timeout — same rationale as instagram.ts. A
+// hung RapidAPI socket blocks the caller forever; since multiple
+// callers (poller waves, daily-retest) await Promise.all on these,
+// one hang stalls the whole batch.
+const FETCH_TIMEOUT_MS = 25_000;
 
 export type TikTokFollower = {
   id: string;
@@ -28,6 +33,7 @@ async function call(path: string): Promise<unknown> {
       "x-rapidapi-host": HOST,
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {

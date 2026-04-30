@@ -15,6 +15,18 @@ const HOST = "instagram-scraper-20251.p.rapidapi.com";
 const RATE_LIMIT_BACKOFF_MS = 2000;
 const MAX_429_RETRIES = 3;
 
+// Per-request fetch timeout. Without this, a hung RapidAPI socket
+// blocks the caller indefinitely — and since the poller's wave
+// uses Promise.all, a single hang stalls the entire 8-concurrent
+// batch (and by extension the whole runPoller loop) until Vercel
+// kills the lambda at maxDuration=300s. 25s gives the upstream
+// plenty of room for slow responses while keeping the poll budget
+// (500 orders ÷ 8 concurrency × 25s = 1562s worst case) inside
+// the 300s envelope through fail-fast on hang. Operators saw the
+// poller produce 0 measurements for 9+ hours straight — this was
+// the single biggest contributor.
+const FETCH_TIMEOUT_MS = 25_000;
+
 // RapidAPI surfaces two very different failure modes under status
 // 429. Distinguishing them is critical: monthly cap needs a key
 // failover, per-second rate limit just needs backoff.
@@ -76,6 +88,10 @@ async function call(path: string, attempt = 0): Promise<unknown> {
       "x-rapidapi-host": HOST,
     },
     cache: "no-store",
+    // AbortSignal.timeout throws AbortError after FETCH_TIMEOUT_MS;
+    // the outer pollOne already catches throws and reschedules
+    // +1h via rescheduleOnError, so the order isn't lost.
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (res.status === 429) {
