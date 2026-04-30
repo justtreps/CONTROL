@@ -373,19 +373,15 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
     },
   });
 
-  // Score lives off the latest test that's been polled at least
-  // once. Every poll changes the latest test's state, so every
-  // poll potentially changes the service score. Rescore inline,
-  // dedupe-protected so we don't bloat ServiceScore.
-  try {
-    const { rescoreSingleService } = await import("@/lib/scoring");
-    await rescoreSingleService(order.serviceId);
-  } catch (e) {
-    result.errors.push({
-      orderId: order.id,
-      reason: `rescore_poll: ${(e as Error).message.slice(0, 80)}`,
-    });
-  }
+  // Inline rescoreSingleService was the dominant cost in production
+  // pollOne — every call does a full cohort scan
+  // (prisma.service.findMany over all active polled services
+  // ≈ 3000 rows) to compute the cost percentile. With 30 polls per
+  // tick that's 30 × ~5 s = 150 s of rescore alone, pushing pollOne
+  // past the 60 s hard cap and producing 0 measurements. The
+  // every-10-min scoring cron rescores everyone anyway, so dropping
+  // the inline call costs at most a 10 min lag on the dashboard
+  // while restoring the poller's throughput. Worth the trade.
 }
 
 const STAGNATION_MIN_AGE_MS = 24 * 60 * 60_000;
@@ -452,18 +448,11 @@ async function finaliseOrder(
       reason: `lifecycle_finalize: ${(e as Error).message.slice(0, 80)}`,
     });
   });
-  // Recompute the service's score IMMEDIATELY so the dashboard
-  // reflects the new test outcome without waiting for the 10-min
-  // scoring cron tick. Best-effort.
-  try {
-    const { rescoreSingleService } = await import("@/lib/scoring");
-    await rescoreSingleService(order.serviceId);
-  } catch (e) {
-    result.errors.push({
-      orderId: order.id,
-      reason: `rescore: ${(e as Error).message.slice(0, 80)}`,
-    });
-  }
+  // Inline rescore dropped — see the rationale on the polling
+  // path. Same trade-off here: the every-10-min scoring cron
+  // catches up; finaliseOrder does ≤30/h of these so the
+  // bookkeeping cost wasn't huge, but consistency with the polling
+  // path matters more than the small dashboard-lag improvement.
   result.ordersFinalised++;
 }
 
