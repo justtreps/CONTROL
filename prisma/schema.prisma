@@ -163,6 +163,13 @@ model ProductServiceCandidate {
   @@index([productId, rank])
   @@index([productId, isEligible, forceExcluded])
   @@index([serviceId])
+  // daily-retest cron filter (~2000 services × 24 ticks/day) —
+  // without this, the scan walks every PSC row to check lifecycle.
+  @@index([lifecycleStatus, isEligible, forceExcluded])
+  // Router orderBy currentScore DESC + dashboard top-N queries —
+  // currentScore is updated every poll and read every 10 s by
+  // the dashboard cache, hot enough to justify its own index.
+  @@index([currentScore])
 }
 
 model TestAccount {
