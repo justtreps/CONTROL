@@ -29,16 +29,18 @@ import type { Service } from "@prisma/client";
 // real payload instead of dying on a 504. We deliberately don't
 // chase the 3x/day target on a single tick — daily-retest fires
 // hourly so the system catches up across multiple ticks.
-const RETESTS_PER_HOUR = 100;
+const RETESTS_PER_HOUR = 60;
 const TICK_BUDGET_MS = 250_000;
-// Each attemptPlaceOrder does 2 RapidAPI calls (oracle baseline +
-// follower sample) + BulkMedya placement + several DB writes. With
-// fetch hard-cap at 30 s each and tail-latency stacking, 90 s
-// gives enough room for the legit p99 case while still catching a
-// genuinely hung attempt. 30 s was cutting off most real
-// placements (observed 92 / 100 timing out, 0 placed).
+// 90 s ceiling per attempt — fetch oracle (≤30 s) + sample
+// (≤30 s) + BulkMedya + DB ops.
 const PER_TEST_WALL_MS_BUDGET = 90_000;
-const CONCURRENCY = 16;
+// Concurrency 4 keeps RapidAPI throughput ~0.8 req/s aggregate,
+// well under the 170/min limit (2 keys × 85). Previous cap of 16
+// was firing 60+ requests/s in burst, saturating the per-key
+// sliding window for 60 s and blocking subsequent crons (testbot-
+// poll observed 8/8 = rate_limit_slot_wait_timeout after each
+// daily-retest tick).
+const CONCURRENCY = 4;
 
 export const maxDuration = 300;
 
