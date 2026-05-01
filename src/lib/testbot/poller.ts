@@ -62,13 +62,17 @@ function computeTickSizing(intervalMin: number): {
   maxOrders: number;
   concurrency: number;
 } {
-  // Fast cadence (≤30 min) → bigger batch + 8 workers to keep up
-  // with the firing cron rate. Slower cadence (>60 min) → smaller
-  // batch + 4 workers since there's no urgency and we want to
-  // leave RapidAPI headroom for other crons.
-  if (intervalMin <= 30) return { maxOrders: 60, concurrency: 8 };
-  if (intervalMin <= 60) return { maxOrders: 30, concurrency: 6 };
-  return { maxOrders: 12, concurrency: 4 };
+  // 10-min cadence with N running orders means every order needs
+  // to be polled in each 10-min window. With ~1700 running orders
+  // and a /10 cron, that's 1700 polls per 10-min tick. The
+  // RapidAPI aggregate cap (2 × 100 = 200 RPM = 2000/10min) sets
+  // the actual ceiling; concurrency 16 + cap 500 lets us absorb
+  // a one-time backlog spike (drain in 4 ticks) and steady-state
+  // sees most ticks return early because the cap dwarfs the
+  // typical due-count.
+  if (intervalMin <= 30) return { maxOrders: 500, concurrency: 16 };
+  if (intervalMin <= 60) return { maxOrders: 200, concurrency: 12 };
+  return { maxOrders: 60, concurrency: 8 };
 }
 
 // Tick budget — exit cleanly if we approach Vercel's 300 s
