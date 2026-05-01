@@ -514,55 +514,75 @@ async function resetStaleScore(serviceId: number): Promise<void> {
 //                              == 0. Bottom of list.
 //
 // Within a tier, sort by currentScore DESC.
-async function computeRankingTier(
-  serviceId: number,
-): Promise<{ tier: 1 | 2 | 3 | 4 | null; score: number | null }> {
-  const latest = await prisma.testOrder.findFirst({
-    where: { serviceId },
-    orderBy: { placedAt: "desc" },
-    include: {
-      measurements: {
-        where: { checkpoint: { not: "T+0" } },
-        select: { actualCount: true },
-      },
-    },
-  });
-  if (!latest) {
-    return { tier: null, score: null };
+
+type ServiceTierRow = {
+  serviceId: number;
+  tier: number;
+};
+
+// One batched SQL pass: for every service that has a TestOrder,
+// compute tier from the latest TestOrder + its measurements.
+// Saves N round-trips for the per-service path.
+async function computeAllTiers(): Promise<Map<number, number>> {
+  type RawRow = {
+    serviceId: number;
+    targetQuantity: number;
+    baselineCount: number;
+    status: string;
+    peak: number | bigint | null;
+    polled: number | bigint;
+  };
+  const rows = await prisma.$queryRaw<RawRow[]>`
+    WITH latest AS (
+      SELECT DISTINCT ON ("serviceId")
+        "serviceId", id, "targetQuantity", "baselineCount", status, "placedAt"
+      FROM "TestOrder"
+      ORDER BY "serviceId", "placedAt" DESC
+    )
+    SELECT
+      l."serviceId" as "serviceId",
+      l."targetQuantity" as "targetQuantity",
+      l."baselineCount" as "baselineCount",
+      l.status as status,
+      (SELECT MAX(m."actualCount")
+         FROM "Measurement" m
+         WHERE m."testOrderId" = l.id
+           AND m.checkpoint != 'T+0') as peak,
+      (SELECT COUNT(*)
+         FROM "Measurement" m
+         WHERE m."testOrderId" = l.id
+           AND m.checkpoint != 'T+0') as polled
+    FROM latest l
+  `;
+  const TERMINAL = new Set([
+    "completed",
+    "completed_partial",
+    "aborted_target_died",
+    "aborted_other",
+  ]);
+  const out = new Map<number, number>();
+  for (const r of rows) {
+    const polledCount = Number(r.polled);
+    const peak = r.peak === null ? r.baselineCount : Number(r.peak);
+    const delivered = Math.max(0, peak - r.baselineCount);
+    const pct =
+      r.targetQuantity > 0
+        ? Math.min(1, delivered / r.targetQuantity)
+        : 0;
+    let tier: number;
+    if (polledCount > 0 && pct >= 0.5) tier = 1;
+    else if (polledCount > 0 && pct > 0) tier = 2;
+    else if (polledCount === 0) tier = 3;
+    else if (TERMINAL.has(r.status)) tier = 4;
+    else tier = 3;
+    out.set(r.serviceId, tier);
   }
-
-  const polled = latest.measurements.length > 0;
-  const peak = polled
-    ? Math.max(latest.baselineCount, ...latest.measurements.map((m) => m.actualCount))
-    : latest.baselineCount;
-  const delivered = Math.max(0, peak - latest.baselineCount);
-  const pct =
-    latest.targetQuantity > 0
-      ? Math.min(1, delivered / latest.targetQuantity)
-      : 0;
-
-  // Pull the score that the engine computed for this service so
-  // the within-tier ordering matches the existing scoring.
-  const psc = await prisma.productServiceCandidate.findFirst({
-    where: { serviceId },
-    select: { currentScore: true },
-  });
-  const score = psc?.currentScore ?? null;
-
-  if (polled && pct >= 0.5) return { tier: 1, score };
-  if (polled && pct > 0) return { tier: 2, score };
-  if (!polled) return { tier: 3, score };
-
-  // Polled, delivered = 0 → only land in TIER_NO_DELIVERY when the
-  // test is terminal. A still-running test polled at 0 stays in
-  // TIER_PENDING because delivery can still happen.
-  const terminal = ["completed", "completed_partial", "aborted_target_died", "aborted_other"];
-  if (terminal.includes(latest.status)) return { tier: 4, score };
-  return { tier: 3, score };
+  return out;
 }
 
 // Rewrites ProductServiceCandidate.rank for every active product.
 export async function recomputeRanks(): Promise<void> {
+  const tiers = await computeAllTiers();
   const products = await prisma.myBoostProduct.findMany({
     where: { isActive: true },
     select: { id: true },
@@ -576,37 +596,25 @@ export async function recomputeRanks(): Promise<void> {
       },
       select: { id: true, serviceId: true, currentScore: true },
     });
-    // Compute tier for each row. Done sequentially per product so
-    // we don't blow up the connection pool on large catalogues.
-    const tiered: Array<{
-      id: number;
-      tier: number;
-      score: number;
-    }> = [];
-    for (const r of rows) {
-      const { tier } = await computeRankingTier(r.serviceId);
-      // tier null = no test yet (legitimate edge — newly added
-      // service before its first placement). Treat as TIER_PENDING
-      // so it ranks ahead of confirmed-zero-delivery rows.
-      tiered.push({
-        id: r.id,
-        tier: tier ?? 3,
-        score: r.currentScore ?? -1,
-      });
-    }
+    const tiered = rows.map((r) => ({
+      id: r.id,
+      tier: tiers.get(r.serviceId) ?? 3,
+      score: r.currentScore ?? -1,
+    }));
     tiered.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
       return b.score - a.score;
     });
-    for (let i = 0; i < tiered.length; i++) {
-      const r = tiered[i];
-      // Rank 1..N for everyone; null only for forceExcluded /
-      // ineligible (handled below).
-      await prisma.productServiceCandidate.update({
-        where: { id: r.id },
-        data: { rank: i + 1 },
-      });
-    }
+    // Batch the rank writes — one transaction per product avoids
+    // 8 000 separate round-trips per cron tick.
+    await prisma.$transaction(
+      tiered.map((r, i) =>
+        prisma.productServiceCandidate.update({
+          where: { id: r.id },
+          data: { rank: i + 1 },
+        }),
+      ),
+    );
     await prisma.productServiceCandidate.updateMany({
       where: {
         productId: p.id,
@@ -616,3 +624,7 @@ export async function recomputeRanks(): Promise<void> {
     });
   }
 }
+
+// Exported for diag / unit tests — same logic computeAllTiers uses.
+export { computeAllTiers };
+export type { ServiceTierRow };
