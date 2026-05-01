@@ -21,9 +21,10 @@ export async function GET(
 
   const candidates = await prisma.productServiceCandidate.findMany({
     where: { productId: product.id },
-    // Live currentScore is primary; rank is a 10-min-cron-refreshed
-    // denormalisation kept on the row for display only.
+    // rank = tier (latest delivery) + score within tier. See
+    // recomputeRanks in lib/scoring.ts.
     orderBy: [
+      { rank: { sort: "asc", nulls: "last" } },
       { currentScore: { sort: "desc", nulls: "last" } },
       { id: "asc" },
     ],

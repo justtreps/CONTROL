@@ -204,15 +204,23 @@ export async function onTestCompleted(params: {
     return { transition: "DEAD", reason: "T+7d sunset, no delivery" };
   }
 
-  // ── Path 2: QUALIFIED/MONITORED + 3 consecutive zero retests ─
-  // Only kicks in for services that ALREADY delivered at least
-  // once. With the 3×/day retest cadence (every 8h), the prior
-  // 2-fail threshold made an 8h provider blip lethal — too
-  // brittle. Bumped to 3 so a kill needs ~24h of continuous
-  // failure to fire, while still catching a genuinely dead
-  // provider within a single day.
+  // ── Path 2: QUALIFIED/MONITORED + N consecutive zero retests ─
+  // Two graduated responses (operator request 2026-05-01):
+  //
+  //   3 zero finalised in a row → demote candidacy to TESTING.
+  //     Service still routable but the next daily-retest will
+  //     prioritise it for re-qualification rather than treating
+  //     it as a steady producer. Reset on first delivery.
+  //
+  //   6 zero finalised in a row → kill (DEAD + active=false +
+  //     alert). Same brittleness avoidance as before but
+  //     longer runway since we now demote first instead of
+  //     killing outright.
+  //
+  // brute-race hygiene aborts are excluded — they aren't real
+  // provider failures.
   if (cur === "QUALIFIED" || cur === "MONITORED") {
-    const lastThree = await prisma.testOrder.findMany({
+    const lastFinalised = await prisma.testOrder.findMany({
       where: {
         serviceId: params.serviceId,
         status: {
@@ -223,27 +231,66 @@ export async function onTestCompleted(params: {
             "aborted_other",
           ],
         },
-        // Exclude rows aborted purely for hygiene (e.g. brute-race
-        // duplicate-account cleanup). Those didn't reflect a real
-        // provider failure — penalising the service for them would
-        // wrongly kill it via the 3x-retest rule.
         NOT: { abortReason: "brute_race_duplicate_account" },
       },
       include: { measurements: true },
       orderBy: { completedAt: "desc" },
-      take: 3,
+      take: 6,
     });
-    if (lastThree.length < 3) return { transition: "no_change" };
-    const allZero = lastThree.every((o) => {
+    const isZero = (o: (typeof lastFinalised)[number]): boolean => {
       const peak = Math.max(
         o.baselineCount,
         ...o.measurements.map((m) => m.actualCount)
       );
       return peak <= o.baselineCount;
-    });
-    if (!allZero) return { transition: "no_change" };
-    await killService(params.serviceId, "auto_no_delivery_3x_retest");
-    return { transition: "DEAD", reason: "3 consecutive zero retests" };
+    };
+    const last6Zero =
+      lastFinalised.length >= 6 && lastFinalised.slice(0, 6).every(isZero);
+    if (last6Zero) {
+      await killService(params.serviceId, "auto_no_delivery_6x_retest");
+      return { transition: "DEAD", reason: "6 consecutive zero retests" };
+    }
+    const last3Zero =
+      lastFinalised.length >= 3 && lastFinalised.slice(0, 3).every(isZero);
+    if (last3Zero) {
+      await prisma.productServiceCandidate.updateMany({
+        where: {
+          serviceId: params.serviceId,
+          lifecycleStatus: { in: ["QUALIFIED", "MONITORED"] },
+        },
+        data: { lifecycleStatus: "TESTING" },
+      });
+      // Best-effort alert so the operator sees the demotion in /alertes.
+      const code = `service_demoted_3x_zero:${params.serviceId}`;
+      await prisma.alert
+        .create({
+          data: {
+            code,
+            category: "catalogue",
+            severity: "info",
+            title: `Service #${params.serviceId} demoted to TESTING`,
+            description: `3 retests consécutifs sans livraison — candidacy ramenée à TESTING pour re-qualification.`,
+            explanation: `Lifecycle rule: 3 finalised TestOrders in a row had deliveredQty=0. The candidacy returns to TESTING so daily-retest prioritises it. A delivery on the next test resets the counter; 3 more zeros after that → DEAD.`,
+            impact:
+              "Service stays routable but is treated as un-qualified until it delivers again.",
+            suggestedAction:
+              "Surveiller /services pour le prochain test. Si livraison reprend → retour QUALIFIED auto.",
+            actionType: "link",
+            actionPayload: { href: `/services/${params.serviceId}` },
+            relatedEntityType: "service",
+            relatedEntityId: params.serviceId,
+            status: "active",
+            firstTriggeredAt: new Date(),
+            lastTriggeredAt: new Date(),
+            triggerCount: 1,
+          },
+        })
+        .catch(() => null);
+      return {
+        transition: "no_change", // demoted, not dead — keep historic semantics
+        reason: "demoted_to_TESTING_3x_zero",
+      };
+    }
   }
 
   return { transition: "no_change" };

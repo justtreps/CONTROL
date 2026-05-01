@@ -36,15 +36,12 @@ export default async function CataloguePage() {
             forceExcluded: false,
             currentScore: { not: null },
           },
-          // currentScore is updated inline by rescoreSingleService;
-          // rank is stamped only by the 10-min scoring cron's
-          // recomputeRanks(). Sorting by rank lags reality —
-          // a freshly-scored top service can be missing from
-          // top-3 until the cron fires. Sort by the live field.
-          orderBy: [
-            { currentScore: { sort: "desc", nulls: "last" } },
-            { id: "asc" },
-          ],
+          // rank reflects the tier-aware ordering computed by the
+          // 10-min scoring cron's recomputeRanks(). currentScore
+          // alone misses the "fresh delivered 90 %" vs "stale-fresh
+          // never-polled" distinction. Lag of up to 10 min on
+          // top-3 averages is acceptable.
+          orderBy: [{ rank: { sort: "asc", nulls: "last" } }, { id: "asc" }],
           take: 3,
           select: { currentScore: true },
         }),

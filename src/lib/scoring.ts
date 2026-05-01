@@ -491,6 +491,76 @@ async function resetStaleScore(serviceId: number): Promise<void> {
   });
 }
 
+// Tier-based ranking. The previous score-only sort was unfair to
+// services with confirmed-but-modest delivery: a fresh test that
+// hasn't been polled yet (currentScore stale from a partial test)
+// could outrank a service that just delivered 90 % on its latest
+// run, because the routing didn't know which one had the freshest
+// signal. Operators surfaced the symptom: "service that delivered
+// 45/50 ranks 138 while a never-tested service ranks at the top".
+//
+// Tiers, computed from the SERVICE's most-recent TestOrder
+// (regardless of status, regardless of polled state):
+//
+//   TIER_DELIVERED_HIGH = 1  → latest test polled with delivered ≥
+//                              50 % of target. Top-of-list.
+//   TIER_DELIVERED_LOW  = 2  → latest test polled with delivered
+//                              1-49 % of target.
+//   TIER_PENDING        = 3  → latest test placed but no non-T+0
+//                              measurement yet (in-flight, deserves
+//                              the benefit of the doubt over a
+//                              service that confirmed 0 delivery).
+//   TIER_NO_DELIVERY    = 4  → latest test FINALISED with delivered
+//                              == 0. Bottom of list.
+//
+// Within a tier, sort by currentScore DESC.
+async function computeRankingTier(
+  serviceId: number,
+): Promise<{ tier: 1 | 2 | 3 | 4 | null; score: number | null }> {
+  const latest = await prisma.testOrder.findFirst({
+    where: { serviceId },
+    orderBy: { placedAt: "desc" },
+    include: {
+      measurements: {
+        where: { checkpoint: { not: "T+0" } },
+        select: { actualCount: true },
+      },
+    },
+  });
+  if (!latest) {
+    return { tier: null, score: null };
+  }
+
+  const polled = latest.measurements.length > 0;
+  const peak = polled
+    ? Math.max(latest.baselineCount, ...latest.measurements.map((m) => m.actualCount))
+    : latest.baselineCount;
+  const delivered = Math.max(0, peak - latest.baselineCount);
+  const pct =
+    latest.targetQuantity > 0
+      ? Math.min(1, delivered / latest.targetQuantity)
+      : 0;
+
+  // Pull the score that the engine computed for this service so
+  // the within-tier ordering matches the existing scoring.
+  const psc = await prisma.productServiceCandidate.findFirst({
+    where: { serviceId },
+    select: { currentScore: true },
+  });
+  const score = psc?.currentScore ?? null;
+
+  if (polled && pct >= 0.5) return { tier: 1, score };
+  if (polled && pct > 0) return { tier: 2, score };
+  if (!polled) return { tier: 3, score };
+
+  // Polled, delivered = 0 → only land in TIER_NO_DELIVERY when the
+  // test is terminal. A still-running test polled at 0 stays in
+  // TIER_PENDING because delivery can still happen.
+  const terminal = ["completed", "completed_partial", "aborted_target_died", "aborted_other"];
+  if (terminal.includes(latest.status)) return { tier: 4, score };
+  return { tier: 3, score };
+}
+
 // Rewrites ProductServiceCandidate.rank for every active product.
 export async function recomputeRanks(): Promise<void> {
   const products = await prisma.myBoostProduct.findMany({
@@ -504,18 +574,37 @@ export async function recomputeRanks(): Promise<void> {
         isEligible: true,
         forceExcluded: false,
       },
-      orderBy: [
-        { currentScore: { sort: "desc", nulls: "last" } },
-        { id: "asc" },
-      ],
-      select: { id: true, currentScore: true },
+      select: { id: true, serviceId: true, currentScore: true },
     });
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      const rank = r.currentScore == null ? null : i + 1;
+    // Compute tier for each row. Done sequentially per product so
+    // we don't blow up the connection pool on large catalogues.
+    const tiered: Array<{
+      id: number;
+      tier: number;
+      score: number;
+    }> = [];
+    for (const r of rows) {
+      const { tier } = await computeRankingTier(r.serviceId);
+      // tier null = no test yet (legitimate edge — newly added
+      // service before its first placement). Treat as TIER_PENDING
+      // so it ranks ahead of confirmed-zero-delivery rows.
+      tiered.push({
+        id: r.id,
+        tier: tier ?? 3,
+        score: r.currentScore ?? -1,
+      });
+    }
+    tiered.sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      return b.score - a.score;
+    });
+    for (let i = 0; i < tiered.length; i++) {
+      const r = tiered[i];
+      // Rank 1..N for everyone; null only for forceExcluded /
+      // ineligible (handled below).
       await prisma.productServiceCandidate.update({
         where: { id: r.id },
-        data: { rank },
+        data: { rank: i + 1 },
       });
     }
     await prisma.productServiceCandidate.updateMany({

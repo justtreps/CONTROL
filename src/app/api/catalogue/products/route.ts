@@ -36,13 +36,9 @@ export async function GET() {
             forceExcluded: false,
             currentScore: { not: null },
           },
-          // Live currentScore beats rank as primary sort — rank is
-          // only refreshed by the 10-min scoring cron, currentScore
-          // is updated every poll. See router.ts for the same fix.
-          orderBy: [
-            { currentScore: { sort: "desc", nulls: "last" } },
-            { id: "asc" },
-          ],
+          // rank now reflects tier (latest delivery class) → score
+          // → id, set by the 10-min scoring cron. See router.ts.
+          orderBy: [{ rank: { sort: "asc", nulls: "last" } }, { id: "asc" }],
           take: 3,
           select: { currentScore: true },
         }),

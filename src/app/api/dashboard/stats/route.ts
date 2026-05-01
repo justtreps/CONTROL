@@ -239,12 +239,9 @@ async function build() {
             forceExcluded: false,
             currentScore: { not: null },
           },
-          // Sort on the live currentScore (updated every poll) rather
-          // than rank (refreshed only by the 10-min scoring cron).
-          orderBy: [
-            { currentScore: { sort: "desc", nulls: "last" } },
-            { id: "asc" },
-          ],
+          // rank = tier (latest delivery) + score, set by 10-min
+          // scoring cron. See router.ts for the same convention.
+          orderBy: [{ rank: { sort: "asc", nulls: "last" } }, { id: "asc" }],
           take: 5,
           select: { currentScore: true },
         }),

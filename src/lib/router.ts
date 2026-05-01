@@ -168,12 +168,14 @@ export async function routeOrder(
 
   // Eligible candidates for this product + this quantity window.
   //
-  // Source-of-truth is currentScore DESC, NOT rank ASC. rank is
-  // recomputed only by the 10-min scoring cron's recomputeRanks(),
-  // while currentScore is updated inline by rescoreSingleService on
-  // every poll. With rank as primary sort the router would pick a
-  // freshly-scored top service SECOND because its rank lagged the
-  // poll. id ASC is the deterministic tiebreaker on equal scores.
+  // Source-of-truth is rank ASC. The scoring cron's recomputeRanks
+  // assigns rank by TIER first (latest-test delivery class) then
+  // by currentScore within each tier. Sorting by currentScore DESC
+  // alone would miss the tier signal — a 90 %-delivered service
+  // can sit at score 77 and lose to a never-polled service whose
+  // currentScore is stale from an old big-delivery test. With rank
+  // we always serve the freshest-delivering tier first, which is
+  // what the operator wants.
   const candidates = await prisma.productServiceCandidate.findMany({
     where: {
       productId: product.id,
@@ -186,6 +188,7 @@ export async function routeOrder(
       },
     },
     orderBy: [
+      { rank: { sort: "asc", nulls: "last" } },
       { currentScore: { sort: "desc", nulls: "last" } },
       { id: "asc" },
     ],
