@@ -981,7 +981,7 @@ export const detectPollerStalled: Detector = async () => {
       severity: "critical",
       title: `Poller bloqué — 0 mesures en 30 min, ${dueForPoll} orders en attente`,
       description: `Aucune Measurement non-T+0 écrite depuis ${last30min.toISOString().slice(11, 19)} UTC. Backlog : ${dueForPoll} TestOrders avec nextPollAt ≤ NOW.`,
-      explanation: `Le cron testbot-poll fire toutes les heures (vercel.json: 0 * * * *) et devrait écrire au moins quelques Measurement par tick. Zéro pendant 30 min = soit la cron ne fire pas (Vercel issue), soit runPoller throw, soit toutes les requêtes RapidAPI hang/échouent. Vérifier : Vercel function logs pour /api/cron/testbot-poll, healthz des clés RapidAPI, RATE_LIMITER backend (Upstash). Le drain du backlog s'arrête → tests fraîchement placés ne progressent plus.`,
+      explanation: `Le cron testbot-poll fire toutes les 10 min (vercel.json: */10 * * * *) et devrait écrire au moins quelques Measurement par tick. Zéro pendant 30 min = soit la cron ne fire pas (Vercel issue), soit runPoller throw, soit toutes les requêtes RapidAPI hang/échouent. Vérifier : Vercel function logs pour /api/cron/testbot-poll, healthz des clés RapidAPI, RATE_LIMITER backend (Upstash). Le drain du backlog s'arrête → tests fraîchement placés ne progressent plus.`,
       impact:
         "Tous les TestOrders en cours stagnent. Plus de finalize, plus de score update. Daily-retest continue de placer mais le pool de scorables ne grossit plus.",
       suggestedAction:
@@ -1026,6 +1026,135 @@ export const detectPoolCritical: Detector = async () => {
   return out;
 };
 
+// sync_stale — last CatalogueSyncRun completed > 2h ago (or never). The
+// sync cron now fires hourly (vercel.json: "0 * * * *") so a >2h gap is
+// the heartbeat alarm: BulkMedya hung, the lambda timed out, the cron
+// stopped firing, or service-discovery is otherwise dead. Without this,
+// new BulkMedya services don't get pulled, sleeve killed services
+// don't get re-enabled, and the catalogue silently drifts.
+export const detectSyncStale: Detector = async () => {
+  const lastOk = await prisma.catalogueSyncRun.findFirst({
+    where: { status: "completed" },
+    orderBy: { finishedAt: "desc" },
+    select: { id: true, finishedAt: true, bulkmedyaTotal: true },
+  });
+  const lastAny = await prisma.catalogueSyncRun.findFirst({
+    orderBy: { startedAt: "desc" },
+    select: { id: true, startedAt: true, finishedAt: true, status: true, errorMessage: true },
+  });
+  const completedAt = lastOk?.finishedAt ?? null;
+  const ageMs = completedAt ? Date.now() - completedAt.getTime() : Number.POSITIVE_INFINITY;
+  if (ageMs < 2 * 3600 * 1000) return [];
+  const ageHours = Number.isFinite(ageMs) ? Math.round(ageMs / 3_600_000) : null;
+  const severity = ageHours === null || ageHours >= 6 ? "critical" : "warning";
+  return [
+    {
+      code: "sync_stale",
+      category: "catalogue",
+      severity,
+      title: completedAt
+        ? `Sync BulkMedya stale — dernière OK il y a ${ageHours}h`
+        : "Sync BulkMedya jamais réussi",
+      description: completedAt
+        ? `CatalogueSyncRun#${lastOk!.id} finished ${completedAt.toISOString()} (${lastOk!.bulkmedyaTotal ?? "?"} services pulled). Dernière tentative : run#${lastAny?.id ?? "n/a"} (${lastAny?.status ?? "?"}).`
+        : `Aucune sync completed dans la table CatalogueSyncRun. Dernière tentative : run#${lastAny?.id ?? "n/a"} (${lastAny?.status ?? "?"}).`,
+      explanation: `Le cron /api/cron/sync-services fire toutes les heures (vercel.json: "0 * * * *"). Un gap >2h = soit BulkMedya hang (fetch sans timeout, désormais corrigé via Promise.race + AbortController), soit la lambda crash silencieusement, soit le cron ne fire pas. Sans sync, on rate les nouveaux services BulkMedya, on ne ré-enable pas les services réactivés côté provider, et le catalogue dérive.${lastAny?.errorMessage ? ` Dernier message d'erreur : "${lastAny.errorMessage.slice(0, 200)}".` : ""}`,
+      impact:
+        "Catalogue figé : nouveaux services BulkMedya jamais découverts, services réactivés côté provider restent killed côté CONTROL, prix et statuts qui ne se rafraîchissent plus.",
+      suggestedAction:
+        "Curl manuel /api/cron/sync-services avec CRON_SECRET pour reproduire l'erreur. Vérifier Vercel function logs + BULKMEDYA_API_KEY actif. Si l'API BulkMedya est down côté provider, attendre + monitorer.",
+      actionType: "link",
+      actionPayload: { href: "/logs?view=sync" },
+    },
+  ];
+};
+
+// engagement_pool_disabled — fires when PoolConfig.engagementPoolEnabled
+// is false. Without this, the pool scraper refuses to admit posts, the
+// engagement TestPost universe drains, and daily-retest ne place plus
+// rien sur les services likes / views / shares / saves (zone D du diag
+// "4 systèmes morts"). Severity warning: c'est un toggle volontaire mais
+// silencieux — l'alerte rend l'état visible avec un bouton one-click
+// pour ré-enable.
+export const detectEngagementPoolDisabled: Detector = async () => {
+  const cfg = await getPoolConfig();
+  if (cfg.engagementPoolEnabled) return [];
+  // Was at least one engagement service tested in the last 30 days? If
+  // not, it's plausible the operator deliberately turned it off and we
+  // shouldn't nag.
+  const engagementMetrics = ["likes", "views", "shares", "saves", "comments"];
+  const recentEngagementOrders = await prisma.testOrder.count({
+    where: {
+      service: { serviceType: { in: engagementMetrics } },
+      placedAt: { gte: hoursAgo(30 * 24) },
+    },
+  });
+  if (recentEngagementOrders === 0) return [];
+  return [
+    {
+      code: "engagement_pool_disabled",
+      category: "pool",
+      severity: "warning",
+      title: "engagementPoolEnabled = false — placements engagement bloqués",
+      description: `${recentEngagementOrders} TestOrders engagement (likes/views/shares/saves) sur les 30 derniers jours, mais PoolConfig.engagementPoolEnabled = false.`,
+      explanation: `Quand engagementPoolEnabled est false, le scraper rejette les candidats avec mediaCount > 0 et l'extracteur n'écrit pas de TestPost. Daily-retest pour les métriques engagement ne trouve plus de post à assigner et skip → "no_post_available". Toggle silencieux (pas de log, pas de bannière), c'est typiquement la cause des collapses "aucun test engagement depuis X jours".`,
+      impact:
+        "Aucun nouveau test engagement placé. Scores des services likes/views/shares/saves figés sur les dernières mesures, demotions automatiques sur 3-zero, services qui sortent du panier qualifié sans raison visible.",
+      suggestedAction:
+        "Activer engagementPoolEnabled depuis /pool (Settings) ou bouton ci-dessous. Lancer ensuite un scrape engagement (poolType=engagement) pour repeupler TestPost.",
+      actionType: "button",
+      actionPayload: {
+        endpoint: "/api/pool/config",
+        method: "PATCH",
+        body: { engagementPoolEnabled: true },
+        confirm: "Activer engagementPoolEnabled (re-permet les placements likes/views/shares/saves) ?",
+      },
+    },
+  ];
+};
+
+// engagement_pool_low — TestPost.status='available' below an absolute
+// floor. Triggered as a heartbeat alongside engagementPoolEnabled, but
+// fires even when the toggle is on — a low pool with the toggle on
+// means the scrape is failing (or never ran) rather than gated.
+export const detectEngagementPoolLow: Detector = async () => {
+  const cfg = await getPoolConfig();
+  if (!cfg.engagementPoolEnabled) return []; // covered by engagement_pool_disabled
+  const out: DetectorResult[] = [];
+  for (const platform of ["instagram", "tiktok"] as const) {
+    const target =
+      platform === "instagram"
+        ? cfg.engagementPoolTargetInstagram
+        : cfg.engagementPoolTargetTiktok;
+    if (!target || target <= 0) continue;
+    const count = await prisma.testPost.count({
+      where: { platform, status: "available", active: true },
+    });
+    const threshold = Math.max(50, Math.round(target * 0.25));
+    if (count >= threshold) continue;
+    out.push({
+      code: `engagement_pool_low:${platform}`,
+      category: "pool",
+      severity: count < Math.max(20, threshold / 2) ? "critical" : "warning",
+      title: `Pool engagement ${platform.toUpperCase()} bas — ${count} posts disponibles`,
+      description: `${count} TestPost ${platform} status='available'. Cible ${target}, seuil alerte ${threshold} (25 % de la cible).`,
+      explanation: `Le pool engagement vit indépendamment du pool follower : il faut scraper les *posts* des accounts (engagement-extract) ou les seeds avec poolType="engagement". Sous le seuil, daily-retest ne trouve plus de post fresh à assigner pour les métriques likes/views/shares/saves et skip "no_post_available".`,
+      impact:
+        "Placements engagement qui s'effondrent. Les services likes/views ne sont plus retestés régulièrement, scores figent, demotions automatiques.",
+      suggestedAction:
+        "Lancer un scrape engagement (poolType='engagement', target ≥ 500). Vérifier que engagement-extract tourne (cron pool-engagement-extract-runner */5).",
+      actionType: "button",
+      actionPayload: {
+        endpoint: "/api/pool/scrape",
+        method: "POST",
+        body: { platform, count: Math.max(500, target), poolType: "engagement" },
+        confirm: `Lancer un scrape engagement de ${Math.max(500, target)} posts ${platform.toUpperCase()} ?`,
+      },
+    });
+  }
+  return out;
+};
+
 export const DETECTORS: Detector[] = [
   detectKeyNearCap,
   detectKeyCapped,
@@ -1055,6 +1184,10 @@ export const DETECTORS: Detector[] = [
   detectCampaignLowRate,
   detectPollerStalled,
   detectRateLimitSaturatedByConfig,
+  // ── Heartbeat detectors (zone E "4 systèmes morts" diag) ──
+  detectSyncStale,
+  detectEngagementPoolDisabled,
+  detectEngagementPoolLow,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──
