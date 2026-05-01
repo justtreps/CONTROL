@@ -520,40 +520,75 @@ type ServiceTierRow = {
   tier: number;
 };
 
-// One batched SQL pass: for every service that has a TestOrder,
-// compute tier from the latest TestOrder + its measurements.
-// Saves N round-trips for the per-service path.
+// One batched SQL pass: for every service, compute tier from the
+// LATEST SCORABLE TestOrder (most recent placedAt with ≥1 non-T+0
+// measurement). This matches pickLatestScorableTest's definition
+// of "scorable" — a fresh in-flight test that hasn't been polled
+// yet doesn't push a tier-1 service into tier 3, because we keep
+// the prior scorable test as the reference until the new one
+// gets its first poll.
+//
+// Services with NO scorable test fall back to a per-service
+// "latest TestOrder" check so we can still distinguish:
+//   • placed-but-never-polled (TIER_PENDING)
+//   • finalised with 0 delivery (TIER_NO_DELIVERY)
+//   • truly never tested (no row at all → tier 3 default)
 async function computeAllTiers(): Promise<Map<number, number>> {
-  type RawRow = {
+  type ScorableRow = {
     serviceId: number;
     targetQuantity: number;
     baselineCount: number;
-    status: string;
-    peak: number | bigint | null;
-    polled: number | bigint;
+    peak: number | bigint;
   };
-  const rows = await prisma.$queryRaw<RawRow[]>`
-    WITH latest AS (
-      SELECT DISTINCT ON ("serviceId")
-        "serviceId", id, "targetQuantity", "baselineCount", status, "placedAt"
-      FROM "TestOrder"
-      ORDER BY "serviceId", "placedAt" DESC
+  type LatestRow = {
+    serviceId: number;
+    status: string;
+    has_scorable: boolean;
+  };
+
+  // Pull latest scorable per service.
+  const scorable = await prisma.$queryRaw<ScorableRow[]>`
+    WITH scorable_orders AS (
+      SELECT DISTINCT ON (tor."serviceId")
+        tor."serviceId", tor.id, tor."targetQuantity", tor."baselineCount"
+      FROM "TestOrder" tor
+      WHERE EXISTS (
+        SELECT 1 FROM "Measurement" m
+        WHERE m."testOrderId" = tor.id
+          AND m.checkpoint != 'T+0'
+      )
+      ORDER BY tor."serviceId", tor."placedAt" DESC
     )
     SELECT
-      l."serviceId" as "serviceId",
-      l."targetQuantity" as "targetQuantity",
-      l."baselineCount" as "baselineCount",
-      l.status as status,
-      (SELECT MAX(m."actualCount")
-         FROM "Measurement" m
-         WHERE m."testOrderId" = l.id
-           AND m.checkpoint != 'T+0') as peak,
-      (SELECT COUNT(*)
-         FROM "Measurement" m
-         WHERE m."testOrderId" = l.id
-           AND m.checkpoint != 'T+0') as polled
-    FROM latest l
+      s."serviceId" as "serviceId",
+      s."targetQuantity" as "targetQuantity",
+      s."baselineCount" as "baselineCount",
+      COALESCE(
+        (SELECT MAX(m."actualCount")
+           FROM "Measurement" m
+           WHERE m."testOrderId" = s.id
+             AND m.checkpoint != 'T+0'),
+        s."baselineCount"
+      ) as peak
+    FROM scorable_orders s
   `;
+
+  // Latest TestOrder per service (any status) — tells us whether
+  // a service is in-flight (TIER 3) or finalised with 0 delivery
+  // (TIER 4) when no scorable test exists.
+  const latest = await prisma.$queryRaw<LatestRow[]>`
+    SELECT DISTINCT ON (tor."serviceId")
+      tor."serviceId" as "serviceId",
+      tor.status as status,
+      EXISTS (
+        SELECT 1 FROM "Measurement" m
+        WHERE m."testOrderId" = tor.id
+          AND m.checkpoint != 'T+0'
+      ) as has_scorable
+    FROM "TestOrder" tor
+    ORDER BY tor."serviceId", tor."placedAt" DESC
+  `;
+
   const TERMINAL = new Set([
     "completed",
     "completed_partial",
@@ -561,21 +596,33 @@ async function computeAllTiers(): Promise<Map<number, number>> {
     "aborted_other",
   ]);
   const out = new Map<number, number>();
-  for (const r of rows) {
-    const polledCount = Number(r.polled);
-    const peak = r.peak === null ? r.baselineCount : Number(r.peak);
-    const delivered = Math.max(0, peak - r.baselineCount);
+
+  // First pass — services with at least one scorable test.
+  for (const s of scorable) {
+    const peak = Number(s.peak);
+    const delivered = Math.max(0, peak - s.baselineCount);
     const pct =
-      r.targetQuantity > 0
-        ? Math.min(1, delivered / r.targetQuantity)
+      s.targetQuantity > 0
+        ? Math.min(1, delivered / s.targetQuantity)
         : 0;
     let tier: number;
-    if (polledCount > 0 && pct >= 0.5) tier = 1;
-    else if (polledCount > 0 && pct > 0) tier = 2;
-    else if (polledCount === 0) tier = 3;
-    else if (TERMINAL.has(r.status)) tier = 4;
-    else tier = 3;
-    out.set(r.serviceId, tier);
+    if (pct >= 0.5) tier = 1;
+    else if (pct > 0) tier = 2;
+    // pct === 0 on a scorable test = polled but delivered 0. If
+    // the latest is FINALISED, it's a confirmed zero (TIER 4).
+    // Otherwise still in-flight (TIER 3).
+    else {
+      const lat = latest.find((l) => l.serviceId === s.serviceId);
+      tier = lat && TERMINAL.has(lat.status) ? 4 : 3;
+    }
+    out.set(s.serviceId, tier);
+  }
+
+  // Second pass — services with NO scorable test (latest never
+  // polled). Use the latest row's status to decide.
+  for (const l of latest) {
+    if (out.has(l.serviceId)) continue;
+    out.set(l.serviceId, TERMINAL.has(l.status) ? 4 : 3);
   }
   return out;
 }
