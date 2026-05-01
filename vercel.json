@@ -4,7 +4,7 @@
   "installCommand": "npm install",
   "regions": ["sin1"],
   "crons": [
-    { "path": "/api/cron/sync-services", "schedule": "0 0 * * *" },
+    { "path": "/api/cron/sync-services", "schedule": "0 * * * *" },
     { "path": "/api/cron/daily-retest", "schedule": "0 * * * *" },
     { "path": "/api/cron/test-bot", "schedule": "0 * * * *" },
     { "path": "/api/cron/testbot-poll", "schedule": "*/10 * * * *" },

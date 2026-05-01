@@ -20,6 +20,14 @@ type RawService = {
 
 export type BulkmedyaOrderResponse = { order: number } | { error: string };
 
+// Same Promise.race + AbortController pattern we landed on the
+// RapidAPI clients — without it, a hung BulkMedya socket would
+// block the sync cron lambda for the full 300 s maxDuration.
+// Observed: sync-services cron status='completed' but no rows
+// changed because the fetch had no upper bound and we couldn't
+// tell.
+const BULKMEDYA_FETCH_TIMEOUT_MS = 25_000;
+
 async function bulkmedyaPost<T>(params: Record<string, string | number>): Promise<T> {
   const key = await getBulkmedyaKey();
   if (!key) throw new Error("BulkMedya API key not configured");
@@ -28,12 +36,28 @@ async function bulkmedyaPost<T>(params: Record<string, string | number>): Promis
     Object.entries(params).map(([k, v]) => [k, String(v)])
   ) });
 
-  const res = await fetch(BULKMEDYA_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-    cache: "no-store",
-  });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), BULKMEDYA_FETCH_TIMEOUT_MS);
+  const res = await Promise.race<Response>([
+    fetch(BULKMEDYA_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      cache: "no-store",
+      signal: ac.signal,
+    }).finally(() => clearTimeout(timer)),
+    new Promise<Response>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              `BulkMedya hard timeout @${BULKMEDYA_FETCH_TIMEOUT_MS + 5000}ms`,
+            ),
+          ),
+        BULKMEDYA_FETCH_TIMEOUT_MS + 5000,
+      ),
+    ),
+  ]);
 
   if (!res.ok) {
     throw new Error(`BulkMedya HTTP ${res.status}: ${await res.text()}`);
