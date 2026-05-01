@@ -6,6 +6,7 @@ import { isDryRun } from "@/lib/router";
 import { ConfigForms } from "./ConfigForms";
 import { ConfigDangerZone } from "./ConfigDangerZone";
 import { RapidApiKeysCard } from "./RapidApiKeysCard";
+import { PollCadenceCard } from "./PollCadenceCard";
 
 export const dynamic = "force-dynamic";
 
@@ -143,6 +144,13 @@ export default async function ConfigPage() {
           1re chose vue. L'ancien champ RAPIDAPI_KEY dans ConfigForms
           en dessous ne sert plus qu'au legacy seed fallback. */}
       <RapidApiKeysCard />
+
+      {/* Cadence de polling — slider + impact preview en live. */}
+      <section className="px-4 md:px-8 pb-8">
+        <div className="max-w-7xl mx-auto">
+          <PollCadenceCard />
+        </div>
+      </section>
 
       <ConfigForms
         initialBulkmedyaSet={Boolean(bulkmedyaKey)}

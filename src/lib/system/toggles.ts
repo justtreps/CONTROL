@@ -28,8 +28,21 @@ export async function updateSystemToggles(
 
 // Standard "enabled" toggles — stopAll flips all to false,
 // restartAll to true. Every one of these is "true means the
-// subsystem runs normally".
-const ENABLED_KEYS: Array<keyof TogglePatch> = [
+// subsystem runs normally". Typed as a tuple of boolean keys so
+// the patch assignments below stay strictly typed despite
+// SystemToggle now containing non-boolean fields too
+// (pollIntervalMinutes etc.).
+type BooleanToggleKey =
+  | "poolScrapeEnabled"
+  | "poolHealthcheckEnabled"
+  | "routingApiEnabled"
+  | "testBotEnabled"
+  | "scoringEngineEnabled"
+  | "workflowExecutorEnabled"
+  | "dailyRetestEnabled"
+  | "autoKillDeadServicesEnabled"
+  | "dailySyncEnabled";
+const ENABLED_KEYS: BooleanToggleKey[] = [
   "poolScrapeEnabled",
   "poolHealthcheckEnabled",
   "routingApiEnabled",
@@ -71,6 +84,21 @@ export async function restartAll(): Promise<SystemToggle> {
 // isn't a "disabled subsystem" in this sense so we skip it.
 export function countDisabled(t: SystemToggle): number {
   return ENABLED_KEYS.filter((k) => t[k] === false).length;
+}
+
+// Polling cadence helpers — kept here so consumers don't reach
+// directly into prisma.systemToggle for a single field.
+export const DEFAULT_POLL_INTERVAL_MIN = 10;
+export const MIN_POLL_INTERVAL_MIN = 5;
+export const MAX_POLL_INTERVAL_MIN = 720; // 12 h ceiling
+
+export async function getPollIntervalMin(): Promise<number> {
+  const t = await getSystemToggles();
+  const raw = (t as { pollIntervalMinutes?: number }).pollIntervalMinutes;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_POLL_INTERVAL_MIN;
+  }
+  return Math.min(MAX_POLL_INTERVAL_MIN, Math.max(MIN_POLL_INTERVAL_MIN, raw));
 }
 
 export const SYSTEM_TOGGLE_KEYS = ALL_KEYS;

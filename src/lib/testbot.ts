@@ -499,6 +499,15 @@ export async function attemptPlaceOrder({
       return { kind: "skip", reason: `bulkmedya: ${order.error}` };
     }
 
+    // pollIntervalMinutes is operator-configurable via /config →
+    // SystemToggle.pollIntervalMinutes. Falls back to 10 min when
+    // the row is unreachable. Read once per placement so a config
+    // change propagates from the next placement onward (existing
+    // running orders are restaggered by the PATCH endpoint).
+    const placeToggles = await getSystemToggles().catch(() => null);
+    const pollIntervalMin =
+      (placeToggles as { pollIntervalMinutes?: number } | null)
+        ?.pollIntervalMinutes ?? 10;
     const testOrder = await prisma.testOrder.create({
       data: {
         serviceId: service.id,
@@ -507,17 +516,12 @@ export async function attemptPlaceOrder({
         targetQuantity: testQty,
         baselineCount: baseline.count,
         status: "running",
-        // Record the mode this order was placed in. /logs + scoring
-        // filters use this to separate production tests from dry-run
-        // simulations.
         dryRun: simulated,
-        // Pre-test health check just succeeded (oracle was ok above).
         lastHealthCheckAt: new Date(),
-        // Fixed 12h polling cadence — first poll fires 12h after
-        // placement. SMM delivery is paced in hours/days; earlier
-        // polls would burn RapidAPI for zero signal. See
-        // lib/testbot/poller.ts for the full flow.
-        nextPollAt: new Date(Date.now() + 12 * 60 * 60_000),
+        // First poll fires `pollIntervalMin` minutes after
+        // placement. Operator default = 10 min for near-real-time
+        // visibility. Bump via /config when RapidAPI quota is tight.
+        nextPollAt: new Date(Date.now() + pollIntervalMin * 60_000),
       },
     });
 

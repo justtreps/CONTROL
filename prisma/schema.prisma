@@ -745,6 +745,12 @@ model SystemToggle {
   // (production mode). Replaces the prior process.env.DRY_RUN env
   // var so the operator can flip the switch from /pool.
   dryRunMode               Boolean  @default(true)
+  // Cadence du poller en minutes — relu à chaque tick + appliqué
+  // au moment de placer un nouveau TestOrder. Default 10 min : on
+  // privilégie la visibilité temps réel sur la conso RapidAPI.
+  // L'opérateur peut bumper la valeur via /config si la flotte de
+  // clés est limitée. Bornes UI : 5 min ≤ X ≤ 720 min (12 h).
+  pollIntervalMinutes      Int      @default(10)
   updatedAt                DateTime @updatedAt
 }
 

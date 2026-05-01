@@ -7,6 +7,7 @@ import {
   computeCostPercentileForService,
   pickLatestScorableTest,
 } from "@/lib/scoring";
+import { getPollIntervalMin } from "@/lib/system/toggles";
 import {
   ServiceDetailCharts,
   type ScorePoint,
@@ -27,6 +28,10 @@ export default async function ServiceDetailPage({
 
   const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
   const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
+  // Operator-configurable polling cadence (SystemToggle).
+  // Threaded into the FRESH chip label so the card matches reality
+  // even after the operator bumps the cadence on /config.
+  const pollIntervalMin = await getPollIntervalMin();
 
   const service = await prisma.service.findUnique({
     where: { id },
@@ -208,12 +213,15 @@ export default async function ServiceDetailPage({
       }
       // status === "running" (or other non-terminal) below
       if (polled.length === 0) {
+        const label =
+          pollIntervalMin >= 60
+            ? `FRESH — premier poll dans ${Math.round(pollIntervalMin / 60)} h`
+            : `FRESH — premier poll dans ${pollIntervalMin} min`;
         return {
-          label: `FRESH — premier poll à T+12h`,
+          label,
           color: "#7DD3FC",
           bg: "rgba(125, 211, 252, 0.10)",
-          title:
-            "Test placé. La 1re mesure RapidAPI fire 12 h après le placement.",
+          title: `Test placé. La 1re mesure RapidAPI fire ${pollIntervalMin} min après le placement.`,
         };
       }
       return {

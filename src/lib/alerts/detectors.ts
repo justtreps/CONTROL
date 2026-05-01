@@ -914,6 +914,48 @@ export const detectPoolCleanupInProgress: Detector = async () => {
   ];
 };
 
+// rate_limit_saturated_by_config — fires WARNING when the live
+// poll throughput (running orders × 60/intervalMin) exceeds 90 %
+// of the aggregate RapidAPI capacity. The operator either bumps
+// the cadence or adds a key. Threshold matches /config preview
+// verdict so the same colour shows here.
+export const detectRateLimitSaturatedByConfig: Detector = async () => {
+  const [running, keys, toggles] = await Promise.all([
+    prisma.testOrder.count({ where: { status: "running" } }),
+    prisma.rapidApiKey.findMany({
+      where: { provider: "instagram", status: "active" },
+      select: { rateLimitPerMin: true },
+    }),
+    prisma.systemToggle.findUnique({ where: { id: 1 } }),
+  ]);
+  if (keys.length === 0) return [];
+  const intervalMin =
+    (toggles as { pollIntervalMinutes?: number } | null)
+      ?.pollIntervalMinutes ?? 10;
+  const aggregateRph =
+    keys.reduce((a, k) => a + (k.rateLimitPerMin ?? 85), 0) * 60;
+  if (aggregateRph === 0) return [];
+  const polls = (running * 60) / intervalMin;
+  const saturation = polls / aggregateRph;
+  if (saturation < 0.9) return [];
+  return [
+    {
+      code: "rate_limit_saturated_by_config",
+      category: "rapidapi",
+      severity: saturation >= 1 ? "critical" : "warning",
+      title: `Cadence trop agressive — ${Math.round(saturation * 100)} % de la capacité RapidAPI`,
+      description: `${running.toLocaleString("en-US")} TestOrders running × 60 / ${intervalMin} min ≈ ${Math.round(polls).toLocaleString("en-US")} polls/h vs capacité ${aggregateRph.toLocaleString("en-US")}/h.`,
+      explanation: `Le rate-limiter Upstash va saturer à chaque tick — les workers attendent leur slot, le hard cap fire et les orders sont reschedulés sans mesure. Soit tu bumpes la cadence (/config → Cadence de polling), soit tu ajoutes une RapidAPI key (multiplie la capacité).`,
+      impact:
+        "Mesures qui ne landent pas, score qui ne se met pas à jour, lifecycle qui n'avance pas.",
+      suggestedAction:
+        "Ouvrir /config et augmenter pollIntervalMinutes (ex. 10 → 30) OU ajouter une 3e RapidAPI key.",
+      actionType: "link",
+      actionPayload: { href: "/config" },
+    },
+  ];
+};
+
 // poller_stalled — fires CRITICAL when zero non-T+0 measurements
 // have been written in the last 30 min while there's a backlog of
 // running orders due for poll. This is the alarm that would have
@@ -1012,6 +1054,7 @@ export const DETECTORS: Detector[] = [
   detectMassCampaignInProgress,
   detectCampaignLowRate,
   detectPollerStalled,
+  detectRateLimitSaturatedByConfig,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──

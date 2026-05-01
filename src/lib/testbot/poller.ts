@@ -34,9 +34,13 @@ import {
   isKeyTripped,
   noteKeyOutcome,
 } from "@/lib/rapidapi/circuit-breaker";
+import { getSystemToggles } from "@/lib/system/toggles";
 
 // ── Tuning knobs ────────────────────────────────────────────────
-const POLL_INTERVAL_MS = 12 * 60 * 60_000;        // 12 h between normal polls
+// Polling cadence is now operator-configurable via SystemToggle
+// (default 10 min — see schema). Read once per runPoller call.
+// Fallback constant covers the legacy/empty-row case.
+const FALLBACK_POLL_INTERVAL_MIN = 10;
 const TRANSIENT_RETRY_MS = 60 * 60_000;           // 1 h retry on oracle error
 const FINALIZE_AGE_MS = 7 * 24 * 60 * 60_000;     // 7-day sunset
 
@@ -48,14 +52,24 @@ const FINALIZE_AGE_MS = 7 * 24 * 60 * 60_000;     // 7-day sunset
 // ~120 s worst case. Backlog drains slower (100/h vs 500/h) but
 // it actually completes per tick instead of getting killed
 // mid-batch with no progress persisted.
-// Conservative — production observed Vercel sin1 → RapidAPI
-// tail latency past 60 s on cold starts. With 120 s hard cap
-// and concurrency 4, 8 polls × 120 s / 4 = 240 s in the worst
-// case (all hit cap). Most polls should land in 5-10 s so real
-// wall-time is ~30 s steady. We can bump this once production
-// stabilises.
-const MAX_ORDERS_PER_TICK = 8;
-const POLL_CONCURRENCY = 4;
+// MAX_ORDERS_PER_TICK + POLL_CONCURRENCY auto-tune from
+// pollIntervalMinutes via computeTickSizing(). Fast cadence ⇒
+// bigger batch + more workers (drain rate matches firing rate),
+// slow cadence ⇒ smaller batch + fewer workers (RapidAPI headroom
+// for other crons).
+
+function computeTickSizing(intervalMin: number): {
+  maxOrders: number;
+  concurrency: number;
+} {
+  // Fast cadence (≤30 min) → bigger batch + 8 workers to keep up
+  // with the firing cron rate. Slower cadence (>60 min) → smaller
+  // batch + 4 workers since there's no urgency and we want to
+  // leave RapidAPI headroom for other crons.
+  if (intervalMin <= 30) return { maxOrders: 60, concurrency: 8 };
+  if (intervalMin <= 60) return { maxOrders: 30, concurrency: 6 };
+  return { maxOrders: 12, concurrency: 4 };
+}
 
 // Tick budget — exit cleanly if we approach Vercel's 300 s
 // maxDuration so the lambda returns a payload (with audit log)
@@ -108,6 +122,12 @@ export async function runPoller(): Promise<PollerResult> {
 
   const tickStart = Date.now();
   const now = new Date();
+  const toggles = await getSystemToggles().catch(() => null);
+  const pollIntervalMin =
+    toggles?.pollIntervalMinutes ?? FALLBACK_POLL_INTERVAL_MIN;
+  const sizing = computeTickSizing(pollIntervalMin);
+  const MAX_ORDERS_PER_TICK = sizing.maxOrders;
+  const POLL_CONCURRENCY = sizing.concurrency;
 
   // Fallback for orders that have aged past STALE_NEXT_POLL_MS
   // without progress — finalise them as completed_partial so the
@@ -211,9 +231,9 @@ export async function runPoller(): Promise<PollerResult> {
             ? withApiKey(
                 { id: key.id, token: key.token, provider: key.provider },
                 undefined,
-                () => pollOne(o, result),
+                () => pollOne(o, result, pollIntervalMin),
               )
-            : pollOne(o, result);
+            : pollOne(o, result, pollIntervalMin);
           await Promise.race([
             pollWork.catch((e) => {
               pollFailed = true;
@@ -265,7 +285,8 @@ export async function runPoller(): Promise<PollerResult> {
   // signal in the Vercel function logs explaining why.
   const elapsedMs = Date.now() - tickStart;
   console.log(
-    `[testbot-poll] inspected=${orders.length} polled=${result.ordersPolled} ` +
+    `[testbot-poll] interval=${pollIntervalMin}min cap=${MAX_ORDERS_PER_TICK} ` +
+      `inspected=${orders.length} polled=${result.ordersPolled} ` +
       `finalised=${result.ordersFinalised} ` +
       `rescheduledOnError=${result.ordersRescheduledOnError} ` +
       `errors=${result.errors.length} elapsed=${elapsedMs}ms ` +
@@ -275,7 +296,11 @@ export async function runPoller(): Promise<PollerResult> {
   return result;
 }
 
-async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
+async function pollOne(
+  order: OrderRow,
+  result: PollerResult,
+  pollIntervalMin: number,
+): Promise<void> {
   result.ordersPolled++;
   const t0 = Date.now();
   const log = (stage: string) => {
@@ -375,11 +400,18 @@ async function pollOne(order: OrderRow, result: PollerResult): Promise<void> {
     return;
   }
 
+  // Add a small jitter (±20 s) so a wave of orders that became
+  // due at the same minute don't all re-fire at the same minute
+  // next interval — protects the rate limiter from a thundering
+  // herd on each cadence multiple.
+  const jitterMs = Math.floor((Math.random() - 0.5) * 40_000);
   await prisma.testOrder.update({
     where: { id: order.id },
     data: {
       lastHealthCheckAt: new Date(),
-      nextPollAt: new Date(Date.now() + POLL_INTERVAL_MS),
+      nextPollAt: new Date(
+        Date.now() + pollIntervalMin * 60_000 + jitterMs,
+      ),
     },
   });
   log("done");
