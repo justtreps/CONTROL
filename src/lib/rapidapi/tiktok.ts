@@ -147,6 +147,15 @@ export type TikTokVideo = {
   mediaId: string;        // aweme_id
   authorUniqueId: string; // needed to build the permalink
   likeCount: number;
+  // Engagement-test metrics. TT exposes play_count + share_count per
+  // video; comment_count too. saveCount maps to "collect_count" on
+  // the raw response (TikTok's own field naming for "saves to
+  // collection"). Nullable because not every endpoint returns every
+  // field — caller falls back gracefully.
+  commentCount: number | null;
+  playCount: number | null;
+  shareCount: number | null;
+  saveCount: number | null;
   createTime: number | null; // epoch ms
 };
 
@@ -167,6 +176,10 @@ type RawUserVideos = {
       digg_count?: number;
       like_count?: number;
       play_count?: number;
+      view_count?: number;
+      comment_count?: number;
+      share_count?: number;
+      collect_count?: number;
       create_time?: number | string;
       createTime?: number | string;
     }>;
@@ -199,13 +212,34 @@ export async function fetchTikTokUserVideos(
     );
     if (!mediaId || !authorUniqueId) continue;
     const likeCount = Number(raw.digg_count ?? raw.like_count ?? 0);
+    const playCount =
+      raw.play_count !== undefined
+        ? Number(raw.play_count)
+        : raw.view_count !== undefined
+          ? Number(raw.view_count)
+          : null;
+    const commentCount =
+      raw.comment_count !== undefined ? Number(raw.comment_count) : null;
+    const shareCount =
+      raw.share_count !== undefined ? Number(raw.share_count) : null;
+    const saveCount =
+      raw.collect_count !== undefined ? Number(raw.collect_count) : null;
     const ctRaw = raw.create_time ?? raw.createTime ?? null;
     const createTime = ctRaw
       ? Number(ctRaw) < 1e12
         ? Number(ctRaw) * 1000
         : Number(ctRaw)
       : null;
-    videos.push({ mediaId, authorUniqueId, likeCount, createTime });
+    videos.push({
+      mediaId,
+      authorUniqueId,
+      likeCount,
+      commentCount,
+      playCount,
+      shareCount,
+      saveCount,
+      createTime,
+    });
   }
   return { count: videos.length, videos };
 }

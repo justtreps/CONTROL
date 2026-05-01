@@ -7,7 +7,12 @@ import {
   invalidateAccount,
   releasePost,
 } from "@/lib/pool/assign";
-import { fetchOracleFor } from "@/lib/pool/oracle";
+import {
+  fetchOracleFor,
+  fetchPostOracle,
+  pickPostMetric,
+  metricFromServiceType,
+} from "@/lib/pool/oracle";
 import { getSystemToggles } from "@/lib/system/toggles";
 import { TESTABLE_WHERE, SELLABLE_PLATFORMS } from "@/lib/services/testable";
 import { markTesting } from "@/lib/catalogue/lifecycle";
@@ -425,6 +430,9 @@ export async function attemptPlaceOrder({
     // informational (it scores the followers sample for fake-vs-
     // real signal) — losing it shouldn't block the placement.
     // Tolerate any failure here, fall back to neutral realism.
+    //
+    // Skip realism on engagement tests: we're not measuring the
+    // followers sample for those, and it's a wasted RapidAPI call.
     let sample: {
       realismScore: number | null;
       realismData: import("@prisma/client").Prisma.InputJsonValue;
@@ -432,19 +440,87 @@ export async function attemptPlaceOrder({
       realismScore: null,
       realismData: {} as import("@prisma/client").Prisma.InputJsonValue,
     };
-    try {
-      sample = await fetchFollowerSnapshot(
-        service.platform as Platform,
-        currentUsername,
-        oracle.userId
+    if (!isEngagement) {
+      try {
+        sample = await fetchFollowerSnapshot(
+          service.platform as Platform,
+          currentUsername,
+          oracle.userId
+        );
+      } catch (e) {
+        console.warn(
+          `[testbot] fetchFollowerSnapshot fallback for svc#${service.id} acct#${account.id}: ${(e as Error).message.slice(0, 120)}`
+        );
+      }
+    }
+
+    // Baseline routing: follower flow uses the parent's followerCount
+    // (oracle already fetched), engagement flow needs the post's own
+    // metric (likes/views/etc.) which the parent oracle doesn't carry.
+    // For engagement we issue a second RapidAPI call to /userposts/
+    // to find the assigned post and read its current metric.
+    let targetMetric: ReturnType<typeof metricFromServiceType> = null;
+    let baselineCount: number;
+    if (isEngagement) {
+      targetMetric = metricFromServiceType(service.serviceType);
+      if (!targetMetric) {
+        await releaseHeld();
+        return {
+          kind: "skip",
+          reason: `engagement_unknown_metric:${service.serviceType}`,
+        };
+      }
+      if (!postPick) {
+        await releaseHeld();
+        return { kind: "skip", reason: "engagement_no_post_assigned" };
+      }
+      const postOracle = await fetchPostOracle(
+        service.platform,
+        account.userId,
+        postPick.mediaId,
       );
-    } catch (e) {
-      console.warn(
-        `[testbot] fetchFollowerSnapshot fallback for svc#${service.id} acct#${account.id}: ${(e as Error).message.slice(0, 120)}`
-      );
+      if (!postOracle.ok) {
+        // Post is gone (ghost) → invalidate so we don't re-serve it,
+        // then ask the caller to retry with another post. Same shape
+        // as the private-flip retry above.
+        if (postOracle.reason === "ghost") {
+          await prisma.testPost.update({
+            where: { id: postPick.id },
+            data: {
+              status: "invalid",
+              invalidReason: "deleted",
+              invalidatedAt: new Date(),
+              active: false,
+            },
+          });
+          return {
+            kind: "retry_private",
+            reason: `post_ghost_${postPick.mediaId}`,
+          };
+        }
+        await releaseHeld();
+        return {
+          kind: "skip",
+          reason: `post_oracle_error: ${postOracle.message.slice(0, 80)}`,
+        };
+      }
+      const metricCount = pickPostMetric(postOracle, targetMetric);
+      if (metricCount === null) {
+        // Platform doesn't expose this metric on the user-posts
+        // endpoint (e.g. IG share/save). Releasing the post so it
+        // can serve another metric on a different service.
+        await releaseHeld();
+        return {
+          kind: "skip",
+          reason: `metric_unavailable:${service.platform}/${targetMetric}`,
+        };
+      }
+      baselineCount = metricCount;
+    } else {
+      baselineCount = oracle.followerCount;
     }
     const baseline = {
-      count: oracle.followerCount,
+      count: baselineCount,
       realismScore: sample.realismScore,
       realismData: sample.realismData,
     };
@@ -512,6 +588,13 @@ export async function attemptPlaceOrder({
       data: {
         serviceId: service.id,
         testAccountId: account.id,
+        // testPostId is set ONLY for engagement; the column is
+        // nullable. targetType + targetMetric are snapshotted so
+        // later edits to the parent Service don't retroactively
+        // change what this row was measuring.
+        testPostId: isEngagement ? postPick?.id : null,
+        targetType: isEngagement ? "post" : "account",
+        targetMetric: isEngagement ? targetMetric : null,
         bulkmedyaOrderId: simulated ? `sim-${order.order}` : String(order.order),
         targetQuantity: testQty,
         baselineCount: baseline.count,

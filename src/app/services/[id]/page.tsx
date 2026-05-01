@@ -45,6 +45,11 @@ export default async function ServiceDetailPage({
         take: 9,
         include: {
           testAccount: true,
+          // Engagement test orders carry a TestPost. Including it here
+          // lets the card render the post permalink + the right metric
+          // label (likes / views / etc.) instead of the parent
+          // username, which was the wrong target for engagement tests.
+          testPost: true,
           measurements: { orderBy: { checkedAt: "asc" } },
         },
       },
@@ -173,6 +178,25 @@ export default async function ServiceDetailPage({
       (delivered / Math.max(1, o.targetQuantity)) * 100
     );
     const latestM = ms[ms.length - 1];
+    // Engagement vs follower flow — drives the card label (post URL
+    // vs @username) AND the unit shown next to "LIVRÉ" so the
+    // operator can immediately tell if a TestOrder for a "likes"
+    // service is correctly tracking likes (not followers).
+    const isEngagement = o.targetType === "post";
+    const targetLabel = isEngagement
+      ? o.testPost?.mediaUrl ?? "[ POST INTROUVABLE ]"
+      : `@${o.testAccount.username}`;
+    const targetMetricLabel = (() => {
+      if (!isEngagement) return "ABONNÉS";
+      const m = (o.targetMetric ?? service.serviceType).toUpperCase();
+      // Map historical aliases to the user-facing word.
+      if (m === "LIKES" || m === "LIKE") return "LIKES";
+      if (m === "VIEWS" || m === "VIEW" || m === "PLAYS") return "VUES";
+      if (m === "COMMENTS") return "COMMENTAIRES";
+      if (m === "SHARES") return "PARTAGES";
+      if (m === "SAVES" || m === "BOOKMARKS" || m === "FAVORITES") return "SAVES";
+      return m;
+    })();
     // State chip — replaces the previous "EN COURS" / status mix
     // that was confusing operators on fresh-just-placed tests
     // (showed "0 livré" with no indication that the poll hadn't
@@ -234,7 +258,13 @@ export default async function ServiceDetailPage({
     return {
       id: o.id,
       placedAt: o.placedAt,
-      account: `@${o.testAccount.username}`,
+      // Legacy field name retained for backward-compat with the
+      // existing card markup, but content depends on flow.
+      account: targetLabel,
+      isEngagement,
+      targetIsLink: isEngagement,
+      targetMetricLabel,
+      delivered,
       quantity: o.targetQuantity,
       deliveredPct,
       checkpoint: latestM?.checkpoint ?? "—",
@@ -446,15 +476,27 @@ export default async function ServiceDetailPage({
                       {o.stateChip.label}
                     </span>
                   </div>
-                  <div className="brand font-display text-lg uppercase tracking-tight text-white truncate mb-1">
-                    {o.account}
-                  </div>
+                  {o.targetIsLink ? (
+                    <a
+                      href={o.account}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="brand font-display text-lg uppercase tracking-tight text-white truncate mb-1 block hover:text-[#FF3300] transition-colors interactive"
+                      title={`Test engagement (${o.targetMetricLabel.toLowerCase()}) — ouvrir le post`}
+                    >
+                      {o.account}
+                    </a>
+                  ) : (
+                    <div className="brand font-display text-lg uppercase tracking-tight text-white truncate mb-1">
+                      {o.account}
+                    </div>
+                  )}
                   <div className="font-mono text-xs text-[#666666] tracking-widest uppercase mb-6">
-                    QTÉ : {o.quantity}
+                    QTÉ : {o.quantity} {o.targetMetricLabel}
                   </div>
                   <div className="flex items-center justify-between mb-3">
                     <span className="font-mono text-xs text-[#666666] tracking-widest uppercase">
-                      LIVRÉ
+                      LIVRÉ ({o.targetMetricLabel})
                     </span>
                     <ScoreBadge score={o.deliveredPct} size="sm" />
                   </div>

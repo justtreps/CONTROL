@@ -24,7 +24,12 @@
 // momentary RapidAPI hiccup doesn't lose half a day of signal.
 
 import { prisma } from "@/lib/prisma";
-import { fetchOracleFor } from "@/lib/pool/oracle";
+import {
+  fetchOracleFor,
+  fetchPostOracle,
+  pickPostMetric,
+  type PostMetric,
+} from "@/lib/pool/oracle";
 import {
   onMeasurementWritten,
   onTestCompleted,
@@ -112,7 +117,15 @@ type OrderRow = {
   targetQuantity: number;
   baselineCount: number;
   placedAt: Date;
-  service: { platform: string };
+  // Engagement-flow fields. targetType='post' means this order was
+  // placed against a TestPost (likes/views/etc.), and the poller must
+  // read post-level counts via fetchPostOracle instead of the parent
+  // account's followers. testPost is null for follower-flow rows.
+  targetType: string;
+  targetMetric: string | null;
+  testPostId: number | null;
+  testPost: { mediaId: string; mediaUrl: string } | null;
+  service: { platform: string; serviceType: string };
   testAccount: { userId: string };
 };
 
@@ -168,7 +181,11 @@ export async function runPoller(): Promise<PollerResult> {
       targetQuantity: true,
       baselineCount: true,
       placedAt: true,
-      service: { select: { platform: true } },
+      targetType: true,
+      targetMetric: true,
+      testPostId: true,
+      testPost: { select: { mediaId: true, mediaUrl: true } },
+      service: { select: { platform: true, serviceType: true } },
       testAccount: { select: { userId: true } },
     },
     orderBy: { nextPollAt: "asc" },
@@ -312,30 +329,88 @@ async function pollOne(
     if (ms > 1000) console.log(`[pollOne TO#${order.id}] ${stage} t=${ms}ms`);
   };
 
-  let oracle;
-  try {
-    oracle = await fetchOracleFor(
-      order.service.platform,
-      order.testAccount.userId
+  // Branch on targetType: follower flow reads parent's followerCount,
+  // engagement flow reads the assigned post's likes/views/etc. Both
+  // route through the same Measurement upsert below.
+  const isEngagement = order.targetType === "post";
+  let currentCount: number;
+
+  if (isEngagement) {
+    if (!order.testPost || !order.targetMetric) {
+      // Schema invariant: targetType='post' implies both fields set.
+      // Defensive — if a row slipped through with the legacy shape
+      // we mark it as misplaced and move on so it doesn't burn
+      // RapidAPI calls forever.
+      await prisma.testOrder.update({
+        where: { id: order.id },
+        data: {
+          status: "aborted_misplaced",
+          completedAt: new Date(),
+          nextPollAt: null,
+          abortReason: "engagement_row_missing_post_or_metric",
+        },
+      });
+      result.ordersFinalised++;
+      return;
+    }
+    let postOracle;
+    try {
+      postOracle = await fetchPostOracle(
+        order.service.platform,
+        order.testAccount.userId,
+        order.testPost.mediaId,
+      );
+      log("post_oracle_done");
+    } catch (e) {
+      await rescheduleOnError(order.id, (e as Error).message, result);
+      return;
+    }
+    if (!postOracle.ok) {
+      await rescheduleOnError(order.id, postOracle.message, result);
+      return;
+    }
+    const metricCount = pickPostMetric(
+      postOracle,
+      order.targetMetric as PostMetric,
     );
-    log("oracle_done");
-  } catch (e) {
-    // Unexpected throw (network glitch, key switch mid-call, etc.) —
-    // reschedule in 1 h and log. We don't cascade to abort because
-    // a 12 h delay is plenty to absorb transients.
-    await rescheduleOnError(order.id, (e as Error).message, result);
-    return;
-  }
+    if (metricCount === null) {
+      // Provider stopped exposing this metric (rare — IG sometimes
+      // drops view_count from older posts). Reschedule in 1h and
+      // hope it comes back; not worth aborting the test.
+      await rescheduleOnError(
+        order.id,
+        `metric_unavailable:${order.targetMetric}`,
+        result,
+      );
+      return;
+    }
+    currentCount = metricCount;
+  } else {
+    let oracle;
+    try {
+      oracle = await fetchOracleFor(
+        order.service.platform,
+        order.testAccount.userId
+      );
+      log("oracle_done");
+    } catch (e) {
+      // Unexpected throw (network glitch, key switch mid-call,
+      // etc.) — reschedule in 1 h and log. We don't cascade to
+      // abort because a 12 h delay is plenty to absorb transients.
+      await rescheduleOnError(order.id, (e as Error).message, result);
+      return;
+    }
 
-  if (!oracle.ok) {
-    // oracle.reason is 'ghost' | 'error'. Either way we don't
-    // invalidate the account (pool is managed by health-check cron)
-    // and we don't auto-retry. Record the failed read + retry in 1h.
-    await rescheduleOnError(order.id, oracle.message, result);
-    return;
-  }
+    if (!oracle.ok) {
+      // oracle.reason is 'ghost' | 'error'. Either way we don't
+      // invalidate the account (pool is managed by health-check cron)
+      // and we don't auto-retry. Record the failed read + retry in 1h.
+      await rescheduleOnError(order.id, oracle.message, result);
+      return;
+    }
 
-  const currentCount = oracle.followerCount;
+    currentCount = oracle.followerCount;
+  }
   const deliveredQty = Math.max(0, currentCount - order.baselineCount);
   const ageMs = Date.now() - order.placedAt.getTime();
   const isSunset = ageMs >= FINALIZE_AGE_MS;

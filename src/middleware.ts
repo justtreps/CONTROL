@@ -16,6 +16,7 @@ const PUBLIC_PATHS = [
   "/api/pool/reclassify-services",
   "/api/pool/backfill-country",
   "/api/pool/backfill-last-tested",
+  "/api/pool/reconcile-engagement",
   "/api/catalogue/seed",
   "/api/catalogue/rematch",
   "/api/workflows/seed",

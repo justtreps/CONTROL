@@ -377,6 +377,14 @@ export type InstagramPost = {
   shortcode: string;     // used to build https://www.instagram.com/p/{code}/
   mediaType: "post" | "reel";
   likeCount: number;
+  // Engagement-test reads — exposed per-post by /userposts/. Some
+  // fields are only present on certain media types (play_count on
+  // reels, view_count on video posts), so they're nullable. Callers
+  // that need a specific metric must handle null (skip placement /
+  // fall back to likes + log).
+  commentCount: number | null;
+  viewCount: number | null;
+  playCount: number | null;
   takenAt: number | null; // epoch ms (null if provider didn't expose)
 };
 
@@ -394,6 +402,12 @@ type RawUserPosts = {
       shortcode?: string;
       like_count?: number;
       likes_count?: number;
+      comment_count?: number;
+      comments_count?: number;
+      view_count?: number;
+      view_counts?: number;
+      ig_play_count?: number;
+      play_count?: number;
       taken_at?: number | string;
       taken_at_timestamp?: number | string;
       media_type?: number; // 1=photo, 2=video/reel, 8=carousel
@@ -423,6 +437,24 @@ export async function fetchInstagramUserPosts(
     if (!mediaId || !shortcode) continue;
     const isReel = raw.product_type === "clips" || raw.media_type === 2;
     const likeCount = Number(raw.like_count ?? raw.likes_count ?? 0);
+    const commentCount =
+      raw.comment_count !== undefined
+        ? Number(raw.comment_count)
+        : raw.comments_count !== undefined
+          ? Number(raw.comments_count)
+          : null;
+    const viewCount =
+      raw.view_count !== undefined
+        ? Number(raw.view_count)
+        : raw.view_counts !== undefined
+          ? Number(raw.view_counts)
+          : null;
+    const playCount =
+      raw.ig_play_count !== undefined
+        ? Number(raw.ig_play_count)
+        : raw.play_count !== undefined
+          ? Number(raw.play_count)
+          : null;
     const takenAtRaw = raw.taken_at ?? raw.taken_at_timestamp ?? null;
     const takenAt = takenAtRaw
       ? // IG returns either seconds (legacy) or millis depending on endpoint.
@@ -436,6 +468,9 @@ export async function fetchInstagramUserPosts(
       shortcode,
       mediaType: isReel ? "reel" : "post",
       likeCount,
+      commentCount,
+      viewCount,
+      playCount,
       takenAt,
     });
   }

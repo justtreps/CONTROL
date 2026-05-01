@@ -35,12 +35,12 @@ model Service {
   //   'unknown'         — the classifier couldn't decide; testbot
   //                       skips until an operator triages via the
   //                       services-review page
-  poolType        String   @default("unknown")
+  poolType String @default("unknown")
 
   // Optional ISO 2-letter country code when the service is geo-
   // targeted (e.g. "Instagram Followers [ 🇫🇷 France ]" → "FR").
   // null means the service accepts any country.
-  targetCountry   String?
+  targetCountry String?
 
   // Flipped true by the classifier when its confidence is too low to
   // assign a poolType — surfaces in /config/services-review for
@@ -55,13 +55,13 @@ model Service {
   // and routinely is low-priority for triage even if it's in the
   // manual-review queue, while rows never tested or stale are
   // candidates for disable/archival.
-  lastTestedAt    DateTime?
+  lastTestedAt DateTime?
 
   // Counter for the catalogue health-check revive loop. Reset to
   // 0 on a successful revive; bumped on every failed revive
   // attempt against a PLACEMENT_FAILED service. After 3 failures
   // the service flips to PERMANENTLY_FAILED.
-  placementAttemptCount Int      @default(0)
+  placementAttemptCount Int @default(0)
 
   // When the daily BulkMedya sync stops returning this
   // bulkmedyaId, we stamp this and flip active=false +
@@ -74,11 +74,11 @@ model Service {
   // services that bounced for balance reasons (neutral_balance,
   // insufficient_balance, etc.) and compute the minimum recharge
   // amount to retry just those.
-  lastPlacementError    String?
-  lastPlacementErrorAt  DateTime?
+  lastPlacementError   String?
+  lastPlacementErrorAt DateTime?
 
-  testOrders      TestOrder[]
-  scores          ServiceScore[]
+  testOrders         TestOrder[]
+  scores             ServiceScore[]
   productCandidacies ProductServiceCandidate[]
 
   @@index([platform, serviceType, active])
@@ -96,8 +96,8 @@ model MyBoostProduct {
   id               Int      @id @default(autoincrement())
   slug             String   @unique
   displayName      String
-  platform         String   // "instagram" | "tiktok"
-  productType      String   // "followers" | "likes" | "views" | "shares" | "saves"
+  platform         String // "instagram" | "tiktok"
+  productType      String // "followers" | "likes" | "views" | "shares" | "saves"
   // Free-form JSON so the matcher can evolve per-product without
   // schema churn (e.g. extra blacklist words, min-rate thresholds).
   matchingCriteria Json     @default("{}")
@@ -105,7 +105,7 @@ model MyBoostProduct {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  candidates       ProductServiceCandidate[]
+  candidates ProductServiceCandidate[]
 
   @@index([platform, productType])
   @@index([isActive])
@@ -115,28 +115,28 @@ model MyBoostProduct {
 // Services that match its whitelist. currentScore + rank are filled
 // by the scoring engine on each pass.
 model ProductServiceCandidate {
-  id              Int      @id @default(autoincrement())
-  productId       Int
-  product         MyBoostProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
-  serviceId       Int
-  service         Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  id        Int            @id @default(autoincrement())
+  productId Int
+  product   MyBoostProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  serviceId Int
+  service   Service        @relation(fields: [serviceId], references: [id], onDelete: Cascade)
 
   // Matcher output — "is this a valid candidate right now?". Flipped
   // false if the service drops out of scope on a re-match (inactive,
   // renamed, reclassified). We keep the row around instead of
   // deleting so scoring history survives.
-  isEligible      Boolean  @default(true)
+  isEligible Boolean @default(true)
 
   // Operator override — "never use this service for this product no
   // matter what the matcher says". Set from the catalogue detail UI.
-  forceExcluded   Boolean  @default(false)
+  forceExcluded Boolean @default(false)
 
   // Scoring outputs. currentScore is 0-100; rank is position within
   // the product's ranked candidate list (rank=1 is the top pick the
   // router will try first). Both null until the scoring engine has
   // seen enough test orders.
-  currentScore    Float?
-  rank            Int?
+  currentScore Float?
+  rank         Int?
 
   // Lifecycle state — see lib/catalogue/lifecycle.ts for the full
   // machine. Stored per product×service so a service that qualifies
@@ -149,15 +149,15 @@ model ProductServiceCandidate {
   //   QUALIFIED — most recent completed test delivered >0 + score≥40
   //   MONITORED — qualified + in the daily retest loop
   //   DEAD      — 2 consecutive 0-delivery terminal tests, auto-killed
-  lifecycleStatus String   @default("NEW")
+  lifecycleStatus String @default("NEW")
 
   // Geo detected by the matcher after stripping emoji / country
   // suffixes from the service name. null = global service.
-  targetCountry   String?
+  targetCountry String?
 
-  lastScoredAt    DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  lastScoredAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@unique([productId, serviceId])
   @@index([productId, rank])
@@ -186,30 +186,30 @@ model TestAccount {
   // means the account has at least one live post (tracked in Test
   // AccountMedia) and is used to test likes / views / shares. All
   // pre-migration rows keep the default so nothing breaks.
-  accountType            String    @default("follower_test")
+  accountType String @default("follower_test")
 
   // Detected nationality (ISO 2-letter code) + how confident the
   // detector was. null/'unknown' means the detector couldn't pin one
   // down — still usable, just not for geo-targeted services.
-  detectedCountry        String?
-  countryConfidence      String    @default("unknown") // 'high' | 'medium' | 'low' | 'unknown'
+  detectedCountry   String?
+  countryConfidence String  @default("unknown") // 'high' | 'medium' | 'low' | 'unknown'
 
   // ── Pool system extensions (see pool-full-control.md) ──
   // Lifecycle state for accounts in the pool:
   //   available → assigned → consumed  (normal happy path, 1 account = 1 test)
   //   available → invalid              (disqualified by health check)
   //   consumed|invalid → archived      (after 90d, via cleanup job)
-  status                 String    @default("available")
+  status String @default("available")
 
-  assignedTestOrderId    Int?
-  assignedAt             DateTime?
-  consumedAt             DateTime?
+  assignedTestOrderId Int?
+  assignedAt          DateTime?
+  consumedAt          DateTime?
 
-  firstSeenAt            DateTime  @default(now())
-  lastCheckedAt          DateTime  @default(now())
-  lastFollowerCount      Int?
-  lastMediaCount         Int?
-  lastFollowingCount     Int?
+  firstSeenAt        DateTime @default(now())
+  lastCheckedAt      DateTime @default(now())
+  lastFollowerCount  Int?
+  lastMediaCount     Int?
+  lastFollowingCount Int?
 
   // ── Engagement-extraction metadata ───────────────────────────────
   // Set to true once we've had a trusted oracle read on this account —
@@ -217,28 +217,28 @@ model TestAccount {
   // lastMediaCount is fresh and can drive the phase-1 extraction flow
   // without a second RapidAPI roundtrip. Legacy rows default to false
   // until the next health-check refresh sets it.
-  hasPostsInfo           Boolean   @default(false)
+  hasPostsInfo         Boolean   @default(false)
   // When did we last run /user/posts against this account for the
   // engagement pool? Null = never. Extract flow re-picks after 30d.
-  engagementCheckedAt    DateTime?
-  engagementPostsFound   Int?
+  engagementCheckedAt  DateTime?
+  engagementPostsFound Int?
   // True when the last extract pass returned zero qualifying posts —
   // skip on future passes until the parent is re-checked (the 30d
   // revisit window clears this flag).
-  engagementExhausted    Boolean   @default(false)
+  engagementExhausted  Boolean   @default(false)
 
   // 'big_account_followers' | 'random_username' | 'manual'
-  scrapeSource           String?
-  scrapeSeedAccount      String?
+  scrapeSource      String?
+  scrapeSeedAccount String?
 
   // 'banned' | 'became_active' | 'became_private' | 'deleted' | 'other'
-  invalidReason          String?
-  invalidatedAt          DateTime?
+  invalidReason String?
+  invalidatedAt DateTime?
 
-  notes                  String?
+  notes String?
 
-  testOrders             TestOrder[]
-  posts                  TestPost[]
+  testOrders TestOrder[]
+  posts      TestPost[]
 
   @@unique([platform, username])
   @@index([platform, active])
@@ -269,32 +269,32 @@ model TestAccount {
 // routing, health-check cascades) but does NOT carry the engagement
 // lifecycle anymore — that lives on this row.
 model TestPost {
-  id                Int       @id @default(autoincrement())
+  id                Int         @id @default(autoincrement())
   testAccount       TestAccount @relation(fields: [testAccountId], references: [id], onDelete: Cascade)
   testAccountId     Int
-  platform          String    // denormalized from parent for fast filtering
-  mediaId           String    // platform-native id (IG pk, TT aweme_id)
-  mediaUrl          String    // permalink we hand to BulkMedya
-  mediaType         String    // 'post' | 'reel' | 'video'
+  platform          String // denormalized from parent for fast filtering
+  mediaId           String // platform-native id (IG pk, TT aweme_id)
+  mediaUrl          String // permalink we hand to BulkMedya
+  mediaType         String // 'post' | 'reel' | 'video'
   postedAt          DateTime?
-  naturalLikesCount Int       @default(0)
+  naturalLikesCount Int         @default(0)
 
   // Lifecycle — mirrors TestAccount:
   //   available → assigned → consumed   (normal happy path)
   //   available → invalid                 (deleted / parent banned / etc.)
-  status                 String    @default("available")
-  active                 Boolean   @default(true)
-  assignedTestOrderId    Int?
-  assignedAt             DateTime?
-  consumedAt             DateTime?
+  status              String    @default("available")
+  active              Boolean   @default(true)
+  assignedTestOrderId Int?
+  assignedAt          DateTime?
+  consumedAt          DateTime?
   // 'deleted'         — provider returned 404 on health check
   // 'parent_invalid'  — owner TestAccount became invalid
   // 'manual'          — operator flipped it
-  invalidReason          String?
-  invalidatedAt          DateTime?
+  invalidReason       String?
+  invalidatedAt       DateTime?
 
-  firstSeenAt            DateTime  @default(now())
-  lastCheckedAt          DateTime  @default(now())
+  firstSeenAt   DateTime @default(now())
+  lastCheckedAt DateTime @default(now())
 
   // Where did this post come from?
   //   'from_follower_pool' — phase-1 extract: we already had the
@@ -302,7 +302,13 @@ model TestPost {
   //                          1 RapidAPI call to fetch its posts.
   //   'seeds'              — phase-2 seed scrape: 2 calls (oracle
   //                          on the candidate + posts).
-  scrapeSource           String    @default("seeds")
+  scrapeSource String @default("seeds")
+
+  // Inverse relation for TestOrder.testPostId. Engagement tests bind
+  // the lifecycle to the post, not just the account, so the test runs
+  // through THIS row even though the parent TestAccount FK still
+  // exists for ghost/private safety checks.
+  testOrders TestOrder[]
 
   @@unique([testAccountId, mediaId])
   @@index([platform, status])
@@ -314,35 +320,35 @@ model TestPost {
 
 // Single-row config for the pool system (id=1). Editable from the /pool UI.
 model PoolConfig {
-  id                               Int      @id @default(1)
+  id Int @id @default(1)
 
   // Auto-refill
-  autoRefillEnabled                Boolean  @default(true)
-  refillThresholdInstagram         Int      @default(500)
-  refillTargetInstagram            Int      @default(1000)
-  refillThresholdTiktok            Int      @default(500)
-  refillTargetTiktok               Int      @default(1000)
+  autoRefillEnabled        Boolean @default(true)
+  refillThresholdInstagram Int     @default(500)
+  refillTargetInstagram    Int     @default(1000)
+  refillThresholdTiktok    Int     @default(500)
+  refillTargetTiktok       Int     @default(1000)
 
   // RapidAPI budget caps per run. Dropped from 10000/3000 to 3000/
   // 1500 after seeing the daily quota hit ~7500 calls/24h — a tighter
   // ceiling per run amortizes better across the day and leaves
   // headroom for measurement bot + testbot + seeds-health-check.
-  maxRapidapiCallsPerScrapeRun     Int      @default(10000)
-  maxRapidapiCallsPerHealthcheck   Int      @default(1500)
-  maxAttemptsMethodB               Int      @default(5000)
-  maxPagesPerSeed                  Int      @default(50)
+  maxRapidapiCallsPerScrapeRun   Int @default(10000)
+  maxRapidapiCallsPerHealthcheck Int @default(1500)
+  maxAttemptsMethodB             Int @default(5000)
+  maxPagesPerSeed                Int @default(50)
 
   // Split between big-account scraping (A) and random-username probing (B)
-  methodARatio                     Float    @default(0.7)
+  methodARatio Float @default(0.7)
 
   // Global kill switch for Phase B (random-username probing). When
   // false the scraper skips Phase B entirely even if methodARatio < 1,
   // and the /pool UI grays out the Method-B configuration surface.
-  methodBEnabled                   Boolean  @default(true)
+  methodBEnabled Boolean @default(true)
 
   // Health check schedule (cron expression — read by the orchestrator)
-  healthCheckEnabled               Boolean  @default(true)
-  healthCheckCron                  String   @default("0 3 * * *")
+  healthCheckEnabled Boolean @default(true)
+  healthCheckCron    String  @default("0 3 * * *")
 
   // Fresh-account qualification thresholds. Used BOTH at scrape time
   // (accept candidate when value <= threshold) AND at health-check
@@ -365,17 +371,17 @@ model PoolConfig {
   // room while still excluding genuinely "active" profiles. TikTok
   // uses maxFollowerCountTiktok — TT's viral dynamics push dormant
   // accounts to 5-30 followers through random exposure already.
-  maxFollowerCount                 Int      @default(50)
-  maxFollowerCountTiktok           Int      @default(30)
-  maxMediaCount                    Int      @default(999999)
-  maxFollowingCount                Int      @default(100)
-  requireNotPrivate                Boolean  @default(true)
+  maxFollowerCount       Int     @default(50)
+  maxFollowerCountTiktok Int     @default(30)
+  maxMediaCount          Int     @default(999999)
+  maxFollowingCount      Int     @default(100)
+  requireNotPrivate      Boolean @default(true)
 
   // Stricter health-check guardrail reserved for media_count. Kept
   // separate from maxMediaCount for now since media_count checks
   // might evolve independently (we routinely accept posts at scrape
   // time but could want to flag later growth).
-  invalidateIfMediaAbove           Int      @default(999999)
+  invalidateIfMediaAbove Int @default(999999)
 
   // ── Engagement pool ──────────────────────────────────────────────
   // When enabled, accounts scraped with mediaCount >= engagementPostsMin
@@ -385,49 +391,49 @@ model PoolConfig {
   // pool behaviour is preserved until the operator opts in. Country
   // routing is handled at MyBoost→CONTROL time, not here; TestAccount.
   // detectedCountry is kept for that downstream use.
-  engagementPoolEnabled            Boolean  @default(false)
-  engagementPoolTargetInstagram    Int      @default(500)
-  engagementPoolTargetTiktok       Int      @default(500)
-  engagementPostsMin               Int      @default(1)
-  engagementLikesMaxPerPost        Int      @default(20)
-  engagementFreshnessMaxDays       Int      @default(30)
+  engagementPoolEnabled         Boolean @default(false)
+  engagementPoolTargetInstagram Int     @default(500)
+  engagementPoolTargetTiktok    Int     @default(500)
+  engagementPostsMin            Int     @default(1)
+  engagementLikesMaxPerPost     Int     @default(20)
+  engagementFreshnessMaxDays    Int     @default(30)
 
   // BulkMedya catalog sync cadence. The Vercel cron fires every hour
   // (0 * * * *) but the endpoint gates on this field + lastServices
   // SyncAt — sync actually runs only when the elapsed time since the
   // last successful run ≥ servicesSyncFrequencyHours. Default 1 =
   // every hour (no gating).
-  servicesSyncFrequencyHours       Int       @default(1)
-  lastServicesSyncAt               DateTime?
-  lastServicesSyncResult           Json?
+  servicesSyncFrequencyHours Int       @default(1)
+  lastServicesSyncAt         DateTime?
+  lastServicesSyncResult     Json?
   // In-flight lock for the fire-and-forget manual sync + scheduled
   // cron. Set at dispatch, cleared at completion (or on error). Any
   // second trigger while this is recent (<10 min) gets "already_
   // running". Values older than 10 min are treated as stale locks
   // left by a dead worker and ignored.
-  servicesSyncStartedAt            DateTime?
+  servicesSyncStartedAt      DateTime?
 
-  updatedAt                        DateTime @updatedAt
+  updatedAt DateTime @updatedAt
 }
 
 // Big accounts whose followers list we paginate (scrape method A).
 model PoolSeedAccount {
-  id             Int       @id @default(autoincrement())
-  platform       String
-  username       String
+  id       Int    @id @default(autoincrement())
+  platform String
+  username String
 
   // Stable platform-side identifier resolved on the first health check.
   // Lets us survive username renames (which would otherwise break the
   // @@unique([platform, username]) lookup and make the seed unreachable).
-  userId         String?
+  userId String?
 
-  enabled        Boolean   @default(true)
-  priority       Int       @default(0)
-  addedAt        DateTime  @default(now())
+  enabled  Boolean  @default(true)
+  priority Int      @default(0)
+  addedAt  DateTime @default(now())
 
   // Last time the daily seeds health check verified this seed exists
   // and is still public. Null for never-checked (freshly added) seeds.
-  lastCheckedAt  DateTime?
+  lastCheckedAt DateTime?
 
   // Cross-run error streak. The scraper increments this whenever it
   // hits a processing error on the seed (e.g. RapidAPI "Private
@@ -437,8 +443,8 @@ model PoolSeedAccount {
   // and logs action='auto_disabled_private' so operators can see
   // why. lastErrorReason records the most recent failure verbatim
   // so the log surfaces the actual provider message.
-  consecutiveErrors  Int      @default(0)
-  lastErrorReason    String?
+  consecutiveErrors Int     @default(0)
+  lastErrorReason   String?
 
   @@unique([platform, username])
   @@index([platform, enabled, priority])
@@ -448,16 +454,16 @@ model PoolSeedAccount {
 // (seed deleted + replaced, seed renamed, ok) so operators can scroll
 // recent days' actions when they suspect a seed issue.
 model PoolSeedHealthLog {
-  id            Int      @id @default(autoincrement())
-  platform      String
+  id           Int      @id @default(autoincrement())
+  platform     String
   // 'ok' | 'renamed' | 'deleted_mort'
   //   | 'replaced_from_cache' | 'cache_empty_refill_triggered'
   //   | 'error' | 'manual_trigger'
-  action        String
-  seedUsername  String   // username at the time of the check
-  newUsername   String?  // rename target, or replacement handle
-  reason        String?  // oracle message / transient error detail
-  createdAt     DateTime @default(now())
+  action       String
+  seedUsername String // username at the time of the check
+  newUsername  String? // rename target, or replacement handle
+  reason       String? // oracle message / transient error detail
+  createdAt    DateTime @default(now())
 
   @@index([createdAt])
   @@index([platform, createdAt])
@@ -477,7 +483,7 @@ model PoolUsernamePrefix {
 // entries; the cron keeps the pool at >=100 per platform.
 model PoolSeedSuggestionPool {
   id        Int      @id @default(autoincrement())
-  platform  String   // 'instagram' | 'tiktok'
+  platform  String // 'instagram' | 'tiktok'
   username  String
   createdAt DateTime @default(now())
 
@@ -490,11 +496,11 @@ model PoolSeedSuggestionPool {
 // PoolSeedAccount (action='integrated') or dismissed (action='rejected')
 // so the /api/pool/seeds/suggestions endpoint never surfaces it again.
 model PoolSeedSuggestionAction {
-  id        Int      @id @default(autoincrement())
-  platform  String
-  username  String
-  action    String   // 'integrated' | 'rejected'
-  actedAt   DateTime @default(now())
+  id       Int      @id @default(autoincrement())
+  platform String
+  username String
+  action   String // 'integrated' | 'rejected'
+  actedAt  DateTime @default(now())
 
   @@unique([platform, username])
   @@index([platform, action])
@@ -503,27 +509,27 @@ model PoolSeedSuggestionAction {
 // Run history for scrape / health-check / cleanup jobs, with a
 // cooperative stop flag so the orchestrator can bail mid-batch.
 model PoolJob {
-  id             Int      @id @default(autoincrement())
-  jobType        String   // 'scrape' | 'health_check' | 'cleanup'
-  platform       String?  // null = multi-platform
-  trigger        String   // 'manual' | 'cron' | 'auto_refill'
+  id            Int     @id @default(autoincrement())
+  jobType       String // 'scrape' | 'health_check' | 'cleanup'
+  platform      String? // null = multi-platform
+  trigger       String // 'manual' | 'cron' | 'auto_refill'
   // Which RapidApiKey this job is currently using. Set at creation
   // (round-robin via pickNextApiKey) and may drift during the run
   // if the original key caps and the IG client auto-switches to
   // another active key. null = no key assigned yet, or running
   // under the env-var fallback when no DB key exists.
-  rapidApiKeyId  Int?
+  rapidApiKeyId Int?
 
-  status         String   @default("pending")
+  status String @default("pending")
   // 'pending' | 'running' | 'completed' | 'stopped' | 'error'
 
-  startedAt      DateTime @default(now())
-  endedAt        DateTime?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
 
-  stats          Json?
-  error          String?
+  stats Json?
+  error String?
 
-  stopRequested  Boolean  @default(false)
+  stopRequested Boolean @default(false)
 
   @@index([status, startedAt])
   @@index([jobType, status])
@@ -534,45 +540,65 @@ model PoolJob {
 // robin at job creation and auto-fails over to another active key
 // inside a running job when the current one caps.
 model RapidApiKey {
-  id                 Int       @id @default(autoincrement())
-  provider           String    // 'instagram' | 'tiktok'
-  label              String
-  token              String
+  id              Int       @id @default(autoincrement())
+  provider        String // 'instagram' | 'tiktok'
+  label           String
+  token           String
   // 'active'   — available to be picked + receive traffic
   // 'capped'   — quota exceeded, skipped until resetDayOfMonth hits
   // 'disabled' — operator manually turned it off
-  status             String    @default("active")
-  quotaMonthly       Int?
-  quotaUsed          Int       @default(0)
-  resetDayOfMonth    Int?      // 1-31, clamped to month length at reset time
-  rateLimitPerMin    Int?
-  lastCappedAt       DateTime?
-  lastUsedAt         DateTime?
+  status          String    @default("active")
+  quotaMonthly    Int?
+  quotaUsed       Int       @default(0)
+  resetDayOfMonth Int? // 1-31, clamped to month length at reset time
+  rateLimitPerMin Int?
+  lastCappedAt    DateTime?
+  lastUsedAt      DateTime?
 
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([provider, status])
 }
 
 model TestOrder {
-  id               Int      @id @default(autoincrement())
-  service          Service  @relation(fields: [serviceId], references: [id])
+  id               Int         @id @default(autoincrement())
+  service          Service     @relation(fields: [serviceId], references: [id])
   serviceId        Int
+  // testAccount is ALWAYS set: even for engagement tests we keep the
+  // parent account FK so health checks (ghost/private) can run on the
+  // owner. For engagement, testPostId is also set and the lifecycle
+  // pivots around the post (baseline = post likes, poller reads post
+  // stats).
   testAccount      TestAccount @relation(fields: [testAccountId], references: [id])
   testAccountId    Int
-  bulkmedyaOrderId String   @unique
+  testPost         TestPost?   @relation(fields: [testPostId], references: [id])
+  testPostId       Int?
+  // 'account' = follower test (legacy default), 'post' = engagement
+  // test. Set explicitly at placement so the poller and UI don't have
+  // to re-derive it from Service.poolType every read.
+  targetType       String      @default("account")
+  // Mirror of Service.serviceType at placement time. Snapshotted so
+  // a later edit to the Service row doesn't retroactively change what
+  // metric this TestOrder was measuring. Always set for engagement,
+  // null for follower.
+  targetMetric     String?
+  bulkmedyaOrderId String      @unique
   targetQuantity   Int
+  // For follower tests: parent account's follower_count at placement.
+  // For engagement tests: post's likes/views/shares/saves at placement
+  // (whichever matches targetMetric). The poller deltas vs this value
+  // to compute deliveredQty.
   baselineCount    Int
-  placedAt         DateTime @default(now())
+  placedAt         DateTime    @default(now())
   completedAt      DateTime?
 
   // Lifecycle: 'running' (default) → 'completed' (delivered or T+7d)
   //                               → 'aborted_target_died' (mid-test)
   //                               → 'aborted_other' (rare: provider 404 etc)
   // Only 'completed' rows count towards the ServiceScore moving average.
-  status           String   @default("running")
-  abortReason      String?
+  status      String  @default("running")
+  abortReason String?
 
   // Retry chain — when a target dies mid-test we abort the current
   // row and relaunch a new TestOrder on the same service with a
@@ -583,7 +609,7 @@ model TestOrder {
   retriedFrom      Int?
   retriedFromOrder TestOrder?  @relation("TestOrderRetry", fields: [retriedFrom], references: [id], onDelete: NoAction, onUpdate: NoAction)
   retryOrders      TestOrder[] @relation("TestOrderRetry")
-  retryCount       Int      @default(0)
+  retryCount       Int         @default(0)
 
   // Last time the poller/testbot re-fetched the target via RapidAPI.
   // Pre-test health check stamps this just before placing the order;
@@ -595,27 +621,29 @@ model TestOrder {
   // after the order finalises (status=completed|aborted_*) so the
   // poller's `nextPollAt <= now` filter naturally skips terminal
   // rows.
-  nextPollAt       DateTime?
+  nextPollAt DateTime?
 
   // Legacy adaptive-polling state column — kept so pre-refactor
   // rows still queryable via DB console, but the new poller writes
   // nextPollAt directly and never touches this field. Drop in a
   // follow-up migration once we're sure nothing reads it.
-  pollingState     Json?
+  pollingState Json?
 
   // True when the testbot skipped the real BulkMedya placement
   // (SystemToggle.dryRunMode=true OR testBotEnabled=false). The
   // bulkmedyaOrderId is prefixed "sim-…" in that case. Kept for
   // the /logs audit view + so scoring can be filtered when needed.
-  dryRun           Boolean  @default(false)
+  dryRun Boolean @default(false)
 
-  measurements     Measurement[]
+  measurements Measurement[]
 
   @@index([serviceId, placedAt])
   @@index([status, placedAt])
   @@index([retriedFrom])
   @@index([dryRun, placedAt])
   @@index([status, nextPollAt])
+  @@index([testPostId])
+  @@index([targetType, status])
 }
 
 // Note: the TestPoll model (audit log of every adaptive-polling
@@ -626,10 +654,10 @@ model TestOrder {
 // unused.
 
 model Measurement {
-  id           Int      @id @default(autoincrement())
+  id           Int       @id @default(autoincrement())
   testOrder    TestOrder @relation(fields: [testOrderId], references: [id])
   testOrderId  Int
-  checkedAt    DateTime @default(now())
+  checkedAt    DateTime  @default(now())
   checkpoint   String
   actualCount  Int
   realismData  Json
@@ -640,14 +668,14 @@ model Measurement {
 }
 
 model ServiceScore {
-  id               Int      @id @default(autoincrement())
-  service          Service  @relation(fields: [serviceId], references: [id])
-  serviceId        Int
+  id        Int     @id @default(autoincrement())
+  service   Service @relation(fields: [serviceId], references: [id])
+  serviceId Int
 
   // Backwards-compat alias — populated with weightedScore so old
   // readers (services list, routing, etc.) automatically pick up
   // the confidence-adjusted view without needing a code change.
-  currentScore     Float
+  currentScore Float
 
   // Sub-scores feeding the moving average (unchanged semantics).
   completionFactor Float
@@ -657,7 +685,7 @@ model ServiceScore {
 
   // Raw moving-average score over the last 30 RULE-1-valid
   // TestOrders. 0-100 range, no confidence adjustment.
-  rawScore         Float    @default(0)
+  rawScore Float @default(0)
 
   // sampleCount × Bayesian smoothing pair.
   //   weightedScore = (rawScore × n + PRIOR × WEIGHT) / (n + WEIGHT)
@@ -667,9 +695,9 @@ model ServiceScore {
   // confidence is kept as a cheap "how trusted is this row?"
   // signal for the UI; same formula as before (min(1, n/10))
   // surfaced for transparency, doesn't drive math anymore.
-  sampleCount      Int      @default(0)
-  confidence       Float    @default(0)
-  weightedScore    Float    @default(0)
+  sampleCount   Int   @default(0)
+  confidence    Float @default(0)
+  weightedScore Float @default(0)
 
   // Per-service averaged metrics surfaced in the dashboard
   // tables. Both averaged across the 30 orders that fed
@@ -679,7 +707,7 @@ model ServiceScore {
   avgTimeToFiftyMin Float?
   avgDropPct        Float?
 
-  computedAt       DateTime @default(now())
+  computedAt DateTime @default(now())
 
   @@index([serviceId, computedAt])
 }
@@ -715,43 +743,43 @@ model Config {
 // is false. Default: everything ENABLED so an empty row acts as a
 // no-op, never a surprise outage.
 model SystemToggle {
-  id                       Int      @id @default(1)
-  poolScrapeEnabled        Boolean  @default(true)
-  poolHealthcheckEnabled   Boolean  @default(true)
-  routingApiEnabled        Boolean  @default(true)
-  testBotEnabled           Boolean  @default(true)
-  scoringEngineEnabled     Boolean  @default(true)
+  id                          Int      @id @default(1)
+  poolScrapeEnabled           Boolean  @default(true)
+  poolHealthcheckEnabled      Boolean  @default(true)
+  routingApiEnabled           Boolean  @default(true)
+  testBotEnabled              Boolean  @default(true)
+  scoringEngineEnabled        Boolean  @default(true)
   // Daily 1 h retest of MONITORED candidates — keeps the 0-100
   // score fresh so routing doesn't drift on stale data.
-  dailyRetestEnabled       Boolean  @default(true)
+  dailyRetestEnabled          Boolean  @default(true)
   // 2 consecutive zero-delivery tests → auto-kill the service.
   // Kill switch for when the operator wants to debug without
   // losing catalogue rows.
-  autoKillDeadServicesEnabled Boolean @default(true)
+  autoKillDeadServicesEnabled Boolean  @default(true)
   // Daily BulkMedya catalogue sync (midnight UTC) — picks up new
   // services + deactivates removed ones.
-  dailySyncEnabled         Boolean  @default(true)
+  dailySyncEnabled            Boolean  @default(true)
   // Runs the workflow executor cron. DEFAULT FALSE so a fresh
   // deploy never races the legacy individual crons — the operator
   // opts in once the 8 seeded workflows are verified (see
   // lib/workflows/executor.ts). Legacy crons stay running in
   // parallel; a follow-up migration commit will disable them once
   // the workflow engine proves stable.
-  workflowExecutorEnabled  Boolean  @default(false)
+  workflowExecutorEnabled     Boolean  @default(false)
   // Master dry-run gate. When true (default), every BulkMedya
   // placement is simulated — TestOrder rows land with dryRun=true
   // and bulkmedyaOrderId="sim-…", RoutingDecision rows land with
   // dryRun=true. When false, real BulkMedya orders are placed
   // (production mode). Replaces the prior process.env.DRY_RUN env
   // var so the operator can flip the switch from /pool.
-  dryRunMode               Boolean  @default(true)
+  dryRunMode                  Boolean  @default(true)
   // Cadence du poller en minutes — relu à chaque tick + appliqué
   // au moment de placer un nouveau TestOrder. Default 10 min : on
   // privilégie la visibilité temps réel sur la conso RapidAPI.
   // L'opérateur peut bumper la valeur via /config si la flotte de
   // clés est limitée. Bornes UI : 5 min ≤ X ≤ 720 min (12 h).
-  pollIntervalMinutes      Int      @default(10)
-  updatedAt                DateTime @updatedAt
+  pollIntervalMinutes         Int      @default(10)
+  updatedAt                   DateTime @updatedAt
 }
 
 // Visual workflow orchestrator. Each Workflow is a DAG of nodes
@@ -760,62 +788,62 @@ model SystemToggle {
 // workflows whose schedule matches + any paused WorkflowRun that's
 // ready to resume, and advances them one node at a time.
 model Workflow {
-  id             Int      @id @default(autoincrement())
-  slug           String   @unique
+  id             Int       @id @default(autoincrement())
+  slug           String    @unique
   displayName    String
   description    String?
-  category       String   // 'health' | 'pool' | 'scoring' | 'sync' | 'catalogue' | 'custom'
-  triggerType    String   // 'manual' | 'cron' | 'event'
-  cronExpression String?  // 5-field cron when triggerType='cron'
-  eventType      String?  // event name when triggerType='event'
-  isActive       Boolean  @default(true)
+  category       String // 'health' | 'pool' | 'scoring' | 'sync' | 'catalogue' | 'custom'
+  triggerType    String // 'manual' | 'cron' | 'event'
+  cronExpression String? // 5-field cron when triggerType='cron'
+  eventType      String? // event name when triggerType='event'
+  isActive       Boolean   @default(true)
   // Nodes as a JSON array. Shape:
   //   [{ id: "n1", type: "TRIGGER", config: {...}, nextNodeId: "n2" }, ...]
   // See lib/workflows/nodes.ts for exhaustive node types + config
   // schemas. JSON-as-config pattern lets new node types ship without
   // schema churn; validation happens at executor-dispatch time.
-  nodes          Json     @default("[]")
+  nodes          Json      @default("[]")
   lastRunAt      DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  runs           WorkflowRun[]
+  runs WorkflowRun[]
 
   @@index([isActive, triggerType])
   @@index([category])
 }
 
 model WorkflowRun {
-  id             Int      @id @default(autoincrement())
-  workflow       Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  workflowId     Int
-  startedAt      DateTime @default(now())
-  finishedAt     DateTime?
+  id            Int       @id @default(autoincrement())
+  workflow      Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workflowId    Int
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
   // 'running'   — in-flight on a node
   // 'completed' — reached the end of the graph cleanly
   // 'failed'    — a node threw; see logs for the stack
   // 'paused'    — stuck on a WAIT node; resumeAt will fire it again
-  status         String   @default("running")
-  currentNodeId  String?
+  status        String    @default("running")
+  currentNodeId String?
   // Live variable bag passed between nodes (eg. FETCH_POOL stashes
   // its rows here so the next FILTER/LOOP can read them).
-  context        Json     @default("{}")
+  context       Json      @default("{}")
   // Append-only log of { nodeId, at, level, message } entries.
   // Surface in the UI history drawer.
-  logs           Json     @default("[]")
+  logs          Json      @default("[]")
   // Pause/resume shuttle for WAIT nodes. resumeAt is the wall-clock
   // the master cron scans — "run is paused AND resumeAt <= now" is
   // the pick criterion. When the run resumes, executor re-enters at
   // currentNodeId, walks the remaining graph. pausedAt is just for
   // audit (age of the pause).
-  pausedAt       DateTime?
-  resumeAt       DateTime?
-  resumedAt      DateTime?
+  pausedAt      DateTime?
+  resumeAt      DateTime?
+  resumedAt     DateTime?
   // Triggered by: 'cron' | 'manual' | 'event' | 'retry'
-  trigger        String   @default("cron")
+  trigger       String    @default("cron")
   // When run was fired from an event, carries the WorkflowEvent.id
   // so the UI can surface "why did this run start?".
-  sourceEventId  Int?
+  sourceEventId Int?
 
   @@index([workflowId, startedAt])
   @@index([status])
@@ -828,13 +856,13 @@ model WorkflowRun {
 // eventType. Multiple workflows can listen to the same event type —
 // each gets its own WorkflowRun with sourceEventId=this.id.
 model WorkflowEvent {
-  id            Int      @id @default(autoincrement())
-  type          String   // e.g. "pool.below_threshold.follower"
-  payload       Json     @default("{}")
-  emittedAt     DateTime @default(now())
+  id            Int       @id @default(autoincrement())
+  type          String // e.g. "pool.below_threshold.follower"
+  payload       Json      @default("{}")
+  emittedAt     DateTime  @default(now())
   processedAt   DateTime?
   // Count of workflow runs that fired from this event — audit.
-  runsTriggered Int      @default(0)
+  runsTriggered Int       @default(0)
 
   @@index([processedAt, emittedAt])
   @@index([type, emittedAt])
@@ -853,7 +881,7 @@ model WorkflowEvent {
 // row. The pair (code, status='active') is what the reconciler
 // looks up.
 model Alert {
-  id                Int      @id @default(autoincrement())
+  id                Int     @id @default(autoincrement())
   code              String
   // 'infra' | 'pool' | 'job' | 'catalogue' | 'business' | 'rapidapi' | 'testbot'
   category          String
@@ -880,20 +908,20 @@ model Alert {
   relatedEntityId   Int?
 
   // 'active' | 'acknowledged' | 'resolved' | 'auto_resolved'
-  status            String   @default("active")
+  status String @default("active")
 
-  firstTriggeredAt  DateTime @default(now())
-  lastTriggeredAt   DateTime @default(now())
-  resolvedAt        DateTime?
+  firstTriggeredAt DateTime  @default(now())
+  lastTriggeredAt  DateTime  @default(now())
+  resolvedAt       DateTime?
   // Every subsequent tick where the condition matches bumps this.
   // Surfaces as "déclenchée N fois" in the UI.
-  triggerCount      Int      @default(1)
+  triggerCount     Int       @default(1)
 
-  acknowledgedBy    String?
-  acknowledgedAt    DateTime?
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, severity, category])
   @@index([code, status])
@@ -918,18 +946,18 @@ model Alert {
 // it. placedServiceIds accumulates IDs we've already dispatched
 // so the ticker doesn't re-place the same service twice.
 model ScoringCampaign {
-  id               Int      @id @default(autoincrement())
-  startedAt        DateTime @default(now())
+  id               Int       @id @default(autoincrement())
+  startedAt        DateTime  @default(now())
   finishedAt       DateTime?
-  status           String   @default("running")
+  status           String    @default("running")
   stopReason       String?
   targetServiceIds Int[]
-  placedServiceIds Int[]    @default([])
-  placedCount      Int      @default(0)
-  completedCount   Int      @default(0)
-  abortedCount     Int      @default(0)
+  placedServiceIds Int[]     @default([])
+  placedCount      Int       @default(0)
+  completedCount   Int       @default(0)
+  abortedCount     Int       @default(0)
   estimatedCostUsd Float?
-  updatedAt        DateTime @updatedAt
+  updatedAt        DateTime  @updatedAt
 
   @@index([status, startedAt])
 }
@@ -939,23 +967,23 @@ model ScoringCampaign {
 // /config/catalogue?tab=history without spelunking through cron
 // logs. Each row is one run.
 model CatalogueSyncRun {
-  id                 Int      @id @default(autoincrement())
-  startedAt          DateTime @default(now())
-  finishedAt         DateTime?
-  status             String   @default("running") // 'running' | 'completed' | 'error'
-  errorMessage       String?
+  id           Int       @id @default(autoincrement())
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  status       String    @default("running") // 'running' | 'completed' | 'error'
+  errorMessage String?
 
   // Counts.
-  bulkmedyaTotal     Int      @default(0)
-  addedCount         Int      @default(0)
-  removedCount       Int      @default(0)
-  revivedCount       Int      @default(0)
-  permanentlyFailedCount Int  @default(0)
-  rematchUpdatedCount Int     @default(0)
-  rematchOutOfScope  Int      @default(0)
+  bulkmedyaTotal         Int @default(0)
+  addedCount             Int @default(0)
+  removedCount           Int @default(0)
+  revivedCount           Int @default(0)
+  permanentlyFailedCount Int @default(0)
+  rematchUpdatedCount    Int @default(0)
+  rematchOutOfScope      Int @default(0)
 
   // Free-form summary the dashboard / history tab renders.
-  summary            Json     @default("{}")
+  summary Json @default("{}")
 
   @@index([status, startedAt])
   @@index([startedAt])
