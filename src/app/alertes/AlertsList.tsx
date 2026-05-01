@@ -569,6 +569,9 @@ function AlertDrawer({
     if (a.code.startsWith("candidates_zero") || a.code.startsWith("product_low_avg"))
       return "[ VOIR CATALOGUE ]";
     if (a.code.startsWith("scoring_stale")) return "[ VOIR POOL ]";
+    if (a.code === "engagement_pool_disabled") return "[ ACTIVER POOL ENGAGEMENT ]";
+    if (a.code.startsWith("engagement_pool_low")) return "[ SCRAPER POSTS ENGAGEMENT ]";
+    if (a.code === "sync_stale") return "[ VOIR LOGS SYNC ]";
     // Fallback
     if (a.actionType === "button") return "[ ACTION ]";
     return "[ OUVRIR ]";
