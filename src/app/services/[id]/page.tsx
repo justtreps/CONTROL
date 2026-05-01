@@ -160,6 +160,7 @@ export default async function ServiceDetailPage({
 
   const orderCards = service.testOrders.map((o) => {
     const ms = o.measurements;
+    const polled = ms.filter((m) => m.checkpoint !== "T+0");
     const peak = ms.length > 0 ? Math.max(...ms.map((m) => m.actualCount)) : o.baselineCount;
     const delivered = Math.max(0, peak - o.baselineCount);
     const deliveredPct = Math.min(
@@ -167,6 +168,61 @@ export default async function ServiceDetailPage({
       (delivered / Math.max(1, o.targetQuantity)) * 100
     );
     const latestM = ms[ms.length - 1];
+    // State chip — replaces the previous "EN COURS" / status mix
+    // that was confusing operators on fresh-just-placed tests
+    // (showed "0 livré" with no indication that the poll hadn't
+    // fired yet).
+    const stateChip = (() => {
+      if (o.status.startsWith("aborted")) {
+        const reason = o.abortReason ?? o.status;
+        return {
+          label: `ABORTÉ — ${reason.slice(0, 40)}`,
+          color: "#FF3300",
+          bg: "rgba(255, 51, 0, 0.10)",
+          title: o.abortReason ?? undefined,
+        };
+      }
+      if (o.status === "completed_partial") {
+        return {
+          label: `STAGNÉ — finalisé partial (${deliveredPct.toFixed(0)} %)`,
+          color: "#FFCC00",
+          bg: "rgba(255, 204, 0, 0.10)",
+          title: "Stagnation détectée: 3 polls identiques + age ≥24h.",
+        };
+      }
+      if (o.status === "completed") {
+        if (deliveredPct >= 100) {
+          return {
+            label: `LIVRÉ 100 %`,
+            color: "#00CC66",
+            bg: "rgba(0, 204, 102, 0.10)",
+            title: undefined,
+          };
+        }
+        return {
+          label: `PARTIEL ${deliveredPct.toFixed(0)} %`,
+          color: "#FFCC00",
+          bg: "rgba(255, 204, 0, 0.10)",
+          title: undefined,
+        };
+      }
+      // status === "running" (or other non-terminal) below
+      if (polled.length === 0) {
+        return {
+          label: `FRESH — premier poll à T+12h`,
+          color: "#7DD3FC",
+          bg: "rgba(125, 211, 252, 0.10)",
+          title:
+            "Test placé. La 1re mesure RapidAPI fire 12 h après le placement.",
+        };
+      }
+      return {
+        label: `EN COURS — ${delivered}/${o.targetQuantity}`,
+        color: "#FF8533",
+        bg: "rgba(255, 133, 51, 0.10)",
+        title: `${polled.length} poll(s) déjà landed`,
+      };
+    })();
     return {
       id: o.id,
       placedAt: o.placedAt,
@@ -178,6 +234,7 @@ export default async function ServiceDetailPage({
       status: o.status,
       retryCount: o.retryCount,
       abortReason: o.abortReason,
+      stateChip,
     };
   });
 
@@ -369,21 +426,17 @@ export default async function ServiceDetailPage({
                         RETRY {o.retryCount}/3
                       </span>
                     )}
-                    {o.status === "aborted_target_died" && (
-                      <span
-                        className="font-mono text-[10px] tracking-widest uppercase border border-[#FF3300] text-[#FF3300] px-1.5 py-0"
-                        title={o.abortReason ?? "target died mid-test"}
-                      >
-                        ABORT TARGET DEAD
-                      </span>
-                    )}
-                    {o.status === "running" && (
-                      <span
-                        className="font-mono text-[10px] tracking-widest uppercase border border-[#666666]/60 text-[#666666] px-1.5 py-0"
-                      >
-                        EN COURS
-                      </span>
-                    )}
+                    <span
+                      className="font-mono text-[10px] tracking-widest uppercase border px-1.5 py-0"
+                      style={{
+                        color: o.stateChip.color,
+                        borderColor: o.stateChip.color,
+                        backgroundColor: o.stateChip.bg,
+                      }}
+                      title={o.stateChip.title}
+                    >
+                      {o.stateChip.label}
+                    </span>
                   </div>
                   <div className="brand font-display text-lg uppercase tracking-tight text-white truncate mb-1">
                     {o.account}
