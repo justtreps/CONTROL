@@ -629,13 +629,25 @@ async function computeAllTiers(): Promise<Map<number, number>> {
 
 // Rewrites ProductServiceCandidate.rank for every active product.
 //
-// Sort key (lex): tier ASC, currentScore DESC, reliabilityScore DESC.
-// Reliability acts as the tie-breaker on services that share a
-// currentScore: a 93/93 pair where one has 10/10 reliability and
-// the other has 7/10 ranks the 10/10 first. null reliability sorts
-// LAST inside its tier+score group — services prove themselves with
-// at least RELIABILITY_MIN_SAMPLES finalised tests before they can
-// claim the bump.
+// Sort key (lex):
+//   1. tier            ASC
+//   2. ROUND(score)    DESC  (integer bucket — see below)
+//   3. reliability     DESC
+//   4. raw score       DESC  (final inner tie-break)
+//
+// Why ROUND(score) and not raw score: the operator thinks of scores
+// in coarse buckets ("ce service est à 93"). A pair at 93.46 vs
+// 93.01 looks "tied" to a human, and reliability should split them.
+// With the raw-score tie-break (the original v1 of this function),
+// the 93.46 always won regardless of how many partials it had in
+// the last 10 tests — defeating the whole point of reliability as
+// a tie-breaker. Rounding to the integer bucket gives reliability
+// the room to actually re-order within ±0.5 of a score peak, while
+// preserving correct ordering across distinct integer buckets.
+//
+// null reliability sorts LAST inside its tier+bucket group via the
+// -1 sentinel — services prove themselves with at least
+// RELIABILITY_MIN_SAMPLES finalised tests before claiming a bump.
 export async function recomputeRanks(): Promise<void> {
   const tiers = await computeAllTiers();
   const products = await prisma.myBoostProduct.findMany({
@@ -670,8 +682,11 @@ export async function recomputeRanks(): Promise<void> {
     }));
     tiered.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
-      if (b.score !== a.score) return b.score - a.score;
-      return b.reliability - a.reliability;
+      const bucketA = Math.round(a.score);
+      const bucketB = Math.round(b.score);
+      if (bucketA !== bucketB) return bucketB - bucketA;
+      if (a.reliability !== b.reliability) return b.reliability - a.reliability;
+      return b.score - a.score;
     });
     // Batch the rank writes — one transaction per product avoids
     // 8 000 separate round-trips per cron tick.
