@@ -19,6 +19,7 @@ const PUBLIC_PATHS = [
   "/api/pool/reconcile-engagement",
   "/api/pool/queue-scrape",
   "/api/pool/recover-engagement-impact",
+  "/api/pool/force-place",
   "/api/catalogue/seed",
   "/api/catalogue/rematch",
   "/api/workflows/seed",
