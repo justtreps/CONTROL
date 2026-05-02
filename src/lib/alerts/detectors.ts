@@ -1155,6 +1155,62 @@ export const detectEngagementPoolLow: Detector = async () => {
   return out;
 };
 
+// engagement_score_recovery_in_progress — info-severity heads-up
+// for the 48 h after the engagement-routing fix. As long as there
+// are still aborted_misplaced engagement TestOrders sitting beside
+// fresh post-flow placements, scores and rankings will be in flux.
+// The detector reads the freshest aborted_misplaced timestamp; once
+// it ages past 48 h (or the cohort runs dry), the alert
+// auto-resolves on its own.
+export const detectEngagementScoreRecoveryInProgress: Detector = async () => {
+  const recentReconcile = await prisma.testOrder.findFirst({
+    where: {
+      status: "aborted_misplaced",
+      abortReason: "engagement_legacy_account_baseline",
+    },
+    orderBy: { completedAt: "desc" },
+    select: { completedAt: true },
+  });
+  if (!recentReconcile?.completedAt) return [];
+  const ageHours = Math.round(
+    (Date.now() - recentReconcile.completedAt.getTime()) / 3_600_000,
+  );
+  if (ageHours > 48) return [];
+  // Cohort signal — how many engagement services are mid-recovery
+  // (no post-flow finalised test yet)?
+  const stillRecovering = await prisma.$queryRaw<Array<{ cnt: bigint }>>`
+    SELECT COUNT(DISTINCT s.id)::bigint AS cnt
+    FROM "Service" s
+    WHERE s."serviceType" = ANY(ARRAY['likes','views','shares','saves','comments'])
+      AND s.active = true
+      AND NOT EXISTS (
+        SELECT 1 FROM "TestOrder" tor
+        WHERE tor."serviceId" = s.id
+          AND tor."targetType" = 'post'
+          AND tor.status IN ('completed', 'completed_partial')
+      )
+  `;
+  const recovering = Number(stillRecovering[0]?.cnt ?? 0);
+  if (recovering === 0) return [];
+  return [
+    {
+      code: "engagement_score_recovery_in_progress",
+      category: "catalogue",
+      severity: "info",
+      title: `Reconstruction des scores engagement en cours (${recovering} services)`,
+      description: `${recovering.toLocaleString("en-US")} services engagement n'ont pas encore reçu un test post-flow finalisé depuis la correction du routing (${ageHours} h).`,
+      explanation:
+        "Le bug routing engagement (ec88bb2 / 95fb9d7) plaçait les tests likes/views/shares/saves sur le pool follower jusqu'au 2026-05-02. Le ménage a marqué tous les TestOrders concernés en aborted_misplaced ; la fiabilité et le score ont été remis à zéro. Daily-retest replace désormais ces services correctement (post-flow), mais il faut quelques jours pour que la cohorte reçoive 5+ tests valides et reconstruise un reliabilityScore. Pendant cette période les rankings engagement vont bouger fortement à mesure que les vrais scores remplacent les zéros artificiels.",
+      impact:
+        "Aucun — c'est une info pour expliquer le mouvement attendu sur les rankings engagement. Le routing est correct depuis le fix.",
+      suggestedAction:
+        "Surveiller la distribution des reliabilityScore engagement sur 24-48 h. L'alerte se résout automatiquement une fois la cohorte recouverte ou après 48 h.",
+      actionType: "link",
+      actionPayload: { href: "/services?type=engagement" },
+    },
+  ];
+};
+
 // daily_retest_starved — fires when MONITORED + QUALIFIED services
 // are accumulating >24 h-stale lastTestedAt timestamps faster than
 // daily-retest can drain them. The 8 h cutoff gives each service 3
@@ -1243,6 +1299,7 @@ export const DETECTORS: Detector[] = [
   detectEngagementPoolDisabled,
   detectEngagementPoolLow,
   detectDailyRetestStarved,
+  detectEngagementScoreRecoveryInProgress,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──

@@ -18,6 +18,7 @@ const PUBLIC_PATHS = [
   "/api/pool/backfill-last-tested",
   "/api/pool/reconcile-engagement",
   "/api/pool/queue-scrape",
+  "/api/pool/recover-engagement-impact",
   "/api/catalogue/seed",
   "/api/catalogue/rematch",
   "/api/workflows/seed",

@@ -180,6 +180,43 @@ export default async function ServiceDetailPage({
     return { text: `TEST ${Math.round(ageH)}H — STALE`, color: "#FF3300" };
   })();
 
+  // Identify the parent service's true metric (likes / views / etc.)
+  // — this is the source of truth for what the test SHOULD be
+  // measuring. A TestOrder placed pre-fix on an engagement service
+  // routed to the follower pool (testAccountId set, testPostId null)
+  // should display as "TEST CASSÉ" so an operator scanning the card
+  // doesn't mistake the zero delivery for poor service quality.
+  const ENGAGEMENT_METRICS = [
+    "likes",
+    "like",
+    "views",
+    "view",
+    "plays",
+    "play",
+    "comments",
+    "comment",
+    "shares",
+    "share",
+    "saves",
+    "save",
+    "bookmarks",
+    "favorites",
+    "favourites",
+  ];
+  const serviceIsEngagement = ENGAGEMENT_METRICS.includes(
+    service.serviceType.toLowerCase(),
+  );
+  const formatMetricLabel = (raw: string | null | undefined): string => {
+    const m = (raw ?? "").toUpperCase();
+    if (m === "LIKES" || m === "LIKE") return "LIKES";
+    if (m === "VIEWS" || m === "VIEW" || m === "PLAYS") return "VUES";
+    if (m === "COMMENTS") return "COMMENTAIRES";
+    if (m === "SHARES") return "PARTAGES";
+    if (m === "SAVES" || m === "BOOKMARKS" || m === "FAVORITES") return "SAVES";
+    if (m === "FOLLOWERS") return "ABONNÉS";
+    return m || "—";
+  };
+
   const orderCards = service.testOrders.map((o) => {
     const ms = o.measurements;
     const polled = ms.filter((m) => m.checkpoint !== "T+0");
@@ -190,30 +227,45 @@ export default async function ServiceDetailPage({
       (delivered / Math.max(1, o.targetQuantity)) * 100
     );
     const latestM = ms[ms.length - 1];
-    // Engagement vs follower flow — drives the card label (post URL
-    // vs @username) AND the unit shown next to "LIVRÉ" so the
-    // operator can immediately tell if a TestOrder for a "likes"
-    // service is correctly tracking likes (not followers).
-    const isEngagement = o.targetType === "post";
-    const targetLabel = isEngagement
+    // Three relevant flow states:
+    //  - Healthy engagement test: targetType="post", testPost set
+    //  - Healthy follower test:   targetType="account", testAccount set, parent service is followers
+    //  - BROKEN engagement test:  parent service is engagement BUT testPost is null
+    //                              (placed on follower pool — pre-fix legacy)
+    const isEngagementFlow = o.targetType === "post";
+    const isBrokenEngagement =
+      serviceIsEngagement && !o.testPostId;
+    const targetLabel = isEngagementFlow
       ? o.testPost?.mediaUrl ?? "[ POST INTROUVABLE ]"
       : `@${o.testAccount.username}`;
-    const targetMetricLabel = (() => {
-      if (!isEngagement) return "ABONNÉS";
-      const m = (o.targetMetric ?? service.serviceType).toUpperCase();
-      // Map historical aliases to the user-facing word.
-      if (m === "LIKES" || m === "LIKE") return "LIKES";
-      if (m === "VIEWS" || m === "VIEW" || m === "PLAYS") return "VUES";
-      if (m === "COMMENTS") return "COMMENTAIRES";
-      if (m === "SHARES") return "PARTAGES";
-      if (m === "SAVES" || m === "BOOKMARKS" || m === "FAVORITES") return "SAVES";
-      return m;
-    })();
+    // Metric label always reflects the PARENT SERVICE'S serviceType,
+    // so a broken engagement card still shows "LIKES" even though the
+    // row was tracking followers. The big warning chip below makes
+    // the broken state unmistakable.
+    const targetMetricLabel = formatMetricLabel(
+      o.targetMetric ?? service.serviceType,
+    );
     // State chip — replaces the previous "EN COURS" / status mix
     // that was confusing operators on fresh-just-placed tests
     // (showed "0 livré" with no indication that the poll hadn't
     // fired yet).
     const stateChip = (() => {
+      // Highest-priority signal: the row is from the broken
+      // engagement-on-follower-pool legacy. Override every other
+      // status so the operator can't miss it. Aborted-misplaced
+      // rows are guaranteed to also start with "aborted_" so this
+      // branch fires before the generic aborted handler.
+      if (isBrokenEngagement) {
+        return {
+          label: `TEST CASSÉ — engagement placé sur compte (legacy)`,
+          color: "#FF3300",
+          bg: "rgba(255, 51, 0, 0.16)",
+          title:
+            "Service engagement (likes/views/etc.) testé via le pool follower avant le fix du 2026-05-02. " +
+            "Ce TestOrder n'a jamais mesuré le bon métrique — la livraison réelle BulkMedya a été refusée. " +
+            "Marqué aborted_misplaced; n'entre pas dans le score / la fiabilité. Un nouveau retest post-flow va remplacer cette donnée.",
+        };
+      }
       if (o.status.startsWith("aborted")) {
         const reason = o.abortReason ?? o.status;
         return {
@@ -273,8 +325,13 @@ export default async function ServiceDetailPage({
       // Legacy field name retained for backward-compat with the
       // existing card markup, but content depends on flow.
       account: targetLabel,
-      isEngagement,
-      targetIsLink: isEngagement,
+      isEngagement: isEngagementFlow,
+      isBrokenEngagement,
+      // Only render as a clickable link when the row is a HEALTHY
+      // engagement flow (post URL). Broken-engagement rows display
+      // the parent account username instead so the operator can see
+      // what was wrongly tested.
+      targetIsLink: isEngagementFlow,
       targetMetricLabel,
       delivered,
       quantity: o.targetQuantity,
