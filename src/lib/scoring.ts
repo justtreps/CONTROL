@@ -219,14 +219,27 @@ export type ScoringResult = {
 // stay excluded — they didn't produce a measurable signal.
 export const SCORABLE_STATUSES = ["completed", "completed_partial"];
 
+// Statuses whose Measurement rows the scoring engine will read.
+// Running tests with at least one poll count too, BUT aborted_*
+// rows are explicitly excluded — including aborted_misplaced (the
+// engagement-on-follower-pool legacy). Without this filter the
+// engine kept reading the broken-flow Measurements and reporting
+// a phantom score (svc bm#8974 was stuck at 18.26 even after the
+// recovery wiped its currentScore).
+export const SCORABLE_PICK_STATUSES = [
+  "completed",
+  "completed_partial",
+  "running",
+];
+
 // Picks the test we'll score the service on. The rule used to be
 // "latest by completedAt" which was a bug: a service with 3 fresh
 // failing tests still showing 'running' kept its old completed
 // success at the top of the rankings forever. Now the rule is:
 //
-//   Latest TestOrder by placedAt that has at least 1 non-T+0
-//   Measurement. Status doesn't matter — running tests with at
-//   least 1 poll count as scorable too. This way:
+//   Latest TestOrder by placedAt with status IN
+//   SCORABLE_PICK_STATUSES that has at least 1 non-T+0
+//   Measurement. This way:
 //
 //   • Just-placed test (only T+0 baseline) → not yet scorable,
 //     fall back to previous test
@@ -234,6 +247,13 @@ export const SCORABLE_STATUSES = ["completed", "completed_partial"];
 //     (delivered / target / drop). If it's stagnating, the score
 //     will be low and the operator sees it immediately.
 //   • Completed test → score on final state.
+//   • Aborted_* test (target_died / other / misplaced) → SKIPPED.
+//     Those rows have measurements past T+0 (the poller wrote them
+//     before the abort fired) but the data is poisoned: the
+//     placement was wrong-pool or the target died. Including them
+//     would let the broken signal bleed into ranks even after
+//     /api/pool/recover-engagement-impact reset the affected PSC
+//     rows.
 //
 // If the latest by placedAt has no polls yet, we pick the next-
 // latest that does have polls.
@@ -248,7 +268,10 @@ export async function pickLatestScorableTest(serviceId: number) {
   // 5 is enough: a service that has 5 just-placed tests with
   // zero polls is genuinely brand-new and deserves a null score.
   const recent = await prisma.testOrder.findMany({
-    where: { serviceId },
+    where: {
+      serviceId,
+      status: { in: SCORABLE_PICK_STATUSES },
+    },
     include: {
       measurements: {
         where: { checkpoint: { not: "T+0" } },
@@ -547,16 +570,22 @@ async function computeAllTiers(): Promise<Map<number, number>> {
   };
 
   // Pull latest scorable per service.
+  // Status filter mirrors pickLatestScorableTest — aborted_* rows
+  // are excluded even though they may carry post-T+0 Measurement
+  // rows from before the abort fired. Without this filter the tier
+  // pass would re-classify a recovered engagement service as TIER 4
+  // on the broken-flow data.
   const scorable = await prisma.$queryRaw<ScorableRow[]>`
     WITH scorable_orders AS (
       SELECT DISTINCT ON (tor."serviceId")
         tor."serviceId", tor.id, tor."targetQuantity", tor."baselineCount"
       FROM "TestOrder" tor
-      WHERE EXISTS (
-        SELECT 1 FROM "Measurement" m
-        WHERE m."testOrderId" = tor.id
-          AND m.checkpoint != 'T+0'
-      )
+      WHERE tor.status IN ('completed', 'completed_partial', 'running')
+        AND EXISTS (
+          SELECT 1 FROM "Measurement" m
+          WHERE m."testOrderId" = tor.id
+            AND m.checkpoint != 'T+0'
+        )
       ORDER BY tor."serviceId", tor."placedAt" DESC
     )
     SELECT
