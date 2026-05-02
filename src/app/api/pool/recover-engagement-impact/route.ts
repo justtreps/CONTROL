@@ -169,6 +169,22 @@ export async function POST(req: Request) {
       })
     : { count: 0 };
 
+  // 2d. Service.lastTestedAt → null for affected rows so the
+  // 8h-cutoff in daily-retest doesn't lock them out of the queue.
+  // The previous (broken) placement stamped lastTestedAt as recently
+  // as today, which would otherwise mean services have to wait 8h
+  // after the bug-test before being eligible for a real post-flow
+  // retest. Wiping the stamp lets oldest-first ordering pull them
+  // back in immediately. Safe because the recovery only operates on
+  // services whose last test was the broken flow — a legitimate
+  // recent test wouldn't be aborted_misplaced.
+  const lastTestedReset = affectedIds.length
+    ? await prisma.service.updateMany({
+        where: { id: { in: affectedIds }, lastTestedAt: { not: null } },
+        data: { lastTestedAt: null },
+      })
+    : { count: 0 };
+
   // ── Step 3: clear service_killed_no_delivery alerts ──
   const alertsResolved = affectedIds.length
     ? await prisma.alert.updateMany({
@@ -191,8 +207,9 @@ export async function POST(req: Request) {
     serviceReactivated: reactivated.count,
     pscLifecycleRestored: lifecycleRestored.count,
     pscCurrentScoreReset: scoresReset.count,
+    serviceLastTestedAtCleared: lastTestedReset.count,
     alertsResolved: alertsResolved.count,
-    note: "Lifecycle reset to TESTING — daily-retest will pick these up via lastTestedAt fairness order. Run /api/cron/scoring after to refresh ranks.",
+    note: "Lifecycle reset to TESTING — lastTestedAt cleared so daily-retest's 8h cutoff doesn't lock affected services out of the queue. Run /api/cron/scoring after to refresh ranks.",
   });
 }
 
