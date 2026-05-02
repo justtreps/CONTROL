@@ -20,6 +20,7 @@ const PUBLIC_PATHS = [
   "/api/pool/queue-scrape",
   "/api/pool/recover-engagement-impact",
   "/api/pool/force-place",
+  "/api/pool/migrate-reliability-factor",
   "/api/catalogue/seed",
   "/api/catalogue/rematch",
   "/api/workflows/seed",
