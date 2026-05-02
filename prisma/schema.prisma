@@ -77,25 +77,37 @@ model Service {
   lastPlacementError   String?
   lastPlacementErrorAt DateTime?
 
-  // ── Reliability (historical fault rate) ──
-  // Score 0–10 computed over the last RELIABILITY_WINDOW (10) finalised
-  // TestOrders:
-  //   reliability = (perfect − partial − 2·fail) / window × 10
-  // clamped to [0, 10]. perfect = delivered ≥ target, partial =
-  // 0 < delivered < target, fail = delivered = 0 on a
-  // completed/completed_partial row (NOT aborted_*).
+  // ── Reliability (historical fault rate, applied as score multiplier) ──
   //
-  // Used as a tie-breaker after currentScore in recomputeRanks: two
-  // services at score 93 split by their fault history, so a service
-  // that has only ever delivered 100 % outranks one that has had
-  // partials in the same window.
+  // Replaces the previous standalone "reliabilityScore 0..10" column
+  // (which the operator surfaced as confusing — two scores side by
+  // side). The new model integrates fiabilité directly into
+  // currentScore via a multiplicative factor:
   //
-  // null when the service has fewer than RELIABILITY_MIN_SAMPLES (5)
-  // finalised tests — not enough signal to differentiate fairly.
+  //   reliabilityFactor = 0.5 + 0.5 × (perfectCount / totalFinalized)
+  //   range [0.5, 1.0]; null (treated as 1.0) when
+  //   totalFinalized < RELIABILITY_MIN_SAMPLES (5).
+  //
+  //   currentScore = scoreRaw × reliabilityFactor
+  //
+  // So a service that has delivered perfectly on every finalised
+  // test keeps its raw score; one with mixed fail/partial history
+  // gets the score halved at worst. Counts are over ALL finalised
+  // tests with status IN ('completed', 'completed_partial')
+  // (aborted_* excluded). Updated on every onTestCompleted.
+  perfectCount      Int    @default(0)
+  partialCount      Int    @default(0)
+  failCount         Int    @default(0)
+  reliabilityFactor Float?
+
+  // ── DEPRECATED — kept for backward-compat. ──
+  // reliabilityScore was a 0..10 standalone score. The new
+  // reliabilityFactor (0.5..1.0) supersedes it and is applied as a
+  // multiplier on the raw score. Old code that read these columns
+  // still gets sensible values (helper updates both shapes), but
+  // new code should use perfectCount + partialCount + failCount +
+  // reliabilityFactor.
   reliabilityScore   Float?
-  // Number of finalised tests inside the window the score was
-  // computed from. Capped at RELIABILITY_WINDOW. Stored so the UI
-  // can show "X/10 (sur N derniers tests)" without a re-query.
   reliabilitySamples Int    @default(0)
 
   testOrders         TestOrder[]

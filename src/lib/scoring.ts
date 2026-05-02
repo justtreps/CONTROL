@@ -354,6 +354,20 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     );
   }
 
+  // Pull every service's reliability factor up-front in one round-
+  // trip so the per-service scoring loop doesn't need a SELECT for
+  // each. Falls back to 1.0 (no penalty) when the row's factor is
+  // null — happens when the service has < RELIABILITY_MIN_SAMPLES
+  // finalised tests.
+  const reliabilityRows = await prisma.service.findMany({
+    where: { id: { in: services.map((s) => s.id) } },
+    select: { id: true, reliabilityFactor: true },
+  });
+  const reliabilityFactorByService = new Map<number, number>();
+  for (const r of reliabilityRows) {
+    reliabilityFactorByService.set(r.id, r.reliabilityFactor ?? 1.0);
+  }
+
   for (const { id: serviceId } of services) {
     const latest = await pickLatestScorableTest(serviceId);
 
@@ -370,6 +384,16 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const costPercentile = costRankByService.get(serviceId) ?? 0.5;
     const score = computeOrderScore(latest, costPercentile);
 
+    // Apply the reliability multiplier on top of the raw 4×25 score.
+    // The raw score (livraison + vitesse + drop + coût) goes into
+    // ServiceScore.rawScore; the multiplied final goes into
+    // currentScore so the dashboard and ranking see the
+    // reliability-weighted value without any extra read.
+    const reliabilityFactor =
+      reliabilityFactorByService.get(serviceId) ?? 1.0;
+    const finalScore =
+      Math.round(score.final * reliabilityFactor * 100) / 100;
+
     // Dedupe: skip the insert when the latest row matches this
     // score within 0.5 pts AND was written < 1h ago. Prevents
     // ServiceScore bloat (was ~1838 rows × 6/h × 24h = 264k/day).
@@ -381,21 +405,24 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     const oneHourAgo = Date.now() - 3600_000;
     const shouldSkip =
       previous &&
-      Math.abs(previous.currentScore - score.final) < 0.5 &&
+      Math.abs(previous.currentScore - finalScore) < 0.5 &&
       previous.computedAt.getTime() > oneHourAgo;
     if (!shouldSkip) {
       await prisma.serviceScore.create({
         data: {
           serviceId,
-          currentScore: score.final,
+          currentScore: finalScore,
           completionFactor: score.completionPct,
           realismScore: 0,
           speedScore: score.vitessePts,
           dropScore: score.dropPts,
+          // rawScore is the pre-multiplier 4×25 score. The UI
+          // service-detail page uses (currentScore / rawScore) to
+          // display the actual reliability factor that was applied.
           rawScore: score.final,
           sampleCount: 1,
           confidence: 1,
-          weightedScore: score.final,
+          weightedScore: finalScore,
           avgTimeToFiftyMin: score.timeToFiftyMin,
           avgDropPct: score.dropPct,
         },
@@ -408,7 +435,7 @@ export async function runScoringEngine(): Promise<ScoringResult> {
     // fresh even when the ServiceScore insert is skipped.
     await prisma.productServiceCandidate.updateMany({
       where: { serviceId },
-      data: { currentScore: score.final, lastScoredAt: new Date() },
+      data: { currentScore: finalScore, lastScoredAt: new Date() },
     });
 
     result.servicesScored++;
@@ -425,7 +452,14 @@ export async function runScoringEngine(): Promise<ScoringResult> {
 export async function rescoreSingleService(serviceId: number): Promise<number | null> {
   const svc = await prisma.service.findUnique({
     where: { id: serviceId },
-    select: { id: true, ratePerK: true, minQuantity: true, maxQuantity: true, active: true },
+    select: {
+      id: true,
+      ratePerK: true,
+      minQuantity: true,
+      maxQuantity: true,
+      active: true,
+      reliabilityFactor: true,
+    },
   });
   if (!svc || !svc.active) return null;
 
@@ -462,6 +496,8 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
       : 0.5;
 
   const score = computeOrderScore(latest, costPercentile);
+  const reliabilityFactor = svc.reliabilityFactor ?? 1.0;
+  const finalScore = Math.round(score.final * reliabilityFactor * 100) / 100;
 
   // Dedupe ServiceScore writes: poll-driven rescores can fire
   // every 12h on every TestOrder × 2700+ orders = thousands of
@@ -475,13 +511,13 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
   const oneHourAgo = Date.now() - 3600_000;
   const shouldSkip =
     previous &&
-    Math.abs(previous.currentScore - score.final) < 0.5 &&
+    Math.abs(previous.currentScore - finalScore) < 0.5 &&
     previous.computedAt.getTime() > oneHourAgo;
   if (!shouldSkip) {
     await prisma.serviceScore.create({
       data: {
         serviceId,
-        currentScore: score.final,
+        currentScore: finalScore,
         completionFactor: score.completionPct,
         realismScore: 0,
         speedScore: score.vitessePts,
@@ -489,7 +525,7 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
         rawScore: score.final,
         sampleCount: 1,
         confidence: 1,
-        weightedScore: score.final,
+        weightedScore: finalScore,
         avgTimeToFiftyMin: score.timeToFiftyMin,
         avgDropPct: score.dropPct,
       },
@@ -497,9 +533,9 @@ export async function rescoreSingleService(serviceId: number): Promise<number | 
   }
   await prisma.productServiceCandidate.updateMany({
     where: { serviceId },
-    data: { currentScore: score.final, lastScoredAt: new Date() },
+    data: { currentScore: finalScore, lastScoredAt: new Date() },
   });
-  return score.final;
+  return finalScore;
 }
 
 // Called when no scorable TestOrder remains for a service.
@@ -660,23 +696,16 @@ async function computeAllTiers(): Promise<Map<number, number>> {
 //
 // Sort key (lex):
 //   1. tier            ASC
-//   2. ROUND(score)    DESC  (integer bucket — see below)
-//   3. reliability     DESC
-//   4. raw score       DESC  (final inner tie-break)
+//   2. currentScore    DESC
 //
-// Why ROUND(score) and not raw score: the operator thinks of scores
-// in coarse buckets ("ce service est à 93"). A pair at 93.46 vs
-// 93.01 looks "tied" to a human, and reliability should split them.
-// With the raw-score tie-break (the original v1 of this function),
-// the 93.46 always won regardless of how many partials it had in
-// the last 10 tests — defeating the whole point of reliability as
-// a tie-breaker. Rounding to the integer bucket gives reliability
-// the room to actually re-order within ±0.5 of a score peak, while
-// preserving correct ordering across distinct integer buckets.
-//
-// null reliability sorts LAST inside its tier+bucket group via the
-// -1 sentinel — services prove themselves with at least
-// RELIABILITY_MIN_SAMPLES finalised tests before claiming a bump.
+// The previous version had a reliability tie-break inside an integer
+// score bucket. With the new model reliability is baked directly into
+// currentScore (final = raw × reliabilityFactor), so two services
+// that "should" be split by fiabilité now have different
+// currentScore values naturally — no separate tie-break needed.
+// A service with reliabilityFactor 1.0 outscores its 0.85 peer by
+// the factor difference, which is bigger than the rounding bucket
+// the old logic used.
 export async function recomputeRanks(): Promise<void> {
   const tiers = await computeAllTiers();
   const products = await prisma.myBoostProduct.findMany({
@@ -694,27 +723,15 @@ export async function recomputeRanks(): Promise<void> {
         id: true,
         serviceId: true,
         currentScore: true,
-        // Pull reliability via the service join so we don't need a
-        // second SELECT round-trip per candidate. Cheap — the
-        // existing query already touches Service rows for the
-        // dashboard.
-        service: { select: { reliabilityScore: true } },
       },
     });
     const tiered = rows.map((r) => ({
       id: r.id,
       tier: tiers.get(r.serviceId) ?? 3,
       score: r.currentScore ?? -1,
-      // -1 sentinel for "no reliability yet" so it lands below any
-      // computed score (legitimate range is 0..10).
-      reliability: r.service.reliabilityScore ?? -1,
     }));
     tiered.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
-      const bucketA = Math.round(a.score);
-      const bucketB = Math.round(b.score);
-      if (bucketA !== bucketB) return bucketB - bucketA;
-      if (a.reliability !== b.reliability) return b.reliability - a.reliability;
       return b.score - a.score;
     });
     // Batch the rank writes — one transaction per product avoids

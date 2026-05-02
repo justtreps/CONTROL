@@ -10,7 +10,6 @@ import {
 import {
   computeReliabilityForService,
   reliabilityChip,
-  RELIABILITY_WINDOW,
   RELIABILITY_MIN_SAMPLES,
 } from "@/lib/scoring/reliability";
 import { getPollIntervalMin } from "@/lib/system/toggles";
@@ -91,9 +90,9 @@ export default async function ServiceDetailPage({
 
   // Reliability (historical fault rate) — same buckets as the chip
   // helper. Computed live so a freshly-finalised test is reflected
-  // before the next scoring cron tick stamps Service.reliabilityScore.
+  // before the next scoring cron tick stamps Service.reliabilityFactor.
   const reliability = await computeReliabilityForService(id);
-  const relChip = reliabilityChip(reliability.score);
+  const relChip = reliabilityChip(reliability.factor);
 
   // The Coût sub-score is computed live (off the *current* catalog
   // cost distribution), not stored per-snapshot in ServiceScore. So
@@ -109,7 +108,13 @@ export default async function ServiceDetailPage({
     const livraison = s.completionFactor * SUB_MAX;
     const vitesse = s.speedScore;
     const drop = s.dropScore;
-    const cost = Math.max(0, s.currentScore - livraison - vitesse - drop);
+    // Cost is reverse-engineered from the RAW (pre-factor) total
+    // since the four sub-scores live in the raw space (4×25=100).
+    // ServiceScore rows written before the reliability-factor refactor
+    // stored rawScore = currentScore (no factor), so the math still
+    // works for historical points.
+    const rawTotal = s.rawScore || s.currentScore;
+    const cost = Math.max(0, rawTotal - livraison - vitesse - drop);
     return {
       t: s.computedAt.toISOString(),
       total: round1(s.currentScore),
@@ -120,47 +125,101 @@ export default async function ServiceDetailPage({
     };
   });
 
+  // Score brut = the pre-factor 4×25 total written by the engine
+  // into ServiceScore.rawScore. Historical rows (pre-refactor)
+  // stored rawScore equal to currentScore, so the fallback keeps
+  // their breakdown self-consistent.
+  const latestRaw = latest ? latest.rawScore || latest.currentScore : null;
+  const oldRaw = sevenDayBaseline
+    ? sevenDayBaseline.rawScore || sevenDayBaseline.currentScore
+    : null;
+
   const subScores: Array<{
     num: string;
     label: string;
     value: number | null;
     old: number | null;
     max: number;
+    /** Custom right-hand label (e.g. "× 0.85") instead of "/max". */
+    valueOverride?: string;
+    /** Optional sub-line shown below the big number. */
+    subline?: string;
+    /** Optional chip rendered next to the label. */
+    chip?: { label: string; color: string };
   }> = [
     {
       num: "01",
-      label: "Score total",
+      label: "Score final",
       value: latest?.currentScore ?? null,
       old: sevenDayBaseline?.currentScore ?? null,
       max: 100,
     },
     {
       num: "02",
+      label: "Score brut",
+      value: latestRaw,
+      old: oldRaw,
+      max: 100,
+      subline:
+        "Somme des 4 sous-scores avant l'ajustement fiabilité.",
+    },
+    {
+      num: "03",
       label: "Livraison",
       value: latest ? latest.completionFactor * SUB_MAX : null,
       old: sevenDayBaseline ? sevenDayBaseline.completionFactor * SUB_MAX : null,
       max: SUB_MAX,
     },
     {
-      num: "03",
+      num: "04",
       label: "Vitesse",
       value: latest?.speedScore ?? null,
       old: sevenDayBaseline?.speedScore ?? null,
       max: SUB_MAX,
     },
     {
-      num: "04",
+      num: "05",
       label: "Drop",
       value: latest?.dropScore ?? null,
       old: sevenDayBaseline?.dropScore ?? null,
       max: SUB_MAX,
     },
     {
-      num: "05",
+      num: "06",
       label: "Coût",
       value: coutSub,
       old: coutSub,
       max: SUB_MAX,
+    },
+    {
+      num: "07",
+      label: "Fiabilité",
+      // 1.0 fallback when below MIN_SAMPLES — chip stays null so
+      // the operator sees no penalty applied.
+      value: reliability.factor,
+      old: null,
+      max: 1,
+      valueOverride:
+        reliability.factor === null
+          ? `× 1.00`
+          : `× ${reliability.factor.toFixed(2)}`,
+      subline:
+        reliability.factor === null
+          ? `Pas encore de pénalité — ${reliability.totalFinalized}/${RELIABILITY_MIN_SAMPLES} test(s) finalisé(s).`
+          : `${reliability.perfect} perfect · ${reliability.partial} partial · ${reliability.fail} fail (sur ${reliability.totalFinalized})`,
+      chip: relChip
+        ? {
+            label: relChip.label,
+            color:
+              relChip.color === "green"
+                ? "#00CC66"
+                : relChip.color === "blue"
+                  ? "#7DD3FC"
+                  : relChip.color === "yellow"
+                    ? "#FFCC00"
+                    : "#FF3300",
+          }
+        : undefined,
     },
   ];
 
@@ -438,10 +497,11 @@ export default async function ServiceDetailPage({
                 [ {freshnessLabel.text} ]
               </span>
               <p className="font-mono text-[10px] text-[#666666] tracking-widest leading-relaxed normal-case">
-                Score = livraison + vitesse + drop + coût (4 × 25 = 100).
-                Calculé sur le DERNIER TestOrder finalisé. Plus de moyenne
-                mobile, plus de smoothing — chaque retest réécrit le
-                score. Service testé régulièrement = score à jour.
+                Score brut = livraison + vitesse + drop + coût (4 × 25 = 100).
+                Score final = brut × fiabilité (0.5 - 1.0). Calculé sur le
+                DERNIER TestOrder finalisé — pas de moyenne mobile.
+                La fiabilité ne pénalise qu&apos;à partir de {RELIABILITY_MIN_SAMPLES} tests
+                finalisés ; en dessous, facteur 1.0 (pas de pénalité).
               </p>
               {latestTestPlacedAt && (
                 <p className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
@@ -457,19 +517,42 @@ export default async function ServiceDetailPage({
           <div className="md:col-span-8 min-w-0 grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8 lg:gap-10 pt-6 md:pt-0">
             {subScores.map((s) => {
               const delta =
-                s.value !== null && s.old !== null ? s.value - s.old : null;
+                s.value !== null && s.old !== null && !s.valueOverride
+                  ? s.value - s.old
+                  : null;
               return (
-                <div key={s.num} className="flex flex-col gap-3">
+                <div key={s.num} className="flex flex-col gap-2">
                   <div className="h-px w-full bg-[#666666]/30" />
-                  <h3 className="font-mono text-xs tracking-widest text-[#666666] uppercase">
-                    {s.num}. {s.label}
+                  <h3 className="font-mono text-xs tracking-widest text-[#666666] uppercase flex items-center gap-2 flex-wrap">
+                    <span>
+                      {s.num}. {s.label}
+                    </span>
+                    {s.chip && (
+                      <span
+                        className="font-mono text-[10px] tracking-widest uppercase border px-1.5 py-0"
+                        style={{ color: s.chip.color, borderColor: s.chip.color }}
+                      >
+                        [ {s.chip.label} ]
+                      </span>
+                    )}
                   </h3>
                   <div className="brand font-display text-4xl md:text-5xl tabular-nums text-white">
-                    {s.value !== null ? s.value.toFixed(0) : "—"}
-                    <span className="text-[#666666] text-base md:text-lg ml-2">
-                      / {s.max}
-                    </span>
+                    {s.valueOverride
+                      ? s.valueOverride
+                      : s.value !== null
+                        ? s.value.toFixed(0)
+                        : "—"}
+                    {!s.valueOverride && (
+                      <span className="text-[#666666] text-base md:text-lg ml-2">
+                        / {s.max}
+                      </span>
+                    )}
                   </div>
+                  {s.subline && (
+                    <p className="font-mono text-[10px] text-[#666666] tracking-widest leading-relaxed normal-case">
+                      {s.subline}
+                    </p>
+                  )}
                   {delta !== null && Math.abs(delta) > 0.01 && (
                     <div
                       className={`font-mono text-xs tracking-widest uppercase ${
@@ -487,129 +570,6 @@ export default async function ServiceDetailPage({
                 </div>
               );
             })}
-          </div>
-        </div>
-      </section>
-
-      {/* === Pattern C-bis — Fiabilité historique === */}
-      <section className="px-4 md:px-8 py-12 md:py-16 border-t border-[#666666]/20">
-        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12">
-          <div className="md:col-span-4 min-w-0 flex flex-col gap-4">
-            <div className="font-mono text-xs text-[#FF3300] tracking-widest">
-              [ FIABILITÉ HISTORIQUE | TIE-BREAKER ]
-            </div>
-            <h2
-              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
-              style={{ fontSize: "clamp(1.5rem, 2.6vw, 2.25rem)" }}
-            >
-              Fiabilité<br />du Service.
-            </h2>
-            <p className="font-mono text-[10px] text-[#666666] tracking-widest leading-relaxed normal-case">
-              Score 0-10 sur les {RELIABILITY_WINDOW} derniers tests
-              finalisés. Formule&nbsp;:
-              {" (perfect − partial − 2·fail) / "}
-              {RELIABILITY_WINDOW}&nbsp;× 10. Sert de tie-breaker dans le
-              ranking quand deux services ont le même <em>currentScore</em>
-              {" "}— celui qui a livré sans faute passe au-dessus.
-            </p>
-          </div>
-          <div className="md:col-span-8 min-w-0">
-            {reliability.score === null ? (
-              <div className="font-mono text-xs text-[#666666] tracking-widest uppercase border border-[#666666]/30 px-4 py-8 text-center">
-                PAS ASSEZ D&apos;HISTORIQUE — {reliability.samples} TEST
-                {reliability.samples === 1 ? "" : "S"} FINALISÉ
-                {reliability.samples === 1 ? "" : "S"} (MIN.{" "}
-                {RELIABILITY_MIN_SAMPLES} POUR CALCUL).
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                <div className="flex flex-col gap-3">
-                  <div className="h-px w-full bg-[#666666]/30" />
-                  <h3 className="font-mono text-xs tracking-widest text-[#666666] uppercase">
-                    Score
-                  </h3>
-                  <div className="brand font-display text-5xl md:text-6xl tabular-nums text-white">
-                    {reliability.score.toFixed(1)}
-                    <span className="text-[#666666] text-3xl">/10</span>
-                  </div>
-                  {relChip && (
-                    <span
-                      className="font-mono text-[10px] tracking-widest uppercase border px-2 py-1 w-max"
-                      style={{
-                        color:
-                          relChip.color === "green"
-                            ? "#00CC66"
-                            : relChip.color === "blue"
-                              ? "#7DD3FC"
-                              : relChip.color === "yellow"
-                                ? "#FFCC00"
-                                : "#FF3300",
-                        borderColor:
-                          relChip.color === "green"
-                            ? "#00CC66"
-                            : relChip.color === "blue"
-                              ? "#7DD3FC"
-                              : relChip.color === "yellow"
-                                ? "#FFCC00"
-                                : "#FF3300",
-                      }}
-                    >
-                      [ {relChip.label} ]
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-col gap-3 sm:col-span-2">
-                  <div className="h-px w-full bg-[#666666]/30" />
-                  <h3 className="font-mono text-xs tracking-widest text-[#666666] uppercase">
-                    Décomposition (sur {reliability.samples} tests)
-                  </h3>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div className="flex flex-col gap-1">
-                      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-                        Perfect
-                      </span>
-                      <span
-                        className="brand font-display text-3xl md:text-4xl tabular-nums"
-                        style={{ color: "#00CC66" }}
-                      >
-                        {reliability.perfect}
-                      </span>
-                      <span className="font-mono text-[10px] text-[#666666] tracking-widest normal-case">
-                        livré ≥ target
-                      </span>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-                        Partial
-                      </span>
-                      <span
-                        className="brand font-display text-3xl md:text-4xl tabular-nums"
-                        style={{ color: "#FFCC00" }}
-                      >
-                        {reliability.partial}
-                      </span>
-                      <span className="font-mono text-[10px] text-[#666666] tracking-widest normal-case">
-                        0 &lt; livré &lt; target
-                      </span>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
-                        Fail
-                      </span>
-                      <span
-                        className="brand font-display text-3xl md:text-4xl tabular-nums"
-                        style={{ color: "#FF3300" }}
-                      >
-                        {reliability.fail}
-                      </span>
-                      <span className="font-mono text-[10px] text-[#666666] tracking-widest normal-case">
-                        livré = 0
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </section>
