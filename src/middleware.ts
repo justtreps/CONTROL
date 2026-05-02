@@ -27,6 +27,7 @@ const PUBLIC_PATHS = [
   "/api/scoring/cleanup-sim",
   "/api/scoring/recompute-reliability",
   "/api/scoring/recompute-ranks",
+  "/api/scoring/reconcile-lifecycle",
 ];
 
 export async function middleware(req: NextRequest) {

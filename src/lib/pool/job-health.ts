@@ -21,12 +21,14 @@ import { prisma } from "@/lib/prisma";
 export type StuckReason =
   | "budget_exhausted"
   | "rate_limited_by_rapidapi"
-  | "stale_no_progress";
+  | "stale_no_progress"
+  | "max_duration_exceeded";
 
 const STUCK_REASON_LABEL_FR: Record<StuckReason, string> = {
   budget_exhausted: "BUDGET API ATTEINT",
   rate_limited_by_rapidapi: "LIMITE RAPIDAPI PAR SECONDE ATTEINTE",
   stale_no_progress: "AUCUNE PROGRESSION DEPUIS 30 MIN",
+  max_duration_exceeded: "JOB TROP LONG (>4 H, MÊME AVEC PROGRÈS)",
 };
 
 export function stuckReasonLabel(reason: StuckReason | string): string {
@@ -37,6 +39,13 @@ export function stuckReasonLabel(reason: StuckReason | string): string {
 }
 
 const STALE_MS = 30 * 60_000;
+// Wall-clock ceiling — a job that *does* make slow progress
+// (1 account / 5 min) won't trigger STALE_MS, so without an
+// upper bound it could run for days draining quota. After this
+// duration the orchestrator marks the job "stuck" with reason
+// max_duration_exceeded so the watchdog cleans it up. 4 h is
+// generous: the longest legitimate scrape we've seen runs ~90 min.
+const MAX_JOB_AGE_MS = 4 * 60 * 60_000;
 const RATE_LIMIT_MIN_COUNT = 10;
 
 // What a tranche worker snapshots before running so detectStuck can
@@ -179,6 +188,13 @@ export function detectStuck({
       : job.startedAt.getTime();
   if (!progressed && Date.now() - lastProgressAt >= STALE_MS) {
     return "stale_no_progress";
+  }
+
+  // (d) Wall-clock ceiling — even if progress is being made, a job
+  // running >MAX_JOB_AGE_MS has run away (unbounded seed list, infinite
+  // retry chain, quota leak). Fire stuck so the watchdog can clean it.
+  if (Date.now() - job.startedAt.getTime() >= MAX_JOB_AGE_MS) {
+    return "max_duration_exceeded";
   }
 
   return null;

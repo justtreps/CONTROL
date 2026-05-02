@@ -857,7 +857,7 @@ function ServicesTable({
               <th className="text-left px-2 py-1 font-normal">Plat.</th>
               <th
                 className="text-right px-2 py-1 font-normal"
-                title="Total score 0-100 (livraison + vitesse + drop + coût, chacun 0-25)"
+                title="Score final 0-100 = score brut (livraison + vitesse + drop + coût, chacun 0-25) × facteur fiabilité (0.5-1.0, ou 1.0 si <5 tests finalisés)"
               >
                 Score
               </th>

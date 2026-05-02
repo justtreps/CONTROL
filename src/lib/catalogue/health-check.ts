@@ -19,8 +19,8 @@
 
 import { prisma } from "@/lib/prisma";
 import { fetchServices, classifyServiceType, placeOrder } from "@/lib/bulkmedya";
+import { classifyService } from "@/lib/services/classifier";
 import { rematchAll } from "./matcher";
-import { detectCountry } from "@/lib/services/classifier";
 import { testCostUsd, testQuantityFor } from "@/lib/scoring/test-quantity";
 
 const REVIVE_BATCH_CAP = 200; // BulkMedya orders per run
@@ -95,7 +95,19 @@ export async function runCatalogueHealthCheck(): Promise<HealthCheckSummary> {
       const minQuantity = Math.max(1, Number(r.min ?? 0) || 0);
       const maxQuantity = Math.max(minQuantity, Number(r.max ?? minQuantity) || minQuantity);
       const ratePerK = Number(r.rate ?? 0) || 0;
-      const targetCountry = detectCountry(String(r.name ?? ""));
+
+      // Run the strict whitelist classifier — same path the
+      // BulkMedya sync (lib/bulkmedya.ts:syncServices) takes. Without
+      // this, services rediscovered by the catalogue health-check
+      // would land with poolType='unknown' / active=true / no manual
+      // review flag, bypassing every routing rule the catalogue
+      // depends on. Bug surfaced 2026-05-03 by the audit: every
+      // engagement service revived through health-check sat in
+      // 'unknown' poolType and got placed on the follower pool.
+      const verdict = classifyService({
+        name: String(r.name ?? ""),
+        platform,
+      });
 
       try {
         await prisma.service.create({
@@ -110,8 +122,10 @@ export async function runCatalogueHealthCheck(): Promise<HealthCheckSummary> {
             maxQuantity,
             refillSupported: Boolean(r.refill),
             cancelSupported: Boolean(r.cancel),
-            active: true,
-            targetCountry,
+            active: verdict.active,
+            poolType: verdict.poolType,
+            targetCountry: verdict.targetCountry,
+            classificationManualReview: verdict.classificationManualReview,
           },
         });
         added++;
