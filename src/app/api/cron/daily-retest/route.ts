@@ -93,6 +93,15 @@ export async function POST(req: Request) {
   // 2nd order can only come from a retest. Excluding QUALIFIED
   // from retests created a catch-22 where 491 services sat at
   // n=1 forever waiting for a 2nd test that never came.
+  //
+  // Order: oldest lastTestedAt first (NULLS FIRST = never-tested).
+  // Without an explicit orderBy postgres returns rows in physical
+  // (insertion ≈ id ASC) order. Engagement services were added later
+  // and have higher IDs → with the previous implicit ordering and
+  // the 200-service cap, the queue filled up entirely with low-ID
+  // follower services before reaching any engagement row. Result:
+  // zero engagement TestOrders for ~6 weeks. Oldest-first fairness
+  // closes that loop and keeps every type honest.
   const cands = await prisma.productServiceCandidate.findMany({
     where: {
       lifecycleStatus: { in: ["QUALIFIED", "MONITORED"] },
@@ -105,6 +114,9 @@ export async function POST(req: Request) {
     },
     include: {
       service: true,
+    },
+    orderBy: {
+      service: { lastTestedAt: { sort: "asc", nulls: "first" } },
     },
     take: RETESTS_PER_HOUR * 4, // pull extra for dedup
   });
