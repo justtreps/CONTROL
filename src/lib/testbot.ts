@@ -302,7 +302,24 @@ export async function attemptPlaceOrder({
       poolType?: string;
       targetCountry?: string | null;
     };
-    const isEngagement = serviceRouting.poolType === "engagement_test";
+    // Routing source of truth: Service.serviceType. If the service
+    // type maps to a known engagement metric (likes / views /
+    // comments / shares / saves), route through the post-flow
+    // regardless of what the classifier wrote into Service.poolType.
+    //
+    // Why not key off poolType: the classifier's strict-whitelist
+    // marks suspect-named rows as "manual" → poolType="unknown"
+    // even when they are unambiguously engagement services from
+    // the BulkMedya catalogue (e.g. "Instagram Reel Likes",
+    // "TikTok Live Like", "🇫🇷 TikTok France Video Views"). With
+    // the previous poolType-only check those landed in the
+    // follower flow, BulkMedya rejected the order, the row got
+    // aborted_other and the operator saw zero engagement testing
+    // for weeks. Trusting serviceType matches the field BulkMedya
+    // itself uses to bill the order, so the routing can no longer
+    // disagree with what's about to be sent on the wire.
+    const routingMetric = metricFromServiceType(service.serviceType);
+    const isEngagement = routingMetric !== null;
 
     // ─── Resolve account (follower) OR post (engagement) ────────────
     let account: TestAccount | null = null;
@@ -459,11 +476,16 @@ export async function attemptPlaceOrder({
     // metric (likes/views/etc.) which the parent oracle doesn't carry.
     // For engagement we issue a second RapidAPI call to /userposts/
     // to find the assigned post and read its current metric.
-    let targetMetric: ReturnType<typeof metricFromServiceType> = null;
+    // routingMetric was computed above (single source of truth for
+    // the engagement-vs-follower decision). When isEngagement is
+    // true, it is guaranteed non-null.
+    const targetMetric = routingMetric;
     let baselineCount: number;
     if (isEngagement) {
-      targetMetric = metricFromServiceType(service.serviceType);
       if (!targetMetric) {
+        // Defensive — should be unreachable since isEngagement was
+        // derived from `routingMetric !== null` above. Keep the
+        // guard so future refactors don't silently regress.
         await releaseHeld();
         return {
           kind: "skip",
