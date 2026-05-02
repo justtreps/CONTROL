@@ -1155,6 +1155,60 @@ export const detectEngagementPoolLow: Detector = async () => {
   return out;
 };
 
+// daily_retest_starved — fires when MONITORED + QUALIFIED services
+// are accumulating >24 h-stale lastTestedAt timestamps faster than
+// daily-retest can drain them. The 8 h cutoff gives each service 3
+// retest windows per day; if >40 % of the eligible cohort has gone
+// >24 h untested, the cap+wall budget is the bottleneck (or pool/
+// oracle is starving placements upstream).
+//
+// Threshold tuned against the spec: 813 services × 3/day = 2439
+// theoretical placements. At 100/h average, the system runs flush
+// with 0 buffer; at <50/h, the staleness backs up.
+export const detectDailyRetestStarved: Detector = async () => {
+  const totalEligible = await prisma.productServiceCandidate.count({
+    where: {
+      lifecycleStatus: { in: ["QUALIFIED", "MONITORED"] },
+      isEligible: true,
+      forceExcluded: false,
+      service: { active: true },
+    },
+  });
+  if (totalEligible < 50) return []; // too small to draw a signal
+  const stale24h = await prisma.productServiceCandidate.count({
+    where: {
+      lifecycleStatus: { in: ["QUALIFIED", "MONITORED"] },
+      isEligible: true,
+      forceExcluded: false,
+      service: {
+        active: true,
+        OR: [
+          { lastTestedAt: null },
+          { lastTestedAt: { lt: hoursAgo(24) } },
+        ],
+      },
+    },
+  });
+  const ratio = stale24h / totalEligible;
+  if (ratio < 0.4) return [];
+  return [
+    {
+      code: "daily_retest_starved",
+      category: "testbot",
+      severity: ratio >= 0.7 ? "critical" : "warning",
+      title: `Daily-retest accumule du retard — ${pct(stale24h, totalEligible)} % de la cohorte > 24 h`,
+      description: `${stale24h.toLocaleString("en-US")} services QUALIFIED/MONITORED non retestés depuis >24 h, sur ${totalEligible.toLocaleString("en-US")} éligibles.`,
+      explanation: `Avec un cutoff 8 h chaque service devrait être retesté 3×/24 h. Plus de 40 % au-dessus de la fenêtre = soit le cap horaire (RETESTS_PER_HOUR) est trop bas, soit le wall budget tombe court (>15 s/test moyen avec retry chains), soit le pool / oracle de la plateforme est pourri et chaque attempt skip avec no_account/no_post.`,
+      impact:
+        "Scores stagnent, demotions automatiques sur 3-zero-retest s'enclenchent à tort, ranking ne reflète plus la réalité.",
+      suggestedAction:
+        "Inspecter la dernière exécution /api/cron/daily-retest dans /logs (placed/skipped/aborted). Si aborted >>placed → pool ou oracle. Si placed plafonne au cap → bumper RETESTS_PER_HOUR. Vérifier engagement_pool_low / pool_below_min en parallèle.",
+      actionType: "link",
+      actionPayload: { href: "/logs?view=daily-retest" },
+    },
+  ];
+};
+
 export const DETECTORS: Detector[] = [
   detectKeyNearCap,
   detectKeyCapped,
@@ -1188,6 +1242,7 @@ export const DETECTORS: Detector[] = [
   detectSyncStale,
   detectEngagementPoolDisabled,
   detectEngagementPoolLow,
+  detectDailyRetestStarved,
 ];
 
 // ── Deferred detectors (need instrumentation we don't have yet) ──

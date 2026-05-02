@@ -1,7 +1,16 @@
-// Hourly: pick MONITORED candidates whose service hasn't been
-// tested in the last 24h, place one test per service (dedup by
-// serviceId — a service may appear on multiple products), capped
-// at RETESTS_PER_HOUR so load stays flat across the day.
+// Hourly: pick QUALIFIED + MONITORED candidates whose service
+// hasn't been tested in the last 8 h, place one test per service
+// (dedup by serviceId — a service may appear on multiple
+// products), capped at RETESTS_PER_HOUR so load stays flat
+// across the day.
+//
+// 8 h cutoff = 3 retests/day per service. With ~813 services on
+// QUALIFIED+MONITORED, the natural 8 h spread keeps load bounded
+// without needing per-type quotas — the lastTestedAt filter
+// distributes tests across the day on its own. If TT or engagement
+// look thin in a 24 h window, the bottleneck is upstream (pool
+// empty / oracle dead / engagement placement broken), not the
+// retest cap.
 //
 // Reuses lib/testbot.ts:attemptPlaceOrder for the actual
 // placement — same pool pick, same oracle baseline, same
@@ -20,26 +29,40 @@ import {
 } from "@/lib/rapidapi/key-manager";
 import type { Service } from "@prisma/client";
 
-// Per-tick caps. Must fit inside maxDuration=300s. Observed
-// per-test wall-time for attemptPlaceOrder: ~3-5s normal, up to
-// 15s on retry chains, 30s on fetch hard-cap. With pool
-// degradation pushing more attempts onto retry chains, the
-// previous cap of 300 + concurrency 16 was timing out at 300s.
-// Cut the cap and add a tick budget so the function returns a
-// real payload instead of dying on a 504. We deliberately don't
-// chase the 3x/day target on a single tick — daily-retest fires
-// hourly so the system catches up across multiple ticks.
-const RETESTS_PER_HOUR = 60;
-const TICK_BUDGET_MS = 250_000;
+// Per-tick caps. Must fit inside maxDuration=300 s.
+//
+// Capacity math (operator request 2026-05-02):
+//   813 QUALIFIED+MONITORED services × 3 retests/day = 2439/day
+//   /24 h = ~102/h average. Target 200/h ceiling so a stalled
+//   tick can be absorbed in a couple of catch-up ticks instead
+//   of dripping forever.
+//
+// Wall-time per attempt observed: 3-5 s nominal, 8-15 s on
+// retry-private chains, up to 30 s on fetch hard-cap. With the
+// new engagement post-oracle path attemptPlaceOrder makes one
+// additional RapidAPI call (parent ghost check + post lookup) for
+// engagement services — bumps avg p95 by ~3 s.
+//
+// Wall-budget × concurrency vs cap:
+//   280 s × 4 workers / 5 s avg = 224 tests/tick (matches 200 cap)
+//   280 s × 4 workers / 15 s p95 = 75 tests/tick → ~1.8 k/day
+// 200 cap is the queue ceiling; the wall budget is the actual
+// throttle. Cap > wall is intentional so a tick that finishes
+// fast can land more than wall_avg.
+const RETESTS_PER_HOUR = 200;
+// 280 s leaves 20 s margin under maxDuration=300 so the function
+// returns a payload instead of dying on a 504.
+const TICK_BUDGET_MS = 280_000;
 // 90 s ceiling per attempt — fetch oracle (≤30 s) + sample
-// (≤30 s) + BulkMedya + DB ops.
+// (≤30 s) + BulkMedya + DB ops + engagement post-oracle.
 const PER_TEST_WALL_MS_BUDGET = 90_000;
 // Concurrency 4 keeps RapidAPI throughput ~0.8 req/s aggregate,
 // well under the 170/min limit (2 keys × 85). Previous cap of 16
 // was firing 60+ requests/s in burst, saturating the per-key
 // sliding window for 60 s and blocking subsequent crons (testbot-
 // poll observed 8/8 = rate_limit_slot_wait_timeout after each
-// daily-retest tick).
+// daily-retest tick). Engagement attempts add 1 extra call so the
+// 4-worker ceiling is the right side of the rate-limit envelope.
 const CONCURRENCY = 4;
 
 export const maxDuration = 300;
@@ -58,9 +81,10 @@ export async function POST(req: Request) {
     });
   }
 
-  // 8h per-service cutoff = max 3 retests/day per service.
-  // Earlier 24h cutoff capped retests at 1×/day which made the
-  // 30-test moving-average score impossibly slow to fill.
+  // 8 h per-service cutoff = max 3 retests/day per service. A
+  // service tested at 00:00 is eligible again at 08:00, then 16:00,
+  // then 00:00. The natural staggering means we don't need
+  // explicit type/platform quotas — the filter does the spreading.
   const cutoff = new Date(Date.now() - 8 * 60 * 60_000);
 
   // Candidates with lifecycleStatus IN (QUALIFIED, MONITORED).
