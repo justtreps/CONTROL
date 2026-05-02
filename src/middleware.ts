@@ -21,6 +21,7 @@ const PUBLIC_PATHS = [
   "/api/catalogue/rematch",
   "/api/workflows/seed",
   "/api/scoring/cleanup-sim",
+  "/api/scoring/recompute-reliability",
 ];
 
 export async function middleware(req: NextRequest) {

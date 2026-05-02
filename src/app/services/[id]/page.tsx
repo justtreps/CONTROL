@@ -7,6 +7,12 @@ import {
   computeCostPercentileForService,
   pickLatestScorableTest,
 } from "@/lib/scoring";
+import {
+  computeReliabilityForService,
+  reliabilityChip,
+  RELIABILITY_WINDOW,
+  RELIABILITY_MIN_SAMPLES,
+} from "@/lib/scoring/reliability";
 import { getPollIntervalMin } from "@/lib/system/toggles";
 import {
   ServiceDetailCharts,
@@ -82,6 +88,12 @@ export default async function ServiceDetailPage({
   const scorableOrder = await pickLatestScorableTest(id);
   const latestTestAt = scorableOrder?.completedAt ?? null;
   const latestTestPlacedAt = scorableOrder?.placedAt ?? null;
+
+  // Reliability (historical fault rate) — same buckets as the chip
+  // helper. Computed live so a freshly-finalised test is reflected
+  // before the next scoring cron tick stamps Service.reliabilityScore.
+  const reliability = await computeReliabilityForService(id);
+  const relChip = reliabilityChip(reliability.score);
 
   // The Coût sub-score is computed live (off the *current* catalog
   // cost distribution), not stored per-snapshot in ServiceScore. So
@@ -418,6 +430,129 @@ export default async function ServiceDetailPage({
                 </div>
               );
             })}
+          </div>
+        </div>
+      </section>
+
+      {/* === Pattern C-bis — Fiabilité historique === */}
+      <section className="px-4 md:px-8 py-12 md:py-16 border-t border-[#666666]/20">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-12 gap-8 md:gap-12">
+          <div className="md:col-span-4 min-w-0 flex flex-col gap-4">
+            <div className="font-mono text-xs text-[#FF3300] tracking-widest">
+              [ FIABILITÉ HISTORIQUE | TIE-BREAKER ]
+            </div>
+            <h2
+              className="brand font-display tracking-tight uppercase leading-none text-white break-words"
+              style={{ fontSize: "clamp(1.5rem, 2.6vw, 2.25rem)" }}
+            >
+              Fiabilité<br />du Service.
+            </h2>
+            <p className="font-mono text-[10px] text-[#666666] tracking-widest leading-relaxed normal-case">
+              Score 0-10 sur les {RELIABILITY_WINDOW} derniers tests
+              finalisés. Formule&nbsp;:
+              {" (perfect − partial − 2·fail) / "}
+              {RELIABILITY_WINDOW}&nbsp;× 10. Sert de tie-breaker dans le
+              ranking quand deux services ont le même <em>currentScore</em>
+              {" "}— celui qui a livré sans faute passe au-dessus.
+            </p>
+          </div>
+          <div className="md:col-span-8 min-w-0">
+            {reliability.score === null ? (
+              <div className="font-mono text-xs text-[#666666] tracking-widest uppercase border border-[#666666]/30 px-4 py-8 text-center">
+                PAS ASSEZ D'HISTORIQUE — {reliability.samples} TEST
+                {reliability.samples === 1 ? "" : "S"} FINALISÉ
+                {reliability.samples === 1 ? "" : "S"} (MIN.{" "}
+                {RELIABILITY_MIN_SAMPLES} POUR CALCUL).
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                <div className="flex flex-col gap-3">
+                  <div className="h-px w-full bg-[#666666]/30" />
+                  <h3 className="font-mono text-xs tracking-widest text-[#666666] uppercase">
+                    Score
+                  </h3>
+                  <div className="brand font-display text-5xl md:text-6xl tabular-nums text-white">
+                    {reliability.score.toFixed(1)}
+                    <span className="text-[#666666] text-3xl">/10</span>
+                  </div>
+                  {relChip && (
+                    <span
+                      className="font-mono text-[10px] tracking-widest uppercase border px-2 py-1 w-max"
+                      style={{
+                        color:
+                          relChip.color === "green"
+                            ? "#00CC66"
+                            : relChip.color === "blue"
+                              ? "#7DD3FC"
+                              : relChip.color === "yellow"
+                                ? "#FFCC00"
+                                : "#FF3300",
+                        borderColor:
+                          relChip.color === "green"
+                            ? "#00CC66"
+                            : relChip.color === "blue"
+                              ? "#7DD3FC"
+                              : relChip.color === "yellow"
+                                ? "#FFCC00"
+                                : "#FF3300",
+                      }}
+                    >
+                      [ {relChip.label} ]
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-3 sm:col-span-2">
+                  <div className="h-px w-full bg-[#666666]/30" />
+                  <h3 className="font-mono text-xs tracking-widest text-[#666666] uppercase">
+                    Décomposition (sur {reliability.samples} tests)
+                  </h3>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="flex flex-col gap-1">
+                      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                        Perfect
+                      </span>
+                      <span
+                        className="brand font-display text-3xl md:text-4xl tabular-nums"
+                        style={{ color: "#00CC66" }}
+                      >
+                        {reliability.perfect}
+                      </span>
+                      <span className="font-mono text-[10px] text-[#666666] tracking-widest normal-case">
+                        livré ≥ target
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                        Partial
+                      </span>
+                      <span
+                        className="brand font-display text-3xl md:text-4xl tabular-nums"
+                        style={{ color: "#FFCC00" }}
+                      >
+                        {reliability.partial}
+                      </span>
+                      <span className="font-mono text-[10px] text-[#666666] tracking-widest normal-case">
+                        0 &lt; livré &lt; target
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <span className="font-mono text-[10px] text-[#666666] tracking-widest uppercase">
+                        Fail
+                      </span>
+                      <span
+                        className="brand font-display text-3xl md:text-4xl tabular-nums"
+                        style={{ color: "#FF3300" }}
+                      >
+                        {reliability.fail}
+                      </span>
+                      <span className="font-mono text-[10px] text-[#666666] tracking-widest normal-case">
+                        livré = 0
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>

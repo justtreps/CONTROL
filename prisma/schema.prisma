@@ -77,6 +77,27 @@ model Service {
   lastPlacementError   String?
   lastPlacementErrorAt DateTime?
 
+  // ── Reliability (historical fault rate) ──
+  // Score 0–10 computed over the last RELIABILITY_WINDOW (10) finalised
+  // TestOrders:
+  //   reliability = (perfect − partial − 2·fail) / window × 10
+  // clamped to [0, 10]. perfect = delivered ≥ target, partial =
+  // 0 < delivered < target, fail = delivered = 0 on a
+  // completed/completed_partial row (NOT aborted_*).
+  //
+  // Used as a tie-breaker after currentScore in recomputeRanks: two
+  // services at score 93 split by their fault history, so a service
+  // that has only ever delivered 100 % outranks one that has had
+  // partials in the same window.
+  //
+  // null when the service has fewer than RELIABILITY_MIN_SAMPLES (5)
+  // finalised tests — not enough signal to differentiate fairly.
+  reliabilityScore   Float?
+  // Number of finalised tests inside the window the score was
+  // computed from. Capped at RELIABILITY_WINDOW. Stored so the UI
+  // can show "X/10 (sur N derniers tests)" without a re-query.
+  reliabilitySamples Int    @default(0)
+
   testOrders         TestOrder[]
   scores             ServiceScore[]
   productCandidacies ProductServiceCandidate[]

@@ -628,6 +628,14 @@ async function computeAllTiers(): Promise<Map<number, number>> {
 }
 
 // Rewrites ProductServiceCandidate.rank for every active product.
+//
+// Sort key (lex): tier ASC, currentScore DESC, reliabilityScore DESC.
+// Reliability acts as the tie-breaker on services that share a
+// currentScore: a 93/93 pair where one has 10/10 reliability and
+// the other has 7/10 ranks the 10/10 first. null reliability sorts
+// LAST inside its tier+score group — services prove themselves with
+// at least RELIABILITY_MIN_SAMPLES finalised tests before they can
+// claim the bump.
 export async function recomputeRanks(): Promise<void> {
   const tiers = await computeAllTiers();
   const products = await prisma.myBoostProduct.findMany({
@@ -641,16 +649,29 @@ export async function recomputeRanks(): Promise<void> {
         isEligible: true,
         forceExcluded: false,
       },
-      select: { id: true, serviceId: true, currentScore: true },
+      select: {
+        id: true,
+        serviceId: true,
+        currentScore: true,
+        // Pull reliability via the service join so we don't need a
+        // second SELECT round-trip per candidate. Cheap — the
+        // existing query already touches Service rows for the
+        // dashboard.
+        service: { select: { reliabilityScore: true } },
+      },
     });
     const tiered = rows.map((r) => ({
       id: r.id,
       tier: tiers.get(r.serviceId) ?? 3,
       score: r.currentScore ?? -1,
+      // -1 sentinel for "no reliability yet" so it lands below any
+      // computed score (legitimate range is 0..10).
+      reliability: r.service.reliabilityScore ?? -1,
     }));
     tiered.sort((a, b) => {
       if (a.tier !== b.tier) return a.tier - b.tier;
-      return b.score - a.score;
+      if (b.score !== a.score) return b.score - a.score;
+      return b.reliability - a.reliability;
     });
     // Batch the rank writes — one transaction per product avoids
     // 8 000 separate round-trips per cron tick.

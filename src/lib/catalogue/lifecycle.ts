@@ -161,6 +161,19 @@ export async function onTestCompleted(params: {
   transition: "DEAD" | "no_change";
   reason?: string;
 }> {
+  // Reliability is independent of the kill-switch — we always want
+  // the historical fault rate refreshed after a finalise so the
+  // tie-breaker stays current. Best-effort: a refresh failure must
+  // not block the kill/lifecycle path.
+  try {
+    const { refreshReliabilityForService } = await import(
+      "@/lib/scoring/reliability"
+    );
+    await refreshReliabilityForService(params.serviceId);
+  } catch {
+    // ignore — the next finalise (or the backfill cron) will catch up.
+  }
+
   const toggles = await getSystemToggles();
   if (!toggles.autoKillDeadServicesEnabled) return { transition: "no_change" };
 
