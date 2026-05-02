@@ -459,7 +459,7 @@ export default async function ServiceDetailPage({
           <div className="md:col-span-8 min-w-0">
             {reliability.score === null ? (
               <div className="font-mono text-xs text-[#666666] tracking-widest uppercase border border-[#666666]/30 px-4 py-8 text-center">
-                PAS ASSEZ D'HISTORIQUE — {reliability.samples} TEST
+                PAS ASSEZ D&apos;HISTORIQUE — {reliability.samples} TEST
                 {reliability.samples === 1 ? "" : "S"} FINALISÉ
                 {reliability.samples === 1 ? "" : "S"} (MIN.{" "}
                 {RELIABILITY_MIN_SAMPLES} POUR CALCUL).
